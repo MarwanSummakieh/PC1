@@ -1,0 +1,53 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ARC OS - Gamepad probe</title>
+<style>
+  html,body{margin:0;height:100%;background:#04060b;color:#c7d6ee;
+    font:400 22px/1.5 "Segoe UI",system-ui,sans-serif;
+    display:flex;align-items:center;justify-content:center;text-align:center}
+  main{max-width:60ch;padding:2rem}
+  h1{font-size:2.2rem;font-weight:300;letter-spacing:.14em;color:#e8f0ff;margin:0 0 1rem}
+  .hint{color:#7f93b5;font-size:1rem;letter-spacing:.08em;text-transform:uppercase;margin-bottom:2rem}
+  #out{margin-top:1.5rem;font:400 15px/1.7 Consolas,monospace;color:#8fb4ff;
+    background:#0a1020;border:1px solid #16233d;border-radius:10px;padding:1rem;text-align:left;
+    white-space:pre-wrap;word-break:break-word}
+  .ok{color:#6ee7a8}
+</style>
+<main>
+  <h1>GAMEPAD PROBE</h1>
+  <div class="hint">Press any button on the DualSense</div>
+  <div>Chromium only exposes a pad to <code>navigator.getGamepads()</code><br>after it has seen input from that pad.</div>
+  <div id="out">waiting...</div>
+</main>
+<script>
+/* The host's injected shim already forwards every gamepad state change to the
+   handoff log. This page only needs to render what it sees and stay on screen. */
+var out = document.getElementById("out");
+var press = 0;
+function render(){
+  var lines = [];
+  var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  var any = false;
+  for (var i = 0; i < pads.length; i++){
+    var p = pads[i];
+    if (!p) continue;
+    any = true;
+    var down = [];
+    for (var b = 0; b < p.buttons.length; b++) if (p.buttons[b].pressed) down.push(b);
+    if (down.length) press++;
+    lines.push("slot " + p.index + "  id=" + p.id);
+    lines.push("  mapping=" + p.mapping + "  axes=" + p.axes.length + "  buttons=" + p.buttons.length);
+    lines.push("  pressed=[" + down.join(",") + "]  axes=" + p.axes.map(function(a){return a.toFixed(2);}).join(", "));
+  }
+  out.className = any ? "ok" : "";
+  out.textContent = any
+    ? "VISIBLE to navigator.getGamepads()\n\n" + lines.join("\n") + "\n\nbutton events seen: " + press
+    : "no pad visible yet - press a button on the controller";
+  requestAnimationFrame(render);
+}
+render();
+addEventListener("gamepadconnected", function(e){
+  if (window.arcPost) window.arcPost({type:"log", target:"gamepadconnected event: index=" + e.gamepad.index + " id=" + e.gamepad.id + " mapping=" + e.gamepad.mapping});
+});
+/* Escape still exits via the host's native accelerator hook. */
+</script>

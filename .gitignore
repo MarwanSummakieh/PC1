@@ -1,0 +1,29 @@
+# Build output — rebuild with spike\ShellHostWeb\build.cmd
+bin/
+obj/
+*.exe
+*.pdb
+
+# Vendored SDK — 52 MB, re-fetchable.
+# Restore with:
+#   curl -sL -o vendor/webview2.nupkg https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2903.40
+#   then expand it into vendor/webview2/
+# Only three files are actually needed to build:
+#   vendor/webview2/lib/net462/Microsoft.Web.WebView2.Core.dll
+#   vendor/webview2/lib/net462/Microsoft.Web.WebView2.WinForms.dll
+#   vendor/webview2/runtimes/win-x64/native/WebView2Loader.dll
+vendor/webview2/
+vendor/*.nupkg
+
+# Runtime logs and captures from the bench
+*.log
+handoff-log.txt
+shellhostweb-log.txt
+
+# Never commit secrets or machine-local credentials
+*.pem
+*.key
+id_*
+arcbench
+arcbench.pub
+*password*.txt

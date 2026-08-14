@@ -1,0 +1,617 @@
+<meta charset="utf-8">
+<title>ARC OSK — harness</title>
+<link rel="stylesheet" href="osk.css">
+
+<style>
+/* ─────────────────────────────────────────────────────────────
+   Harness chrome only. Everything the keyboard itself draws is
+   in osk.css — nothing here styles the keyboard.
+   ───────────────────────────────────────────────────────────── */
+:root{
+  --void:#04060b; --deep:#0c1422; --haze:#17253c; --line:#24344f;
+  --ice:#e6f0ff; --steel:#7f96b8; --dim:#4e6183;
+  --beam:#4c8dff; --beam-hot:#a6d4ff; --beam-deep:#1b3f8a;
+  --good:#56d6a0; --warn:#ffb457;
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --display:"Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif;
+  --e-out:cubic-bezier(.16,.84,.24,1);
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; padding:26px 34px 40px;
+  background:
+    radial-gradient(120% 90% at 18% 6%, #12233f 0%, rgba(4,6,11,0) 58%),
+    radial-gradient(90% 70% at 84% 92%, #0d1c36 0%, rgba(4,6,11,0) 60%),
+    var(--void);
+  color:var(--ice); font-family:var(--sans); font-size:15px; line-height:1.5;
+  -webkit-font-smoothing:antialiased; overflow-y:auto;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+:focus-visible{outline:2px solid var(--beam-hot);outline-offset:3px;border-radius:4px}
+
+h1{font-family:var(--display);font-weight:200;font-size:30px;letter-spacing:.02em;margin:0}
+.eyebrow{font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:var(--beam-hot);margin-bottom:8px}
+.sub{color:var(--steel);font-size:13.5px;margin:6px 0 0;max-width:74ch}
+
+.grid{display:grid;grid-template-columns:minmax(300px,1.05fr) minmax(300px,1fr);gap:20px;margin-top:24px}
+@media (max-width:920px){ .grid{grid-template-columns:1fr} }
+
+.card{
+  border:1px solid var(--line); border-radius:16px;
+  background:rgba(12,20,34,.66); padding:18px 20px 20px;
+  box-shadow:0 10px 30px rgba(2,4,9,.5);
+}
+.card h2{
+  font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:var(--steel);
+  margin:0 0 14px;font-weight:400;
+}
+.row{display:flex;flex-wrap:wrap;gap:9px;align-items:center}
+.row + .row{margin-top:11px}
+
+.btn{
+  padding:9px 16px;border-radius:99px;border:1px solid var(--line);
+  background:rgba(23,37,60,.7);color:var(--ice);font-size:13.5px;letter-spacing:.04em;
+  transition:border-color .2s var(--e-out),background .2s var(--e-out),transform .18s var(--e-out);
+}
+.btn:hover{border-color:rgba(166,212,255,.45);background:rgba(36,52,79,.8);transform:translateY(-1px)}
+.btn.primary{background:linear-gradient(180deg,#f2f7ff,#cfe0fb);color:#06101f;font-weight:600;border-color:#cfe0fb}
+.btn small{color:var(--dim);margin-left:7px;font-size:11px;letter-spacing:.1em}
+.btn.primary small{color:#4a6da8}
+
+label.field{display:flex;align-items:center;gap:9px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+input[type=text],input[type=number]{
+  font:inherit;font-size:13.5px;color:var(--ice);
+  background:rgba(4,6,11,.7);border:1px solid var(--line);border-radius:9px;
+  padding:7px 11px;min-width:0;width:150px;
+}
+input:focus{outline:none;border-color:rgba(166,212,255,.5)}
+
+/* ── pad simulator ───────────────────────────────────────── */
+.pad{display:grid;grid-template-columns:auto 1fr auto;gap:18px;align-items:center;justify-items:center}
+.dpad{display:grid;grid-template-columns:repeat(3,46px);grid-template-rows:repeat(3,46px);gap:5px}
+.dpad button{
+  border:1px solid var(--line);border-radius:9px;background:rgba(23,37,60,.75);
+  display:grid;place-items:center;color:var(--steel);font-size:16px;
+}
+.dpad button:hover{border-color:rgba(166,212,255,.45);color:var(--ice)}
+.dpad .sp{border:0;background:none;pointer-events:none}
+.faces{display:grid;grid-template-columns:repeat(3,50px);grid-template-rows:repeat(3,50px);gap:5px}
+.faces button{
+  border:1px solid var(--line);border-radius:50%;background:rgba(23,37,60,.75);
+  display:grid;place-items:center;color:var(--steel);
+}
+.faces button:hover{border-color:rgba(166,212,255,.5);color:var(--ice)}
+.faces svg,.dpad svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.padmid{display:grid;gap:7px;justify-items:center}
+.padmid .btn{padding:7px 13px;font-size:12px}
+.padnote{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);text-align:center}
+
+/* ── readouts ────────────────────────────────────────────── */
+.out{
+  border:1px solid var(--line);border-radius:12px;background:rgba(4,6,11,.75);
+  padding:13px 15px;margin-top:12px;
+}
+.out .k{font-size:10.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--dim)}
+.value{
+  font-family:var(--display);font-weight:300;font-size:24px;
+  color:var(--ice);word-break:break-all;min-height:1.3em;margin-top:4px;
+}
+.value.empty{color:var(--dim);font-size:16px}
+.state{
+  font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:12px;color:var(--steel);white-space:pre-wrap;word-break:break-all;margin-top:4px;
+}
+pre.log{
+  font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+  font-size:12px;line-height:1.55;color:var(--steel);
+  background:rgba(4,6,11,.8);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px;margin:0;max-height:340px;overflow:auto;white-space:pre-wrap;
+}
+.tag{display:inline-block;padding:2px 9px;border-radius:99px;font-size:11px;letter-spacing:.14em;text-transform:uppercase}
+.tag.pass{color:var(--good);border:1px solid rgba(86,214,160,.45)}
+.tag.fail{color:#ff7a90;border:1px solid rgba(255,122,144,.5)}
+.tag.wait{color:var(--dim);border:1px solid var(--line)}
+.hintline{margin-top:12px;font-size:12px;color:var(--dim);letter-spacing:.03em}
+kbd{
+  display:inline-grid;place-items:center;min-width:22px;height:21px;padding:0 6px;
+  border:1px solid var(--line);border-radius:5px;background:rgba(12,20,34,.8);
+  font:inherit;font-size:11px;color:var(--steel);
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001s !important;transition-duration:.12s !important}
+}
+</style>
+
+<div class="eyebrow">ARC OS · component harness</div>
+<h1>On-screen keyboard</h1>
+<p class="sub">
+  Everything below drives <code>ArcOSK</code> exactly the way the shell host will: through
+  <code>handleAction()</code> with semantic pad actions. Nothing here reaches inside the keyboard.
+  A physical keyboard also works, for debugging — see the key map at the bottom.
+</p>
+
+<div class="grid">
+
+  <!-- ── open the keyboard ─────────────────────────────────────── -->
+  <section class="card">
+    <h2>Open</h2>
+    <div class="row">
+      <button class="btn primary" data-open="text">Text<small>1</small></button>
+      <button class="btn" data-open="password">Password<small>2</small></button>
+      <button class="btn" data-open="url">URL<small>3</small></button>
+      <button class="btn" data-open="search">Search<small>4</small></button>
+      <button class="btn" data-open="number">Number<small>5</small></button>
+    </div>
+    <div class="row">
+      <label class="field">Title <input type="text" id="cfgTitle" value="Wi-Fi password"></label>
+      <label class="field">Max <input type="number" id="cfgMax" value="128" min="0" max="512"></label>
+    </div>
+    <div class="row">
+      <label class="field">Start value <input type="text" id="cfgValue" value=""></label>
+      <button class="btn" id="btnClose">close() without callbacks</button>
+    </div>
+
+    <div class="out">
+      <div class="k">Last commit</div>
+      <div class="value empty" id="outValue">— nothing committed yet —</div>
+    </div>
+    <div class="out">
+      <div class="k">Last event</div>
+      <div class="state" id="outEvent">—</div>
+    </div>
+    <div class="out">
+      <div class="k">Live state · ArcOSK.debugState()</div>
+      <div class="state" id="outState">closed</div>
+    </div>
+  </section>
+
+  <!-- ── pad simulator ─────────────────────────────────────────── -->
+  <section class="card">
+    <h2>DualSense · press and hold to repeat</h2>
+    <div class="pad">
+      <div class="dpad">
+        <span class="sp"></span>
+        <button data-act="up"    data-repeat="1" title="D-pad up">▲</button>
+        <span class="sp"></span>
+        <button data-act="left"  data-repeat="1" title="D-pad left">◀</button>
+        <span class="sp"></span>
+        <button data-act="right" data-repeat="1" title="D-pad right">▶</button>
+        <span class="sp"></span>
+        <button data-act="down"  data-repeat="1" title="D-pad down">▼</button>
+        <span class="sp"></span>
+      </div>
+
+      <div class="padmid">
+        <button class="btn" data-act="l1" data-repeat="1">L1 ◀ cursor</button>
+        <button class="btn" data-act="r1" data-repeat="1">cursor ▶ R1</button>
+        <button class="btn" data-act="options">OPTIONS · commit</button>
+        <div class="padnote">semantic actions only</div>
+      </div>
+
+      <div class="faces">
+        <span></span>
+        <button data-act="triangle" title="Triangle — shift">
+          <svg viewBox="0 0 24 24"><path d="M12 5.5 19 18H5z"/></svg>
+        </button>
+        <span></span>
+        <button data-act="square" data-repeat="1" title="Square — backspace">
+          <svg viewBox="0 0 24 24"><rect x="5.5" y="5.5" width="13" height="13" rx="1.6"/></svg>
+        </button>
+        <span></span>
+        <button data-act="circle" title="Circle — cancel">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="6.8"/></svg>
+        </button>
+        <span></span>
+        <button data-act="cross" title="Cross — select">
+          <svg viewBox="0 0 24 24"><path d="M6.6 6.6l10.8 10.8M17.4 6.6L6.6 17.4"/></svg>
+        </button>
+        <span></span>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:16px">
+      <button class="btn" data-act="shift">shift</button>
+      <button class="btn" data-act="symbols">symbols</button>
+      <button class="btn" data-act="space">space</button>
+      <button class="btn" data-act="backspace">backspace</button>
+      <button class="btn" data-act="home">home</button>
+      <button class="btn" data-act="end">end</button>
+      <button class="btn" data-act="clear">clear</button>
+      <button class="btn" data-act="togglemask">togglemask</button>
+      <button class="btn" data-act="wobble">unknown action</button>
+    </div>
+    <div class="hintline">
+      The host's current binary posts <code>launch / back / tabPlay / tabMedia / cc</code>; those are
+      aliased to accept / cancel / cursor-left / cursor-right / commit, so today's ShellHostWeb drives
+      this keyboard with no C# change. Under the host, a real DualSense is wired straight into
+      <code>handleAction()</code> — press the pad and this page responds.
+    </div>
+  </section>
+</div>
+
+<!-- ── tests ──────────────────────────────────────────────────── -->
+<section class="card" style="margin-top:20px">
+  <h2>Self-test <span class="tag wait" id="navTag">running</span></h2>
+  <div class="row" style="margin-bottom:12px">
+    <button class="btn" id="btnNav">re-run grid navigation test</button>
+    <button class="btn" id="btnDrive">run scripted drive test</button>
+  </div>
+  <pre class="log" id="log">…</pre>
+  <div class="hintline">
+    Keyboard, for debugging without a pad:
+    <kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> move ·
+    <kbd>↵</kbd> press key · <kbd>Ctrl</kbd>+<kbd>↵</kbd> commit ·
+    <kbd>⌫</kbd> backspace · <kbd>Del</kbd> forward delete ·
+    <kbd>Esc</kbd> cancel · <kbd>Tab</kbd> shift · <kbd>F2</kbd> symbols ·
+    <kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> move caret ·
+    <kbd>Home</kbd><kbd>End</kbd> caret ends · any printable key types.
+  </div>
+</section>
+
+<script src="osk.js"></script>
+<script src="osk-navtest.js"></script>
+<script>
+"use strict";
+/* The harness is as crash-proof as the component: this page is also what runs
+   inside WebView2 on the bench, and a thrown exception there is a blank TV. */
+function G(name, fn){
+  return function(){
+    try { return fn.apply(this, arguments); }
+    catch(err){ line("HARNESS " + name + " threw: " + (err && err.stack ? err.stack : err)); }
+  };
+}
+var $ = function(s){ return document.querySelector(s); };
+
+/* host log bridge — present only under ShellHostWeb; no-op in a browser */
+function host(msg){
+  try { if (typeof window.arcPost === "function") window.arcPost({type:"log", target:"[osk-test] " + msg}); }
+  catch(e){}
+}
+var LOG = [];
+function line(s){
+  LOG.push(s);
+  var el = $("#log");
+  if (el) el.textContent = LOG.join("\n");
+  try { console.log(s); } catch(e){}
+  host(s);
+}
+
+/* ── opening ─────────────────────────────────────────────────── */
+var lastMode = "text";
+function openMode(mode){
+  lastMode = mode;
+  var max = parseInt($("#cfgMax").value, 10);
+  ArcOSK.open({
+    title: $("#cfgTitle").value || ({
+      text:"Rename file", password:"Wi-Fi password", url:"Address",
+      search:"Search library", number:"Port number"
+    })[mode],
+    value: $("#cfgValue").value,
+    mode: mode,
+    maxLength: (isFinite(max) && max > 0) ? max : null,
+    placeholder: mode === "url" ? "https://" : "",
+    onCommit: G("onCommit", function(text){
+      var v = $("#outValue");
+      v.textContent = text.length ? text : "(empty string)";
+      v.classList.toggle("empty", !text.length);
+      say("onCommit(" + JSON.stringify(text) + ")  ·  " + text.length + " chars");
+    }),
+    onCancel: G("onCancel", function(){ say("onCancel()"); })
+  });
+  say("open({ mode:\"" + mode + "\" })");
+}
+function say(s){ $("#outEvent").textContent = s; line("event: " + s); }
+
+/* ── wiring ──────────────────────────────────────────────────── */
+var opens = document.querySelectorAll("[data-open]");
+for (var n = 0; n < opens.length; n++){
+  (function(b){ b.addEventListener("click", G("open", function(){ openMode(b.getAttribute("data-open")); })); })(opens[n]);
+}
+$("#btnClose").addEventListener("click", G("close", function(){ ArcOSK.close(); say("close()"); }));
+
+var acts = document.querySelectorAll("[data-act]");
+for (var m = 0; m < acts.length; m++){
+  (function(b){
+    var act = b.getAttribute("data-act");
+    var rep = b.getAttribute("data-repeat");
+    if (rep){
+      b.addEventListener("mousedown", G("act.down", function(ev){ ev.preventDefault(); ArcOSK.beginRepeat(act); }));
+      b.addEventListener("mouseup",    G("act.up",   function(){ ArcOSK.endRepeat(); }));
+      b.addEventListener("mouseleave", G("act.out",  function(){ ArcOSK.endRepeat(); }));
+    } else {
+      b.addEventListener("click", G("act.click", function(){ ArcOSK.handleAction(act); }));
+    }
+  })(acts[m]);
+}
+
+/* ── real DualSense, under ShellHostWeb ──────────────────────────────────
+   The host posts {type:"pad",action:"…"} over the WebView2 message channel.
+   Its injected shim routes those into index.html's own functions, which do
+   not exist here, so the harness subscribes to the same channel directly and
+   forwards straight into handleAction(). This is the path a human uses to
+   test the keyboard with the actual controller. In a plain browser
+   window.chrome is undefined and this is a no-op. */
+(function wirePad(){
+  try {
+    if (!window.chrome || !window.chrome.webview) return;
+    window.chrome.webview.addEventListener("message", G("pad", function(ev){
+      var d = ev && ev.data, m = null;
+      if (typeof d !== "string") { try { d = JSON.stringify(d); } catch(e){ return; } }
+      try { m = JSON.parse(d); } catch(e){ return; }
+      if (!m || m.type !== "pad") return;
+      if (!ArcOSK.isOpen() && (m.action === "launch" || m.action === "cross")) { openMode(lastMode); return; }
+      var handled = ArcOSK.handleAction(m.action);
+      host("pad " + m.action + " -> " + (handled ? JSON.stringify(ArcOSK.debugState()) : "not handled"));
+    }));
+    host("pad channel wired straight into ArcOSK.handleAction");
+  } catch(e){ line("could not wire the pad channel: " + e); }
+})();
+
+/* The host shim clicks #btnLaunch for Cross and, finding none, asks the host
+   to launch its child process instead — which would fire notepad at the
+   television mid-test. Giving it an inert button to click keeps Cross to the
+   single accept the listener above already performed. */
+(function defuseShimLaunch(){
+  var b = document.createElement("button");
+  b.id = "btnLaunch";
+  b.type = "button";
+  b.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px";
+  b.textContent = "launch";
+  b.addEventListener("click", G("shimLaunch", function(){ host("shim clicked #btnLaunch (inert here)"); }));
+  document.body.appendChild(b);
+})();
+
+/* number keys open a mode when the keyboard is closed. While it is open the
+   keyboard swallows keydown in the capture phase, so this never fires. */
+window.addEventListener("keydown", G("hotkey", function(ev){
+  if (ArcOSK.isOpen()) return;
+  var map = { "1":"text", "2":"password", "3":"url", "4":"search", "5":"number" };
+  if (map[ev.key]) { ev.preventDefault(); openMode(map[ev.key]); }
+}));
+
+/* live state readout */
+setInterval(G("poll", function(){
+  var s = ArcOSK.debugState();
+  $("#outState").textContent = s && s.open
+    ? "mode=" + s.mode + "  layer=" + s.layer + "  shift=" + s.shift + "  masked=" + s.masked +
+      "\nfocus=(" + s.r + "," + s.i + ") key=" + JSON.stringify(s.key) +
+      "\nvalue=" + JSON.stringify(s.value) + "  caret=" + s.caret
+    : "closed";
+}), 120);
+
+/* ── grid navigation test ────────────────────────────────────── */
+var navResult = null;
+function runNav(){
+  var t0 = (window.performance && performance.now) ? performance.now() : 0;
+  navResult = ArcOSKNavTest.run();
+  var ms = ((window.performance && performance.now) ? performance.now() : 0) - t0;
+  var tag = $("#navTag");
+  tag.className = "tag " + (navResult.fail ? "fail" : "pass");
+  tag.textContent = navResult.fail ? (navResult.fail + " failed") : "pass";
+  for (var i = 0; i < navResult.lines.length; i++) line(navResult.lines[i]);
+  line("  (" + Math.round(ms) + " ms in this browser)");
+  return navResult;
+}
+$("#btnNav").addEventListener("click", G("nav", function(){ LOG.length = 0; runNav(); stamp(); }));
+
+/* ── scripted drive test ─────────────────────────────────────────
+   Drives the keyboard through handleAction() only, and builds the expected
+   string from debugState() as it goes, so it verifies the whole chain —
+   navigation, key identity, insertion, masking, clamping, commit, cancel —
+   without hardcoding a layout that would go stale the moment a key moves. */
+var drive = { pass: 0, fail: 0 };
+function chk(cond, what){
+  if (cond) { drive.pass++; line("  ok    " + what); }
+  else { drive.fail++; line("  FAIL  " + what); }
+}
+function act(list){
+  for (var i = 0; i < list.length; i++) ArcOSK.handleAction(list[i]);
+}
+
+function runDrive(){
+  drive = { pass: 0, fail: 0 };
+  line("");
+  line("ArcOSK scripted drive");
+
+  /* 1 — type by walking the grid, commit with Options */
+  var got = null, expect = "";
+  ArcOSK.open({ title:"Drive", mode:"text", onCommit:function(t){ got = t; } });
+  chk(ArcOSK.isOpen(), "open() -> isOpen()");
+  var script = ["cross","right","cross","down","cross","left","cross","up","up","cross",
+                "square","space","cross","triangle","cross"];
+  var hitAnAction = false;
+  for (var i = 0; i < script.length; i++){
+    var a = script[i];
+    if (a === "cross"){
+      var s = ArcOSK.debugState();                    /* what is focused, right now */
+      if (typeof s.key !== "string" || s.key.charAt(0) === "[") hitAnAction = true;
+      else expect += (s.shift > 0) ? s.key.toUpperCase() : s.key;
+    }
+    if (a === "square") expect = expect.slice(0, -1);
+    if (a === "space")  expect += " ";
+    ArcOSK.handleAction(a);
+  }
+  chk(!hitAnAction, "every scripted Cross landed on a character key");
+  ArcOSK.handleAction("options");
+  chk(!ArcOSK.isOpen(), "commit closed the keyboard");
+  chk(got === expect, "typed value " + JSON.stringify(got) + " matches expected " + JSON.stringify(expect));
+
+  /* 2 — number mode only offers digits, and the caret keys move within them */
+  got = null;
+  ArcOSK.open({ title:"Drive", mode:"number", value:"12", onCommit:function(t){ got = t; } });
+  chk(ArcOSK.debugState().caret === 2, "caret starts at the end of the initial value");
+  act(["l1","l1"]);
+  chk(ArcOSK.debugState().caret === 0, "L1 x2 walked the caret to the start");
+  act(["r1"]);
+  chk(ArcOSK.debugState().caret === 1, "R1 walked it back one");
+  var k = ArcOSK.debugState().key;
+  act(["cross","options"]);
+  chk(got === "1" + k + "2", "insert at caret gave " + JSON.stringify(got));
+
+  /* 3 — maxLength clamps and the counter never lies */
+  got = null;
+  ArcOSK.open({ title:"Drive", mode:"text", maxLength:4, value:"abc", onCommit:function(t){ got = t; } });
+  act(["cross","cross","cross","cross","options"]);
+  chk(got !== null && got.length === 4, "maxLength 4 clamped a 7-char attempt to " + JSON.stringify(got));
+
+  /* 4 — password masks the display but not the value, and Show unmasks */
+  ArcOSK.open({ title:"Drive", mode:"password", value:"hunter2", onCommit:function(){} });
+  var dots = document.querySelector(".arc-osk .osk-pre").textContent;
+  chk(dots === "•••••••", "password display is masked (" + JSON.stringify(dots) + ")");
+  chk(ArcOSK.getValue() === "hunter2", "the value behind the mask is intact");
+  ArcOSK.handleAction("togglemask");
+  chk(document.querySelector(".arc-osk .osk-pre").textContent === "hunter2", "Show revealed the value");
+  chk(!!document.querySelector(".arc-osk .osk-reveal"), "the Show toggle exists and is a focusable key");
+
+  /* 5 — up from the top key row reaches the Show toggle, and stops there */
+  act(["up","up","up","up","up","up","up"]);
+  var s5 = ArcOSK.debugState();
+  chk(s5.key === "[reveal]", "up from the keys reaches the Show toggle (got " + s5.key + ")");
+  act(["up"]);
+  chk(ArcOSK.debugState().r === s5.r, "up again stays put — no vertical wrap");
+
+  /* 6 — cancel fires onCancel and nothing else */
+  var cancelled = false, committed = false;
+  ArcOSK.open({ title:"Drive", mode:"text", value:"x",
+                onCommit:function(){ committed = true; }, onCancel:function(){ cancelled = true; } });
+  ArcOSK.handleAction("circle");
+  chk(cancelled && !committed, "Circle fired onCancel only");
+  chk(!ArcOSK.isOpen(), "cancel closed the keyboard");
+
+  /* 7 — junk cannot take the shell down */
+  ArcOSK.open({ title:"Drive", mode:"text", onCommit:function(){} });
+  ArcOSK.handleAction("wobble");
+  ArcOSK.handleAction(null);
+  ArcOSK.handleAction(42);
+  chk(ArcOSK.isOpen(), "unknown/invalid actions were ignored, keyboard still alive");
+  ArcOSK.close();
+  chk(!ArcOSK.isOpen(), "close() closed it");
+  chk(ArcOSK.handleAction("cross") === false, "actions after close are no-ops");
+
+  /* 8 — the model and the pixels must agree ─────────────────────────────
+     The headless test proves the model is coherent. It cannot prove the CSS
+     grid renders it. This walks every key in the live DOM and checks that the
+     key the model calls "below" really is the one under it on screen, within
+     half a grid gap (a key centre landing exactly on a seam is ambiguous by
+     construction, and half a gap is how wide that ambiguity is). */
+  var checked = 0, off = 0, worst = 0, firstBad = "";
+  var layerFor = { text:"text", password:"text", search:"text", url:"url", number:"number" };
+  var modes = ["text","password","url","search","number"];
+  for (var mi = 0; mi < modes.length; mi++){
+    var mode = modes[mi];
+    ArcOSK.open({ title:"pixels", mode:mode, onCommit:function(){}, onCancel:function(){} });
+    var g = ArcOSK._model.build(layerFor[mode], { reveal: mode === "password" });
+    var gap = parseFloat(getComputedStyle(document.querySelector(".osk-keys")).rowGap) || 0;
+    for (var r = 0; r < g.rows.length; r++){
+      for (var q = 0; q < g.live[r].length; q++){
+        var i = g.live[r][q];
+        var to = ArcOSK._model.step(g, ArcOSK._model.posFor(g, r, i), "down");
+        if (to.r === r && to.i === i) continue;                 /* bottom row */
+        var a = document.querySelector('.arc-osk .osk-key[data-r="' + r + '"][data-i="' + i + '"]');
+        var b = document.querySelector('.arc-osk .osk-key[data-r="' + to.r + '"][data-i="' + to.i + '"]');
+        if (!a || !b){ off++; if(!firstBad) firstBad = mode + " missing DOM node for a modelled key"; continue; }
+        var ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+        var cx = ra.left + ra.width / 2, tol = gap / 2 + 1;
+        checked++;
+        var miss = Math.max(rb.left - cx, cx - rb.right, 0);
+        if (miss > worst) worst = miss;
+        if (miss > tol || rb.top <= ra.top){
+          off++;
+          if (!firstBad) firstBad = mode + " '" + a.textContent + "' -> '" + b.textContent +
+                                    "' is " + miss.toFixed(1) + "px outside it";
+        }
+      }
+    }
+    ArcOSK.close();
+  }
+  chk(off === 0, "model matches pixels: " + checked + " down-moves land under the source key" +
+      " (worst overhang " + worst.toFixed(1) + "px)" + (firstBad ? " — " + firstBad : ""));
+
+  /* 9 — the type is applied, not merely declared ────────────────────────
+     A dropped or out-specified font declaration does not throw and does not
+     move anything: the keys just quietly render at the host page's body size,
+     which on a television is the difference between legible and not. Each key
+     size is compared against a probe carrying the same custom property, so
+     this asserts the variable actually reached the element. */
+  ArcOSK.open({ title:"type", mode:"password", value:"abc", onCommit:function(){} });
+  var scrim = document.querySelector(".arc-osk");
+  function probe(expr){
+    var d = document.createElement("div");
+    d.style.cssText = "position:absolute;visibility:hidden;font-size:" + expr;
+    scrim.appendChild(d);
+    var v = getComputedStyle(d).fontSize;
+    scrim.removeChild(d);
+    return v;
+  }
+  var bodyFs  = getComputedStyle(document.body).fontSize;
+  var letter  = document.querySelectorAll(".osk-keys .osk-key")[10];
+  var modKey  = document.querySelector(".osk-commit");
+  var inputFs = parseFloat(getComputedStyle(document.querySelector(".osk-input")).fontSize);
+
+  chk(getComputedStyle(letter).fontSize === probe("var(--osk-key-font)"),
+      "letter caps use --osk-key-font (" + getComputedStyle(letter).fontSize + ")");
+  chk(getComputedStyle(modKey).fontSize === probe("var(--osk-mod-font)"),
+      "modifier caps use --osk-mod-font (" + getComputedStyle(modKey).fontSize + ")");
+  chk(getComputedStyle(letter).fontSize !== bodyFs,
+      "key caps are not silently inheriting the host page's " + bodyFs + " body type");
+  chk(inputFs >= 20, "the text field is at least its 20px floor (" + inputFs + "px)");
+  chk(getComputedStyle(modKey).fontWeight === "600", "the commit key keeps its weight");
+  chk(Math.round(parseFloat(getComputedStyle(letter).height)) ===
+      Math.round(parseFloat(probe("var(--osk-key-h)"))), "key caps are --osk-key-h tall");
+
+  /* Focus colour transitions over 180ms, and getComputedStyle mid-transition
+     reports the interpolated value — so cancel the transition and read the
+     settled one rather than racing it. */
+  function settled(el, prop){
+    var keep = el.style.transition;
+    el.style.transition = "none";
+    void el.offsetWidth;
+    var v = getComputedStyle(el)[prop];
+    el.style.transition = keep;
+    return v;
+  }
+  var plain = settled(letter, "color");
+  ArcOSK.handleAction("up"); ArcOSK.handleAction("up"); ArcOSK.handleAction("up");
+  var focused = document.querySelector(".osk-key.is-focus");
+  chk(!!focused, "something is always focused");
+  chk(focused && settled(focused, "color") !== plain,
+      "the focused key inverts to dark-on-beam (" + (focused ? settled(focused, "color") : "?") +
+      " vs " + plain + ")");
+  chk(focused && /gradient/.test(settled(focused, "backgroundImage")),
+      "the focused key is filled with the beam, not merely outlined");
+  ArcOSK.close();
+
+  line((drive.fail ? "FAIL" : "PASS") + "  drive: " + drive.pass + " passed, " + drive.fail + " failed");
+  return drive;
+}
+$("#btnDrive").addEventListener("click", G("drive", function(){ runDrive(); stamp(); }));
+
+/* ── report ──────────────────────────────────────────────────────
+   document.title is logged by ShellHostWeb on every change, so the bench
+   log carries the verdict even if nothing else does. */
+function stamp(){
+  var t = "OSK selftest — nav " + (navResult ? (navResult.fail ? navResult.fail + " FAILED" : navResult.pass + " ok")
+                                             : "not run")
+        + " · drive " + (drive.pass + drive.fail ? (drive.fail ? drive.fail + " FAILED" : drive.pass + " ok") : "not run");
+  document.title = t;
+  host(t);
+}
+
+line("ArcOSK " + ArcOSK.version + " loaded · " +
+     (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced motion ON" : "motion on") +
+     " · " + innerWidth + "x" + innerHeight);
+runNav();
+runDrive();
+stamp();
+
+/* ?auto=1 leaves the keyboard open on the bench so the screenshot/log shows
+   it rendered, and closes itself before the host's auto-exit. */
+if (/[?&]auto=1/.test(location.search)){
+  setTimeout(G("auto", function(){
+    openMode("password");
+    ArcOSK.handleAction("down"); ArcOSK.handleAction("cross");
+    host("auto: keyboard left open in password mode, state=" + JSON.stringify(ArcOSK.debugState()));
+  }), 400);
+}
+</script>

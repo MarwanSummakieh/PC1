@@ -1,0 +1,4449 @@
+// ARC OS - ShellHostWeb
+// The real ARC OS UI (index.html / boot.html) hosted in WebView2, running as the Windows shell.
+//
+// Native plumbing (job-object child tracking, forced-foreground return ladder, exit-code contract,
+// handoff logging) is lifted verbatim from spike/ShellHost/ShellHost.cs, which is the proven host.
+// The only substantive change is that the window contents are a WebView2 control instead of a label.
+//
+// Language level: C# 5 (inbox .NET Framework csc.exe).
+// No string interpolation, no nameof, no expression-bodied members, no async/await.
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Globalization;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
+
+namespace ArcOs.ShellWeb
+{
+    #region Native interop  (copied from ShellHost.cs)
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct STARTUPINFO
+    {
+        public int cb;
+        public string lpReserved;
+        public string lpDesktop;
+        public string lpTitle;
+        public int dwX;
+        public int dwY;
+        public int dwXSize;
+        public int dwYSize;
+        public int dwXCountChars;
+        public int dwYCountChars;
+        public int dwFillAttribute;
+        public int dwFlags;
+        public short wShowWindow;
+        public short cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PROCESS_INFORMATION
+    {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public int dwProcessId;
+        public int dwThreadId;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_ASSOCIATE_COMPLETION_PORT
+    {
+        public IntPtr CompletionKey;
+        public IntPtr CompletionPort;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public struct PROCESSENTRY32
+    {
+        public uint dwSize;
+        public uint cntUsage;
+        public uint th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID;
+        public uint cntThreads;
+        public uint th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    // --- gamepad interop (copied verbatim from ShellHost.cs, which is hardware-verified) ---
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XINPUT_GAMEPAD
+    {
+        public ushort wButtons;
+        public byte bLeftTrigger;
+        public byte bRightTrigger;
+        public short sThumbLX;
+        public short sThumbLY;
+        public short sThumbRX;
+        public short sThumbRY;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct XINPUT_STATE
+    {
+        public uint dwPacketNumber;
+        public XINPUT_GAMEPAD Gamepad;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SP_DEVICE_INTERFACE_DATA
+    {
+        public int cbSize;
+        public Guid InterfaceClassGuid;
+        public int Flags;
+        public IntPtr Reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HIDD_ATTRIBUTES
+    {
+        public int Size;
+        public ushort VendorID;
+        public ushort ProductID;
+        public ushort VersionNumber;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct HIDP_CAPS
+    {
+        public ushort Usage;
+        public ushort UsagePage;
+        public ushort InputReportByteLength;
+        public ushort OutputReportByteLength;
+        public ushort FeatureReportByteLength;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 17)]
+        public ushort[] Reserved;
+        public ushort NumberLinkCollectionNodes;
+        public ushort NumberInputButtonCaps;
+        public ushort NumberInputValueCaps;
+        public ushort NumberInputDataIndices;
+        public ushort NumberOutputButtonCaps;
+        public ushort NumberOutputValueCaps;
+        public ushort NumberOutputDataIndices;
+        public ushort NumberFeatureButtonCaps;
+        public ushort NumberFeatureValueCaps;
+        public ushort NumberFeatureDataIndices;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    public delegate uint XInputGetStateDelegate(uint dwUserIndex, out XINPUT_STATE pState);
+
+    public static class Native
+    {
+        // --- window ---
+        [DllImport("user32.dll")]
+        public static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool BringWindowToTop(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        public static extern IntPtr SetActiveWindow(IntPtr hWnd);
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        [DllImport("user32.dll")]
+        public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, [MarshalAs(UnmanagedType.Bool)] bool fAttach);
+        [DllImport("user32.dll")]
+        public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetWindowText(IntPtr hWnd, StringBuilder s, int nMaxCount);
+
+        [DllImport("kernel32.dll")]
+        public static extern uint GetCurrentThreadId();
+
+        // --- power ---
+        // Restart and shut down deliberately do NOT go through here: they are
+        // shell exit codes (2 and 3) so Shell Launcher performs the action and
+        // stays in charge of the session. Only the two states Shell Launcher has
+        // no exit code for need a direct call.
+        [DllImport("powrprof.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetSuspendState(
+            [MarshalAs(UnmanagedType.Bool)] bool hibernate,
+            [MarshalAs(UnmanagedType.Bool)] bool forceCritical,
+            [MarshalAs(UnmanagedType.Bool)] bool disableWakeEvent);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ExitWindowsEx(uint uFlags, uint dwReason);
+
+        public const uint EWX_LOGOFF = 0x00000000;
+        public const uint SHTDN_REASON_MAJOR_OTHER = 0x00000000;
+        public const uint SHTDN_REASON_MINOR_OTHER = 0x00000000;
+        public const uint SHTDN_REASON_FLAG_PLANNED = 0x80000000;
+
+        public const int SW_HIDE = 0;
+        public const int SW_SHOWNORMAL = 1;
+        public const int SW_MINIMIZE = 6;
+        public const int SW_SHOW = 5;
+        public const int SW_RESTORE = 9;
+
+        public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        public static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
+        public const uint SWP_NOSIZE = 0x0001;
+        public const uint SWP_NOMOVE = 0x0002;
+        public const uint SWP_NOACTIVATE = 0x0010;
+        public const uint SWP_SHOWWINDOW = 0x0040;
+
+        public const byte VK_MENU = 0x12;
+        public const uint KEYEVENTF_KEYUP = 0x0002;
+
+        // --- process / job ---
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool CreateProcess(
+            string lpApplicationName,
+            StringBuilder lpCommandLine,
+            IntPtr lpProcessAttributes,
+            IntPtr lpThreadAttributes,
+            [MarshalAs(UnmanagedType.Bool)] bool bInheritHandles,
+            uint dwCreationFlags,
+            IntPtr lpEnvironment,
+            string lpCurrentDirectory,
+            ref STARTUPINFO lpStartupInfo,
+            out PROCESS_INFORMATION lpProcessInformation);
+
+        public const uint CREATE_SUSPENDED = 0x00000004;
+        public const uint CREATE_UNICODE_ENVIRONMENT = 0x00000400;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern int ResumeThread(IntPtr hThread);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool CloseHandle(IntPtr h);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpInfo, uint cbInfo);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool QueryInformationJobObject(IntPtr hJob, int infoClass, IntPtr lpInfo, uint cbInfo, out uint returnLength);
+
+        public const int JobObjectBasicProcessIdList = 3;
+        public const int JobObjectAssociateCompletionPortInformation = 7;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr CreateIoCompletionPort(IntPtr fileHandle, IntPtr existing, UIntPtr key, uint threads);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetQueuedCompletionStatus(IntPtr port, out uint bytes, out IntPtr key, out IntPtr overlapped, uint milliseconds);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool PostQueuedCompletionStatus(IntPtr port, uint bytes, IntPtr key, IntPtr overlapped);
+
+        public static readonly IntPtr INVALID_HANDLE_VALUE = new IntPtr(-1);
+        public const uint JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO = 4;
+        public const uint JOB_OBJECT_MSG_NEW_PROCESS = 6;
+        public const uint JOB_OBJECT_MSG_EXIT_PROCESS = 7;
+        public const uint JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS = 8;
+
+        // --- toolhelp (fallback tracking) ---
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr CreateToolhelp32Snapshot(uint dwFlags, uint th32ProcessID);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool Process32First(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool Process32Next(IntPtr hSnapshot, ref PROCESSENTRY32 lppe);
+        public const uint TH32CS_SNAPPROCESS = 0x00000002;
+
+        // --- dynamic loading (XInput, incl. hidden ordinal 100) ---
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr LoadLibrary(string name);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true, EntryPoint = "GetProcAddress")]
+        public static extern IntPtr GetProcAddressByName(IntPtr hModule, string name);
+        [DllImport("kernel32.dll", SetLastError = true, EntryPoint = "GetProcAddress")]
+        public static extern IntPtr GetProcAddressByOrdinal(IntPtr hModule, IntPtr ordinal);
+
+        // --- raw HID (a DualSense is NOT an XInput device, so XInput never sees it) ---
+        [DllImport("hid.dll")]
+        public static extern void HidD_GetHidGuid(out Guid gHid);
+        [DllImport("hid.dll")]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool HidD_GetAttributes(IntPtr hDevice, ref HIDD_ATTRIBUTES attributes);
+        [DllImport("hid.dll", CharSet = CharSet.Unicode)]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool HidD_GetProductString(IntPtr hDevice, StringBuilder buffer, int bufferLen);
+        [DllImport("hid.dll")]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool HidD_GetPreparsedData(IntPtr hDevice, out IntPtr preparsed);
+        [DllImport("hid.dll")]
+        [return: MarshalAs(UnmanagedType.U1)]
+        public static extern bool HidD_FreePreparsedData(IntPtr preparsed);
+        [DllImport("hid.dll")]
+        public static extern int HidP_GetCaps(IntPtr preparsed, ref HIDP_CAPS caps);
+
+        [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr SetupDiGetClassDevs(ref Guid classGuid, IntPtr enumerator, IntPtr hwndParent, int flags);
+        [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetupDiEnumDeviceInterfaces(IntPtr devInfoSet, IntPtr devInfoData,
+            ref Guid interfaceClassGuid, int memberIndex, ref SP_DEVICE_INTERFACE_DATA interfaceData);
+        [DllImport("setupapi.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetupDiGetDeviceInterfaceDetail(IntPtr devInfoSet,
+            ref SP_DEVICE_INTERFACE_DATA interfaceData, IntPtr detailData, int detailSize,
+            ref int requiredSize, IntPtr devInfoData);
+        [DllImport("setupapi.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetupDiDestroyDeviceInfoList(IntPtr devInfoSet);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern IntPtr CreateFile(string fileName, uint access, uint share,
+            IntPtr securityAttributes, uint creationDisposition, uint flags, IntPtr template);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool ReadFile(IntPtr hFile, byte[] buffer, int toRead, out int read, IntPtr overlapped);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool CancelIoEx(IntPtr hFile, IntPtr overlapped);
+
+        public const int DIGCF_PRESENT = 0x0002;
+        public const int DIGCF_DEVICEINTERFACE = 0x0010;
+        public const uint GENERIC_READ = 0x80000000;
+        public const uint FILE_SHARE_READ = 0x00000001;
+        public const uint FILE_SHARE_WRITE = 0x00000002;
+        public const uint OPEN_EXISTING = 3;
+    }
+
+    #endregion
+
+    #region Logging  (copied from ShellHost.cs)
+
+    public static class Log
+    {
+        static readonly object Gate = new object();
+        static string _path;
+
+        public static string Path { get { return _path; } }
+
+        public static void Init(string explicitPath)
+        {
+            if (!string.IsNullOrEmpty(explicitPath))
+            {
+                _path = explicitPath;
+                return;
+            }
+            string dir = System.IO.Path.GetDirectoryName(Application.ExecutablePath);
+            string candidate = System.IO.Path.Combine(dir, "shellhostweb-log.txt");
+            try
+            {
+                File.AppendAllText(candidate, "");
+                _path = candidate;
+            }
+            catch
+            {
+                // exe directory not writable (very likely under Shell Launcher) - fall back to LOCALAPPDATA.
+                string fallbackDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ArcOS");
+                try { Directory.CreateDirectory(fallbackDir); }
+                catch { }
+                _path = System.IO.Path.Combine(fallbackDir, "shellhostweb-log.txt");
+            }
+        }
+
+        public static void Write(string category, string message)
+        {
+            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture)
+                + "  [" + category + "] " + message;
+            lock (Gate)
+            {
+                try { File.AppendAllText(_path, line + Environment.NewLine, Encoding.UTF8); }
+                catch { /* logging must never take the host down */ }
+            }
+            Debug.WriteLine(line);
+        }
+    }
+
+    #endregion
+
+    // The XInput wrapper and the whole raw-HID DualSense stack below are copied verbatim from
+    // spike/ShellHost/ShellHost.cs, where every byte offset was verified on the bench against the
+    // device's own HID report descriptor. Do not "improve" the offsets without re-verifying there.
+
+    #region XInput wrapper
+
+    public class XInput
+    {
+        IntPtr _module = IntPtr.Zero;
+        XInputGetStateDelegate _getState;
+        XInputGetStateDelegate _getStateEx;
+
+        public string ModuleName = "(none)";
+        public bool Available { get { return _getState != null; } }
+        public bool ExAvailable { get { return _getStateEx != null; } }
+        public string ExStatus = "not probed";
+
+        public void Load()
+        {
+            string[] candidates = new string[] { "xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll" };
+            foreach (string c in candidates)
+            {
+                IntPtr h = Native.LoadLibrary(c);
+                if (h != IntPtr.Zero)
+                {
+                    IntPtr p = Native.GetProcAddressByName(h, "XInputGetState");
+                    if (p != IntPtr.Zero)
+                    {
+                        _module = h;
+                        ModuleName = c;
+                        _getState = (XInputGetStateDelegate)Marshal.GetDelegateForFunctionPointer(p, typeof(XInputGetStateDelegate));
+                        break;
+                    }
+                }
+            }
+            if (_getState == null)
+            {
+                Log.Write("XINPUT", "FAIL: no XInput module exported XInputGetState");
+                ExStatus = "n/a (no XInput module)";
+                return;
+            }
+            Log.Write("XINPUT", "loaded " + ModuleName + ", XInputGetState resolved by name");
+
+            // Undocumented XInputGetStateEx is exported by ordinal 100 only (no name).
+            IntPtr pEx = Native.GetProcAddressByOrdinal(_module, new IntPtr(100));
+            if (pEx != IntPtr.Zero)
+            {
+                try
+                {
+                    _getStateEx = (XInputGetStateDelegate)Marshal.GetDelegateForFunctionPointer(pEx, typeof(XInputGetStateDelegate));
+                    ExStatus = "RESOLVED (ordinal #100 @ 0x" + pEx.ToInt64().ToString("X") + ")";
+                }
+                catch (Exception ex)
+                {
+                    ExStatus = "resolve ok but delegate bind failed: " + ex.Message;
+                }
+            }
+            else
+            {
+                ExStatus = "NOT RESOLVED (GetProcAddress ordinal #100 -> NULL, err=" + Marshal.GetLastWin32Error() + ")";
+            }
+            Log.Write("XINPUT", "XInputGetStateEx ordinal #100: " + ExStatus);
+        }
+
+        public uint GetState(uint index, out XINPUT_STATE state)
+        {
+            state = new XINPUT_STATE();
+            if (_getState == null) return 1167; // ERROR_DEVICE_NOT_CONNECTED
+            return _getState(index, out state);
+        }
+
+        // Returns ERROR_SUCCESS(0) / ERROR_DEVICE_NOT_CONNECTED(1167); Ex variant also reports the Guide bit (0x0400).
+        public uint GetStateEx(uint index, out XINPUT_STATE state)
+        {
+            state = new XINPUT_STATE();
+            if (_getStateEx == null) return 1167;
+            return _getStateEx(index, out state);
+        }
+    }
+
+    #endregion
+
+    #region DualSense / DualShock raw HID input
+
+    /// <summary>
+    /// Immutable-by-convention snapshot of the pad, published by the reader thread and
+    /// consumed by the UI thread. Replaced wholesale so the UI never sees a torn state.
+    /// </summary>
+    public class PadSnapshot
+    {
+        public bool Connected;
+        public string Model = "";
+        public string Transport = "";       // "USB" / "BT"
+        public ushort Vid, Pid;
+        public string Path = "";
+        public int Buttons;                 // DualSense.BTN_* mask
+        public byte LX = 128, LY = 128, RX = 128, RY = 128;
+        public byte L2, R2;
+        public byte ReportId;
+        public int ReportLength;
+        public long Reports;
+        public string Status = "no pad";
+
+        // Battery, read from the DualSense's own input report. BatteryKnown is false whenever
+        // the running report layout has no battery byte (DualShock 4, the Bluetooth
+        // compatibility report) or the read was short - the Settings screen must be able to
+        // tell "no battery reading" from "0%".
+        public bool BatteryKnown;
+        public int BatteryPercent;          // 0-100, approximate: the pad reports 0-10 steps
+        public string BatteryState = "";    // discharging | charging | full | temperature-fault | error
+        public byte BatteryRaw;
+    }
+
+    /// <summary>
+    /// Reads DualSense / DualShock input reports off a raw HID handle on a dedicated
+    /// background thread (blocking ReadFile), so nothing here can stall the UI thread.
+    ///
+    /// BYTE OFFSETS - verified empirically on the bench against a live DualSense
+    /// (VID 0x054C / PID 0x0CE6, USB) rather than taken from any single source. The
+    /// verification fed the Windows HID parser (HidP_GetUsageValue / HidP_GetUsages)
+    /// both live reports and synthetic single-bit reports, so every offset below is
+    /// confirmed by the device's own report descriptor:
+    ///     byte 0        report id (0x01 USB / 0x31 BT)
+    ///     byte 1        LX   (usage 0x30 X)      byte 2   LY   (usage 0x31 Y)
+    ///     byte 3        RX   (usage 0x32 Z)      byte 4   RY   (usage 0x35 Rz)
+    ///     byte 5        L2 analog (usage 0x33)   byte 6   R2 analog (usage 0x34)
+    ///     byte 7        sequence counter
+    ///     byte 8 lo nib hat, 0-7 clockwise from up, 8 = centred (usage 0x39)
+    ///     byte 8 hi nib Square/Cross/Circle/Triangle  (buttons 1-4)
+    ///     byte 9        L1 R1 L2 R2 Create Options L3 R3 (buttons 5-12, bits 0-7)
+    ///     byte 10 b0-2  PS / Touchpad / Mute            (buttons 13-15)
+    /// Bluetooth (report 0x31) shifts the whole payload by +1.
+    /// </summary>
+    public class DualSense
+    {
+        // Normalised button mask. Bits 0-14 are deliberately the HID button indices
+        // 1-15 in report-descriptor order, so the decode is a straight bit shuffle.
+        public const int BTN_SQUARE = 0x00001;
+        public const int BTN_CROSS = 0x00002;
+        public const int BTN_CIRCLE = 0x00004;
+        public const int BTN_TRIANGLE = 0x00008;
+        public const int BTN_L1 = 0x00010;
+        public const int BTN_R1 = 0x00020;
+        public const int BTN_L2 = 0x00040;
+        public const int BTN_R2 = 0x00080;
+        public const int BTN_CREATE = 0x00100;
+        public const int BTN_OPTIONS = 0x00200;
+        public const int BTN_L3 = 0x00400;
+        public const int BTN_R3 = 0x00800;
+        public const int BTN_PS = 0x01000;
+        public const int BTN_TOUCHPAD = 0x02000;
+        public const int BTN_MUTE = 0x04000;
+        public const int BTN_DUP = 0x10000;
+        public const int BTN_DDOWN = 0x20000;
+        public const int BTN_DLEFT = 0x40000;
+        public const int BTN_DRIGHT = 0x80000;
+
+        const ushort VID_SONY = 0x054C;
+        const int FAMILY_DS5 = 0;
+        const int FAMILY_DS4 = 1;
+
+        Thread _thread;
+        volatile bool _stop;
+        volatile IntPtr _handle = Native.INVALID_HANDLE_VALUE;
+        volatile int _inputLen = 64;
+        PadSnapshot _snap = new PadSnapshot();
+
+        readonly object _edgeGate = new object();
+        int _pendingPress;
+        int _lastButtons;
+
+        public PadSnapshot Snapshot { get { return _snap; } }
+
+        public void Start()
+        {
+            _stop = false;
+            _thread = new Thread(new ThreadStart(ReaderLoop));
+            _thread.IsBackground = true;
+            _thread.Name = "DualSenseReader";
+            _thread.Start();
+        }
+
+        public void Stop()
+        {
+            _stop = true;
+            IntPtr h = _handle;
+            if (h != Native.INVALID_HANDLE_VALUE)
+            {
+                // Unblock the pending ReadFile so the thread can observe _stop.
+                try { Native.CancelIoEx(h, IntPtr.Zero); }
+                catch { }
+            }
+        }
+
+        /// <summary>Drains and clears the latched not-pressed -> pressed transitions.</summary>
+        public int TakePressEdges()
+        {
+            lock (_edgeGate)
+            {
+                int p = _pendingPress;
+                _pendingPress = 0;
+                return p;
+            }
+        }
+
+        #region reader thread
+
+        void ReaderLoop()
+        {
+            // This process IS the shell: an escaped exception here blanks the screen.
+            // Every iteration is therefore individually guarded.
+            while (!_stop)
+            {
+                try
+                {
+                    if (!OpenPad())
+                    {
+                        for (int i = 0; i < 20 && !_stop; i++) Thread.Sleep(100);
+                        continue;
+                    }
+                    ReadUntilFailure();
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("PAD", "reader thread caught: " + ex.Message);
+                    ClosePad();
+                    for (int i = 0; i < 20 && !_stop; i++) Thread.Sleep(100);
+                }
+            }
+            ClosePad();
+            Log.Write("PAD", "reader thread stopped");
+        }
+
+        bool OpenPad()
+        {
+            string path = null;
+            ushort vid = 0, pid = 0;
+            string product = "";
+            if (!FindPad(out path, out vid, out pid, out product)) return false;
+
+            IntPtr h = Native.CreateFile(path, Native.GENERIC_READ,
+                Native.FILE_SHARE_READ | Native.FILE_SHARE_WRITE, IntPtr.Zero,
+                Native.OPEN_EXISTING, 0, IntPtr.Zero);
+            if (h == Native.INVALID_HANDLE_VALUE)
+            {
+                Log.Write("PAD", "found VID_" + vid.ToString("X4") + "&PID_" + pid.ToString("X4")
+                    + " but CreateFile(GENERIC_READ) failed, err=" + Marshal.GetLastWin32Error());
+                return false;
+            }
+            _handle = h;
+
+            // The declared input report length is what distinguishes a wired DualSense
+            // (64) from a Bluetooth one (78), and it MUST also be the exact ReadFile
+            // buffer size: given a larger buffer, HIDClass concatenates several queued
+            // reports into a single read (observed: 234 bytes = 3 x 78).
+            _inputLen = 64;
+            IntPtr pre;
+            if (Native.HidD_GetPreparsedData(h, out pre))
+            {
+                try
+                {
+                    HIDP_CAPS caps = new HIDP_CAPS();
+                    Native.HidP_GetCaps(pre, ref caps);
+                    if (caps.InputReportByteLength > 0) _inputLen = caps.InputReportByteLength;
+                }
+                finally { Native.HidD_FreePreparsedData(pre); }
+            }
+            else
+            {
+                Log.Write("PAD", "HidD_GetPreparsedData failed, err=" + Marshal.GetLastWin32Error()
+                    + " - assuming a " + _inputLen + " byte input report");
+            }
+
+            PadSnapshot s = new PadSnapshot();
+            s.Connected = true;
+            s.Vid = vid;
+            s.Pid = pid;
+            s.Path = path;
+            s.Model = ModelName(pid) + (product.Length > 0 ? " (" + product + ")" : "");
+            s.Transport = "?";
+            s.Status = "opened, waiting for first report";
+            _snap = s;
+
+            Log.Write("PAD", "pad discovered: VID=0x" + vid.ToString("X4") + " PID=0x" + pid.ToString("X4")
+                + " model='" + ModelName(pid) + "' product='" + product + "'"
+                + " inputReportLength=" + _inputLen);
+            Log.Write("PAD", "pad path: " + path);
+            return true;
+        }
+
+        void ClosePad()
+        {
+            IntPtr h = _handle;
+            _handle = Native.INVALID_HANDLE_VALUE;
+            if (h != Native.INVALID_HANDLE_VALUE)
+            {
+                try { Native.CloseHandle(h); }
+                catch { }
+            }
+            _lastButtons = 0;
+            PadSnapshot s = new PadSnapshot();
+            s.Status = "no pad";
+            _snap = s;
+        }
+
+        void ReadUntilFailure()
+        {
+            // Exactly one report per read - see the note in OpenPad about concatenation.
+            int len = _inputLen;
+            byte[] buf = new byte[len];
+            int family = FamilyOf(_snap.Pid);
+            bool loggedTransport = false;
+            bool loggedBattery = false;
+            bool haveBaseline = false;
+            long count = 0;
+
+            while (!_stop)
+            {
+                int got;
+                IntPtr h = _handle;
+                if (h == Native.INVALID_HANDLE_VALUE) return;
+                if (!Native.ReadFile(h, buf, len, out got, IntPtr.Zero))
+                {
+                    int err = Marshal.GetLastWin32Error();
+                    if (_stop) return;
+                    Log.Write("PAD", "ReadFile failed err=" + err + " after " + count
+                        + " reports - treating as disconnect, will rescan");
+                    ClosePad();
+                    return;
+                }
+                if (got <= 0) continue;
+                count++;
+
+                int stick, btn, trig, btn2Mask, bat;
+                string transport;
+                if (!SelectLayout(family, buf[0], len, out stick, out btn, out trig, out btn2Mask, out bat, out transport))
+                {
+                    if (count < 4)
+                        Log.Write("PAD", "unrecognised report: id=0x" + buf[0].ToString("X2") + " len=" + got + " (ignored)");
+                    continue;
+                }
+                if (got < btn + 3) continue;
+
+                if (!loggedTransport)
+                {
+                    loggedTransport = true;
+                    Log.Write("PAD", "transport detected: " + transport + " (report id 0x" + buf[0].ToString("X2")
+                        + ", declared length " + len + " bytes, read " + got + ", stick offset " + stick
+                        + ", buttons offset " + btn + ", trigger offset " + trig + ")");
+                    Log.Write("PAD", "first report bytes: " + Hex(buf, Math.Min(got, 16)));
+                    Log.Write("PAD", "resting sticks: LX=" + buf[stick] + " LY=" + buf[stick + 1]
+                        + " RX=" + buf[stick + 2] + " RY=" + buf[stick + 3]
+                        + "  L2=" + buf[trig] + " R2=" + buf[trig + 1]
+                        + "  buttons=0x" + buf[btn].ToString("X2") + buf[btn + 1].ToString("X2") + buf[btn + 2].ToString("X2"));
+                }
+
+                int buttons = Decode(buf, btn, btn2Mask);
+
+                PadSnapshot s = new PadSnapshot();
+                s.Connected = true;
+                s.Model = _snap.Model;
+                s.Vid = _snap.Vid;
+                s.Pid = _snap.Pid;
+                s.Path = _snap.Path;
+                s.Transport = transport;
+                s.ReportId = buf[0];
+                s.ReportLength = got;
+                s.Reports = count;
+                s.Buttons = buttons;
+                s.LX = buf[stick];
+                s.LY = buf[stick + 1];
+                s.RX = buf[stick + 2];
+                s.RY = buf[stick + 3];
+                s.L2 = buf[trig];
+                s.R2 = buf[trig + 1];
+                s.Status = "streaming";
+
+                // Battery is a bonus reading, never a precondition: if anything about it is
+                // unexpected the snapshot simply carries BatteryKnown=false and the UI says
+                // "not reported" instead of inventing a level.
+                if (bat >= 0 && bat < got)
+                {
+                    try
+                    {
+                        int pct; string bstate;
+                        DecodeBattery(buf[bat], out pct, out bstate);
+                        s.BatteryKnown = true;
+                        s.BatteryPercent = pct;
+                        s.BatteryState = bstate;
+                        s.BatteryRaw = buf[bat];
+                        if (!loggedBattery)
+                        {
+                            loggedBattery = true;
+                            Log.Write("PAD", "battery byte at offset " + bat + " = 0x" + buf[bat].ToString("X2")
+                                + " -> ~" + pct + "% " + bstate + " (approximate: the pad reports 11 steps)");
+                        }
+                    }
+                    catch { s.BatteryKnown = false; }
+                }
+                else if (!loggedBattery)
+                {
+                    loggedBattery = true;
+                    Log.Write("PAD", "no battery byte in this report layout (offset " + bat
+                        + ", read " + got + " bytes) - the Settings screen will say so");
+                }
+                _snap = s;
+
+                // Edge-latch on the reader thread so a fast tap cannot fall between UI ticks.
+                // The first report after a connect only seeds the baseline: a button that is
+                // already held when the pad appears must not fire an action by itself.
+                if (!haveBaseline)
+                {
+                    haveBaseline = true;
+                    _lastButtons = buttons;
+                    if (buttons != 0)
+                        Log.Write("PAD", "buttons already held at connect (0x" + buttons.ToString("X5")
+                            + " [" + ButtonNames(buttons) + "]) - taken as baseline, not dispatched");
+                    continue;
+                }
+                int edges = buttons & ~_lastButtons;
+                _lastButtons = buttons;
+                if (edges != 0)
+                {
+                    lock (_edgeGate) { _pendingPress |= edges; }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Maps report id + declared report length to payload offsets. Nothing here is
+        /// hardcoded to one transport; both are detected and adapted to.
+        ///
+        /// Report id alone is NOT sufficient for a DualSense: over Bluetooth the pad sends
+        /// id 0x01 too, until a host asks it for the full report. That Bluetooth 0x01 frame
+        /// is 78 bytes carrying the DualShock-4-compatible layout (buttons at byte 5,
+        /// analog triggers at 8/9), whereas the wired 0x01 frame is 64 bytes carrying the
+        /// full DualSense layout (analog triggers at 5/6, buttons at byte 8). Both were
+        /// observed directly: 64-byte wired on the bench, 78-byte Bluetooth on the dev box.
+        /// The declared length therefore does the disambiguating.
+        /// </summary>
+        /// <remarks>
+        /// bat is the offset of the DualSense battery byte, or -1 when this layout has none.
+        /// It is an ADDITION to the verified decode, never an input to it: every existing
+        /// offset below is byte-for-byte what was verified on the bench, and the battery is
+        /// read separately and defensively so a bad guess can only cost a battery reading.
+        /// </remarks>
+        static bool SelectLayout(int family, byte reportId, int length,
+            out int stick, out int btn, out int trig, out int btn2Mask, out int bat, out string transport)
+        {
+            stick = 0; btn = 0; trig = 0; btn2Mask = 0; bat = -1; transport = "";
+            if (family == FAMILY_DS5)
+            {
+                if (reportId == 0x31 && length >= 12)
+                {
+                    // Bluetooth full report: the wired payload shifted by +1.
+                    stick = 2; btn = 9; trig = 6; btn2Mask = 0x07; transport = "BT";
+                    bat = 0x35 + 1;
+                    return true;
+                }
+                if (reportId == 0x01 && length <= 64 && length >= 11)
+                {
+                    // Wired full report. Verified byte-by-byte on the bench.
+                    stick = 1; btn = 8; trig = 5; btn2Mask = 0x07; transport = "USB";
+                    bat = 0x35;
+                    return true;
+                }
+                if (reportId == 0x01 && length > 64)
+                {
+                    // Bluetooth compatibility report. Verified on the dev box. This one is the
+                    // DualShock-4-shaped frame and carries no DualSense battery status byte.
+                    stick = 1; btn = 5; trig = 8; btn2Mask = 0x03; transport = "BT";
+                    return true;
+                }
+                return false;
+            }
+            // DualShock 4: sticks in the same place, but the button bytes sit at 5/6/7 and
+            // the analog triggers after them. Byte 7 bits 2-7 are a counter, hence mask 0x03.
+            // Best effort - no DS4 was available to verify against.
+            if (reportId == 0x01 && length >= 10)
+            {
+                stick = 1; btn = 5; trig = 8; btn2Mask = 0x03; transport = "USB";
+                return true;
+            }
+            if (reportId == 0x11 && length >= 13)
+            {
+                stick = 3; btn = 7; trig = 10; btn2Mask = 0x03; transport = "BT";
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// DualSense battery status byte: low nibble is a 0-10 charge step, high nibble is the
+        /// charging state. Reported as approximate because the pad itself only has 11 steps.
+        /// </summary>
+        static void DecodeBattery(byte v, out int percent, out string state)
+        {
+            int step = v & 0x0F;
+            int st = (v >> 4) & 0x0F;
+            switch (st)
+            {
+                case 0x0: state = "discharging"; break;
+                case 0x1: state = "charging"; break;
+                case 0x2: state = "full"; step = 10; break;
+                case 0xA:
+                case 0xB: state = "temperature-fault"; break;
+                default: state = "error"; break;
+            }
+            if (step > 10) step = 10;
+            if (step < 0) step = 0;
+            percent = step * 10;
+        }
+
+        static int Decode(byte[] b, int btn, int btn2Mask)
+        {
+            // Buttons 1-15 are contiguous starting at the high nibble of the first button
+            // byte, so they shuffle straight into bits 0-14.
+            int v = ((b[btn] >> 4) & 0x0F)
+                  | (b[btn + 1] << 4)
+                  | ((b[btn + 2] & btn2Mask) << 12);
+
+            int hat = b[btn] & 0x0F;
+            switch (hat)
+            {
+                case 0: v |= BTN_DUP; break;
+                case 1: v |= BTN_DUP | BTN_DRIGHT; break;
+                case 2: v |= BTN_DRIGHT; break;
+                case 3: v |= BTN_DDOWN | BTN_DRIGHT; break;
+                case 4: v |= BTN_DDOWN; break;
+                case 5: v |= BTN_DDOWN | BTN_DLEFT; break;
+                case 6: v |= BTN_DLEFT; break;
+                case 7: v |= BTN_DUP | BTN_DLEFT; break;
+                default: break;   // 8 (and anything else) = centred
+            }
+            return v;
+        }
+
+        #endregion
+
+        #region enumeration
+
+        static bool FindPad(out string path, out ushort vid, out ushort pid, out string product)
+        {
+            path = null; vid = 0; pid = 0; product = "";
+            Guid hidGuid;
+            Native.HidD_GetHidGuid(out hidGuid);
+            IntPtr set = Native.SetupDiGetClassDevs(ref hidGuid, IntPtr.Zero, IntPtr.Zero,
+                Native.DIGCF_PRESENT | Native.DIGCF_DEVICEINTERFACE);
+            if (set == Native.INVALID_HANDLE_VALUE)
+            {
+                Log.Write("PAD", "SetupDiGetClassDevs failed, err=" + Marshal.GetLastWin32Error());
+                return false;
+            }
+            try
+            {
+                int index = 0;
+                while (true)
+                {
+                    SP_DEVICE_INTERFACE_DATA did = new SP_DEVICE_INTERFACE_DATA();
+                    did.cbSize = Marshal.SizeOf(typeof(SP_DEVICE_INTERFACE_DATA));
+                    if (!Native.SetupDiEnumDeviceInterfaces(set, IntPtr.Zero, ref hidGuid, index, ref did)) break;
+                    index++;
+
+                    int needed = 0;
+                    Native.SetupDiGetDeviceInterfaceDetail(set, ref did, IntPtr.Zero, 0, ref needed, IntPtr.Zero);
+                    if (needed <= 0) continue;
+
+                    IntPtr detail = Marshal.AllocHGlobal(needed);
+                    try
+                    {
+                        // cbSize of SP_DEVICE_INTERFACE_DETAIL_DATA_W: 8 on x64, 6 on x86.
+                        Marshal.WriteInt32(detail, IntPtr.Size == 8 ? 8 : 6);
+                        int unused = 0;
+                        if (!Native.SetupDiGetDeviceInterfaceDetail(set, ref did, detail, needed, ref unused, IntPtr.Zero))
+                            continue;
+                        string devPath = Marshal.PtrToStringUni(new IntPtr(detail.ToInt64() + 4));
+                        if (string.IsNullOrEmpty(devPath)) continue;
+
+                        // Probe with zero desired access: this never disturbs whoever else has
+                        // the device open, and is still enough for HidD_GetAttributes.
+                        IntPtr h = Native.CreateFile(devPath, 0,
+                            Native.FILE_SHARE_READ | Native.FILE_SHARE_WRITE, IntPtr.Zero,
+                            Native.OPEN_EXISTING, 0, IntPtr.Zero);
+                        if (h == Native.INVALID_HANDLE_VALUE) continue;
+                        try
+                        {
+                            HIDD_ATTRIBUTES attr = new HIDD_ATTRIBUTES();
+                            attr.Size = Marshal.SizeOf(typeof(HIDD_ATTRIBUTES));
+                            if (!Native.HidD_GetAttributes(h, ref attr)) continue;
+                            if (attr.VendorID != VID_SONY || !IsSupported(attr.ProductID)) continue;
+
+                            StringBuilder sb = new StringBuilder(128);
+                            if (Native.HidD_GetProductString(h, sb, 256)) product = sb.ToString();
+                            path = devPath;
+                            vid = attr.VendorID;
+                            pid = attr.ProductID;
+                            return true;
+                        }
+                        finally { Native.CloseHandle(h); }
+                    }
+                    finally { Marshal.FreeHGlobal(detail); }
+                }
+            }
+            finally { Native.SetupDiDestroyDeviceInfoList(set); }
+            return false;
+        }
+
+        static bool IsSupported(ushort pid)
+        {
+            return pid == 0x0CE6 || pid == 0x0DF2 || pid == 0x09CC || pid == 0x05C4;
+        }
+
+        static int FamilyOf(ushort pid)
+        {
+            return (pid == 0x0CE6 || pid == 0x0DF2) ? FAMILY_DS5 : FAMILY_DS4;
+        }
+
+        static string ModelName(ushort pid)
+        {
+            switch (pid)
+            {
+                case 0x0CE6: return "DualSense";
+                case 0x0DF2: return "DualSense Edge";
+                case 0x09CC: return "DualShock 4";
+                case 0x05C4: return "DualShock 4 (v1)";
+                default: return "Sony pad 0x" + pid.ToString("X4");
+            }
+        }
+
+        #endregion
+
+        public static string ButtonNames(int b)
+        {
+            if (b == 0) return "";
+            List<string> n = new List<string>();
+            if ((b & BTN_SQUARE) != 0) n.Add("SQUARE");
+            if ((b & BTN_CROSS) != 0) n.Add("CROSS");
+            if ((b & BTN_CIRCLE) != 0) n.Add("CIRCLE");
+            if ((b & BTN_TRIANGLE) != 0) n.Add("TRIANGLE");
+            if ((b & BTN_L1) != 0) n.Add("L1");
+            if ((b & BTN_R1) != 0) n.Add("R1");
+            if ((b & BTN_L2) != 0) n.Add("L2");
+            if ((b & BTN_R2) != 0) n.Add("R2");
+            if ((b & BTN_CREATE) != 0) n.Add("CREATE");
+            if ((b & BTN_OPTIONS) != 0) n.Add("OPTIONS");
+            if ((b & BTN_L3) != 0) n.Add("L3");
+            if ((b & BTN_R3) != 0) n.Add("R3");
+            if ((b & BTN_PS) != 0) n.Add("PS");
+            if ((b & BTN_TOUCHPAD) != 0) n.Add("TOUCHPAD");
+            if ((b & BTN_MUTE) != 0) n.Add("MUTE");
+            if ((b & BTN_DUP) != 0) n.Add("DUP");
+            if ((b & BTN_DDOWN) != 0) n.Add("DDOWN");
+            if ((b & BTN_DLEFT) != 0) n.Add("DLEFT");
+            if ((b & BTN_DRIGHT) != 0) n.Add("DRIGHT");
+            return string.Join("+", n.ToArray());
+        }
+
+        static string Hex(byte[] b, int n)
+        {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < n; i++)
+            {
+                if (i > 0) sb.Append(' ');
+                sb.Append(b[i].ToString("X2"));
+            }
+            return sb.ToString();
+        }
+    }
+
+    #endregion
+
+
+    #region Child process tree tracker  (copied verbatim from ShellHost.cs)
+
+    public enum TrackingMode { None, Job, Poll }
+
+    public class ChildTracker
+    {
+        IntPtr _job = IntPtr.Zero;
+        IntPtr _port = IntPtr.Zero;
+        Thread _watcher;
+        volatile bool _stop;
+
+        public int RootPid { get; private set; }
+        public TrackingMode Mode { get; private set; }
+        public string JobFailureReason = "";
+
+        public event Action TreeEmpty;
+
+        public bool Start(string commandLine, bool forceNoJob)
+        {
+            Mode = TrackingMode.None;
+            _stop = false;
+
+            bool jobReady = false;
+            if (!forceNoJob)
+            {
+                _job = Native.CreateJobObject(IntPtr.Zero, null);
+                if (_job == IntPtr.Zero)
+                {
+                    JobFailureReason = "CreateJobObject failed, err=" + Marshal.GetLastWin32Error();
+                }
+                else
+                {
+                    _port = Native.CreateIoCompletionPort(Native.INVALID_HANDLE_VALUE, IntPtr.Zero, UIntPtr.Zero, 1);
+                    if (_port == IntPtr.Zero)
+                    {
+                        JobFailureReason = "CreateIoCompletionPort failed, err=" + Marshal.GetLastWin32Error();
+                    }
+                    else
+                    {
+                        JOBOBJECT_ASSOCIATE_COMPLETION_PORT assoc = new JOBOBJECT_ASSOCIATE_COMPLETION_PORT();
+                        assoc.CompletionKey = _job;
+                        assoc.CompletionPort = _port;
+                        int size = Marshal.SizeOf(typeof(JOBOBJECT_ASSOCIATE_COMPLETION_PORT));
+                        IntPtr buf = Marshal.AllocHGlobal(size);
+                        try
+                        {
+                            Marshal.StructureToPtr(assoc, buf, false);
+                            if (!Native.SetInformationJobObject(_job, Native.JobObjectAssociateCompletionPortInformation, buf, (uint)size))
+                                JobFailureReason = "SetInformationJobObject(AssociateCompletionPort) failed, err=" + Marshal.GetLastWin32Error();
+                            else
+                                jobReady = true;
+                        }
+                        finally { Marshal.FreeHGlobal(buf); }
+                    }
+                }
+            }
+            else
+            {
+                JobFailureReason = "--no-job specified (fallback path forced for testing)";
+            }
+
+            // Always create suspended so we can assign to the job BEFORE any grandchild can spawn.
+            STARTUPINFO si = new STARTUPINFO();
+            si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+            PROCESS_INFORMATION pi;
+            StringBuilder cmd = new StringBuilder(commandLine, 32768);
+
+            bool created = Native.CreateProcess(null, cmd, IntPtr.Zero, IntPtr.Zero, false,
+                Native.CREATE_SUSPENDED | Native.CREATE_UNICODE_ENVIRONMENT, IntPtr.Zero, null, ref si, out pi);
+            if (!created)
+            {
+                Log.Write("LAUNCH", "CreateProcess FAILED for '" + commandLine + "' err=" + Marshal.GetLastWin32Error());
+                Cleanup();
+                return false;
+            }
+            RootPid = pi.dwProcessId;
+            Log.Write("LAUNCH", "CreateProcess(suspended) ok: '" + commandLine + "' pid=" + RootPid);
+
+            if (jobReady)
+            {
+                if (Native.AssignProcessToJobObject(_job, pi.hProcess))
+                {
+                    Mode = TrackingMode.Job;
+                    Log.Write("TRACK", "AssignProcessToJobObject ok - tracking mode = JOB OBJECT");
+                }
+                else
+                {
+                    JobFailureReason = "AssignProcessToJobObject failed, err=" + Marshal.GetLastWin32Error();
+                    Log.Write("TRACK", "WARN: " + JobFailureReason + " - falling back to descendant polling");
+                }
+            }
+
+            if (Mode != TrackingMode.Job)
+            {
+                Mode = TrackingMode.Poll;
+                Log.Write("TRACK", "tracking mode = TOOLHELP POLL (" + JobFailureReason + ")");
+            }
+
+            Native.ResumeThread(pi.hThread);
+            Native.CloseHandle(pi.hThread);
+            Native.CloseHandle(pi.hProcess);
+
+            _watcher = new Thread(Mode == TrackingMode.Job ? (ThreadStart)JobWatchLoop : PollWatchLoop);
+            _watcher.IsBackground = true;
+            _watcher.Name = "ChildTracker";
+            _watcher.Start();
+            return true;
+        }
+
+        void JobWatchLoop()
+        {
+            while (!_stop)
+            {
+                uint code;
+                IntPtr key, ov;
+                bool ok = Native.GetQueuedCompletionStatus(_port, out code, out key, out ov, 1000);
+                if (!ok)
+                {
+                    if (_stop) return;
+                    continue; // timeout
+                }
+                if (key == IntPtr.Zero && code == 0xFFFFFFFF) return; // our own stop packet
+                long pid = ov.ToInt64();
+                switch (code)
+                {
+                    case Native.JOB_OBJECT_MSG_NEW_PROCESS:
+                        Log.Write("TRACK", "job: NEW_PROCESS pid=" + pid);
+                        break;
+                    case Native.JOB_OBJECT_MSG_EXIT_PROCESS:
+                        Log.Write("TRACK", "job: EXIT_PROCESS pid=" + pid);
+                        break;
+                    case Native.JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS:
+                        Log.Write("TRACK", "job: ABNORMAL_EXIT_PROCESS pid=" + pid);
+                        break;
+                    case Native.JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO:
+                        Log.Write("TRACK", "job: ACTIVE_PROCESS_ZERO - child tree is empty");
+                        Action h = TreeEmpty;
+                        if (h != null) h();
+                        return;
+                }
+            }
+        }
+
+        void PollWatchLoop()
+        {
+            while (!_stop)
+            {
+                Thread.Sleep(400);
+                List<int> tree = GetDescendants(RootPid);
+                if (tree.Count == 0)
+                {
+                    Log.Write("TRACK", "poll: no live descendants of pid " + RootPid + " - child tree is empty");
+                    Action h = TreeEmpty;
+                    if (h != null) h();
+                    return;
+                }
+            }
+        }
+
+        public static List<int> GetDescendants(int rootPid)
+        {
+            List<int> result = new List<int>();
+            Dictionary<int, int> parents = new Dictionary<int, int>();
+            IntPtr snap = Native.CreateToolhelp32Snapshot(Native.TH32CS_SNAPPROCESS, 0);
+            if (snap == Native.INVALID_HANDLE_VALUE) return result;
+            try
+            {
+                PROCESSENTRY32 pe = new PROCESSENTRY32();
+                pe.dwSize = (uint)Marshal.SizeOf(typeof(PROCESSENTRY32));
+                if (!Native.Process32First(snap, ref pe)) return result;
+                do
+                {
+                    parents[(int)pe.th32ProcessID] = (int)pe.th32ParentProcessID;
+                } while (Native.Process32Next(snap, ref pe));
+            }
+            finally { Native.CloseHandle(snap); }
+
+            if (parents.ContainsKey(rootPid)) result.Add(rootPid);
+            bool grew = true;
+            while (grew)
+            {
+                grew = false;
+                foreach (KeyValuePair<int, int> kv in parents)
+                {
+                    if (result.Contains(kv.Key)) continue;
+                    if (result.Contains(kv.Value)) { result.Add(kv.Key); grew = true; }
+                }
+            }
+            return result;
+        }
+
+        public List<int> GetTrackedPids()
+        {
+            if (Mode == TrackingMode.Job && _job != IntPtr.Zero)
+            {
+                List<int> pids = new List<int>();
+                int cap = 512;
+                int size = 8 + IntPtr.Size * cap;
+                IntPtr buf = Marshal.AllocHGlobal(size);
+                try
+                {
+                    uint ret;
+                    if (Native.QueryInformationJobObject(_job, Native.JobObjectBasicProcessIdList, buf, (uint)size, out ret))
+                    {
+                        int inList = Marshal.ReadInt32(buf, 4);
+                        for (int i = 0; i < inList && i < cap; i++)
+                            pids.Add((int)Marshal.ReadIntPtr(buf, 8 + i * IntPtr.Size).ToInt64());
+                    }
+                }
+                finally { Marshal.FreeHGlobal(buf); }
+                return pids;
+            }
+            return GetDescendants(RootPid);
+        }
+
+        public void Cleanup()
+        {
+            _stop = true;
+            if (_port != IntPtr.Zero)
+            {
+                Native.PostQueuedCompletionStatus(_port, 0xFFFFFFFF, IntPtr.Zero, IntPtr.Zero);
+                Native.CloseHandle(_port);
+                _port = IntPtr.Zero;
+            }
+            if (_job != IntPtr.Zero)
+            {
+                // NOTE: no JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE - closing the handle must not kill the game.
+                Native.CloseHandle(_job);
+                _job = IntPtr.Zero;
+            }
+        }
+    }
+
+    #endregion
+
+    #region Foreground restoration  (copied verbatim from ShellHost.cs)
+
+    public static class Foreground
+    {
+        public static string ForceForeground(IntPtr hwnd)
+        {
+            Native.ShowWindow(hwnd, Native.SW_RESTORE);
+
+            if (Try(hwnd)) return "path0:SW_RESTORE+BringWindowToTop+SetForegroundWindow";
+
+            Log.Write("FOREGROUND", "path0 failed (fg=" + Describe(Native.GetForegroundWindow()) + "), trying ALT-key workaround");
+            Native.keybd_event(Native.VK_MENU, 0, 0, UIntPtr.Zero);
+            Native.keybd_event(Native.VK_MENU, 0, Native.KEYEVENTF_KEYUP, UIntPtr.Zero);
+            if (Try(hwnd)) return "path1:keybd_event(ALT down/up)+SetForegroundWindow";
+
+            Log.Write("FOREGROUND", "path1 failed, trying AttachThreadInput");
+            IntPtr fg = Native.GetForegroundWindow();
+            uint targetPid;
+            uint fgThread = Native.GetWindowThreadProcessId(fg, out targetPid);
+            uint ourThread = Native.GetCurrentThreadId();
+            bool attached = false;
+            if (fgThread != 0 && fgThread != ourThread)
+                attached = Native.AttachThreadInput(ourThread, fgThread, true);
+            try
+            {
+                if (Try(hwnd)) return "path2:AttachThreadInput(attached=" + attached + ")+SetForegroundWindow";
+            }
+            finally
+            {
+                if (attached) Native.AttachThreadInput(ourThread, fgThread, false);
+            }
+
+            Log.Write("FOREGROUND", "path2 failed, trying AttachThreadInput + ALT key");
+            attached = (fgThread != 0 && fgThread != ourThread) && Native.AttachThreadInput(ourThread, fgThread, true);
+            try
+            {
+                Native.keybd_event(Native.VK_MENU, 0, 0, UIntPtr.Zero);
+                Native.keybd_event(Native.VK_MENU, 0, Native.KEYEVENTF_KEYUP, UIntPtr.Zero);
+                if (Try(hwnd)) return "path3:AttachThreadInput+ALT+SetForegroundWindow";
+            }
+            finally
+            {
+                if (attached) Native.AttachThreadInput(ourThread, fgThread, false);
+            }
+
+            // Transient TOPMOST toggle. We do NOT stay topmost (must not fight games) and we do NOT
+            // touch SPI_SETFOREGROUNDLOCKTIMEOUT, which would be a system setting change.
+            Log.Write("FOREGROUND", "path3 failed, trying transient topmost toggle");
+            Native.SetWindowPos(hwnd, Native.HWND_TOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_SHOWWINDOW);
+            Native.SetWindowPos(hwnd, Native.HWND_NOTOPMOST, 0, 0, 0, 0, Native.SWP_NOMOVE | Native.SWP_NOSIZE | Native.SWP_SHOWWINDOW);
+            if (Try(hwnd)) return "path4:transient HWND_TOPMOST toggle (reverted to NOTOPMOST)";
+
+            Log.Write("FOREGROUND", "path4 failed, trying minimize/restore cycle");
+            Native.ShowWindow(hwnd, Native.SW_MINIMIZE);
+            Thread.Sleep(40);
+            Native.ShowWindow(hwnd, Native.SW_RESTORE);
+            if (Try(hwnd)) return "path5:SW_MINIMIZE/SW_RESTORE cycle";
+
+            Log.Write("FOREGROUND", "ALL PATHS FAILED - foreground is " + Describe(Native.GetForegroundWindow()));
+            return null;
+        }
+
+        static bool Try(IntPtr hwnd)
+        {
+            Native.BringWindowToTop(hwnd);
+            Native.SetForegroundWindow(hwnd);
+            Native.SetActiveWindow(hwnd);
+            for (int i = 0; i < 12; i++)
+            {
+                if (Native.GetForegroundWindow() == hwnd) return true;
+                Thread.Sleep(20);
+                Application.DoEvents();
+            }
+            return Native.GetForegroundWindow() == hwnd;
+        }
+
+        public static string Describe(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return "hwnd=0";
+            uint pid;
+            Native.GetWindowThreadProcessId(hwnd, out pid);
+            string name = "?";
+            try { name = Process.GetProcessById((int)pid).ProcessName; }
+            catch { }
+            StringBuilder sb = new StringBuilder(256);
+            Native.GetWindowText(hwnd, sb, 256);
+            return "hwnd=0x" + hwnd.ToInt64().ToString("X") + " pid=" + pid + " proc=" + name + " title='" + sb + "'";
+        }
+    }
+
+    #endregion
+
+    #region Tiny JSON field reader
+
+    // The page posts flat JSON objects only. A full parser would be dead weight here.
+    public static class Json
+    {
+        public static string Str(string json, string key)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"");
+            if (!m.Success) return null;
+            return m.Groups[1].Value.Replace("\\\\", "\\").Replace("\\\"", "\"").Replace("\\n", "\n");
+        }
+
+        public static int Int(string json, string key, int fallback)
+        {
+            if (string.IsNullOrEmpty(json)) return fallback;
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(-?[0-9]+)");
+            if (!m.Success) return fallback;
+            int v;
+            if (int.TryParse(m.Groups[1].Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out v)) return v;
+            return fallback;
+        }
+
+        /// <summary>
+        /// Return the raw JSON text of an OBJECT-valued field, braces included, or null.
+        ///
+        /// The file explorer wraps a whole FileApi command inside {"type":"fs","command":{...}},
+        /// so this one field is not flat and the regex reader above cannot see into it. Rather
+        /// than parse the payload - which would mean re-serialising it before handing it to
+        /// FileApi, and getting a chance to corrupt a path on the way - the substring is lifted
+        /// out verbatim by counting braces, with string literals and their escapes skipped so a
+        /// filename containing '{' or '"' cannot end the scan early.
+        /// </summary>
+        public static string Sub(string json, string key)
+        {
+            if (string.IsNullOrEmpty(json)) return null;
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\\{");
+            if (!m.Success) return null;
+            int start = m.Index + m.Length - 1;          // the '{' itself
+            int depth = 0;
+            bool inStr = false, esc = false;
+            for (int i = start; i < json.Length; i++)
+            {
+                char c = json[i];
+                if (inStr)
+                {
+                    if (esc) esc = false;
+                    else if (c == '\\') esc = true;
+                    else if (c == '"') inStr = false;
+                    continue;
+                }
+                if (c == '"') { inStr = true; continue; }
+                if (c == '{') depth++;
+                else if (c == '}')
+                {
+                    depth--;
+                    if (depth == 0) return json.Substring(start, i - start + 1);
+                }
+            }
+            return null;                                  // unbalanced - the caller reports it
+        }
+    }
+
+    #endregion
+
+    #region SystemApi worker  (the Settings screen's channel into the OS)
+
+    /// <summary>
+    /// Runs ArcOs.Sys.SystemApi.Handle() off the UI thread.
+    ///
+    /// WHY A DEDICATED THREAD AND NOT THE THREAD POOL
+    /// SystemApi's contract says Handle() is called from the WebView2 UI thread: calls are
+    /// serialised, and the COM objects it creates (MMDeviceEnumerator, IPolicyConfig, the WUA
+    /// searcher, the WinRT Radio activation) live in one apartment for the process's lifetime.
+    /// A pool thread would give neither guarantee - two Handle() calls could overlap, and each
+    /// would land in whatever MTA thread happened to be free. One dedicated STA thread with a
+    /// serial queue reproduces the UI thread's semantics exactly, minus the freezing.
+    ///
+    /// WHY IT CANNOT WEDGE THE SHELL
+    /// The queue is drained one item at a time, so a pathologically slow command delays later
+    /// commands but never the UI: the message pump keeps running, the pad keeps moving focus,
+    /// and the page's own per-request timeout turns the silence into a visible error. Anything
+    /// genuinely slow (Wi-Fi scan, Bluetooth inquiry, Windows Update search) is already a job
+    /// inside SystemApi and returns in milliseconds with a jobId.
+    /// </summary>
+    public class SysWorker
+    {
+        readonly Queue<string> _q = new Queue<string>();
+        readonly object _gate = new object();
+        readonly Action<string> _reply;           // called ON THE WORKER THREAD with the envelope
+        Thread _thread;
+        volatile bool _stop;
+        long _served;
+
+        public long Served { get { return Interlocked.Read(ref _served); } }
+
+        public SysWorker(Action<string> reply)
+        {
+            _reply = reply;
+        }
+
+        public void Start()
+        {
+            if (_thread != null) return;
+            _stop = false;
+            _thread = new Thread(new ThreadStart(Loop));
+            _thread.IsBackground = true;          // never keeps the shell alive at exit
+            _thread.Name = "ArcSysApi";
+            try { _thread.SetApartmentState(ApartmentState.STA); }
+            catch (Exception ex) { Log.Write("SYS", "could not set STA on the worker thread: " + ex.Message); }
+            _thread.Start();
+            Log.Write("SYS", "SystemApi worker thread started (STA, serial queue)");
+        }
+
+        public void Stop()
+        {
+            _stop = true;
+            lock (_gate) { Monitor.PulseAll(_gate); }
+        }
+
+        /// <summary>Queue one raw request. Returns immediately; never throws.</summary>
+        public void Post(string requestJson)
+        {
+            if (string.IsNullOrEmpty(requestJson)) return;
+            lock (_gate)
+            {
+                if (_q.Count > 64)
+                {
+                    // A page bug must not grow this without bound. Drop the oldest and say so;
+                    // the page's timeout turns the dropped request into a visible message.
+                    Log.Write("SYS", "request queue over 64 deep - dropping the oldest");
+                    _q.Dequeue();
+                }
+                _q.Enqueue(requestJson);
+                Monitor.Pulse(_gate);
+            }
+        }
+
+        void Loop()
+        {
+            while (!_stop)
+            {
+                string item = null;
+                try
+                {
+                    lock (_gate)
+                    {
+                        while (!_stop && _q.Count == 0) Monitor.Wait(_gate, 500);
+                        if (_stop) break;
+                        item = _q.Dequeue();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("SYS", "queue wait threw (swallowed): " + ex.Message);
+                    continue;
+                }
+                if (item == null) continue;
+                Serve(item);
+            }
+            Log.Write("SYS", "SystemApi worker thread stopped after " + Served + " requests");
+        }
+
+        void Serve(string request)
+        {
+            string cmd = Json.Str(request, "cmd");
+            string reqId = Json.Str(request, "reqId");
+            string envelope;
+            DateTime t0 = DateTime.UtcNow;
+            try
+            {
+                // SystemApi.Handle() is documented never to throw. The try/catch is here because
+                // this process is the Windows shell and "documented" is not "proven for every
+                // input"; a thrown exception on this thread would take the whole shell down.
+                envelope = ArcOs.Sys.SystemApi.Handle(request);
+            }
+            catch (Exception ex)
+            {
+                envelope = "{\"ok\":false" + (reqId == null ? "" : ",\"reqId\":\"" + Esc(reqId) + "\"")
+                    + ",\"error\":\"host_exception\",\"detail\":\"" + Esc(ex.Message) + "\"}";
+                Log.Write("SYS", "Handle('" + cmd + "') THREW (contained): " + ex.ToString());
+            }
+            if (envelope == null)
+                envelope = "{\"ok\":false" + (reqId == null ? "" : ",\"reqId\":\"" + Esc(reqId) + "\"")
+                    + ",\"error\":\"host_null\",\"detail\":\"SystemApi returned nothing\"}";
+
+            int ms = (int)(DateTime.UtcNow - t0).TotalMilliseconds;
+            Interlocked.Increment(ref _served);
+            bool ok = envelope.StartsWith("{\"ok\":true", StringComparison.Ordinal);
+            string tail = ok ? "" : "  " + Trim(envelope, 220);
+            Log.Write("SYS", (ok ? "ok  " : "ERR ") + (cmd == null ? "?" : cmd)
+                + " reqId=" + (reqId == null ? "-" : reqId) + " in " + ms + " ms" + tail);
+            if (ms > 1500)
+                Log.Write("SYS", "NOTE: '" + cmd + "' took " + ms + " ms on the worker thread - "
+                    + "later requests queued behind it. The UI thread was not blocked.");
+
+            try { if (_reply != null) _reply(envelope); }
+            catch (Exception ex) { Log.Write("SYS", "reply dispatch threw (swallowed): " + ex.Message); }
+        }
+
+        static string Trim(string s, int n)
+        {
+            if (s == null) return "";
+            return s.Length <= n ? s : s.Substring(0, n) + "...";
+        }
+
+        static string Esc(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            StringBuilder b = new StringBuilder(s.Length + 8);
+            foreach (char c in s)
+            {
+                if (c == '"' || c == '\\') { b.Append('\\').Append(c); }
+                else if (c == '\n') b.Append("\\n");
+                else if (c == '\r') b.Append("\\r");
+                else if (c == '\t') b.Append("\\t");
+                else if (c < ' ') b.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                else b.Append(c);
+            }
+            return b.ToString();
+        }
+    }
+
+    #endregion
+
+    #region FileApi worker  (the file explorer's channel into the file system)
+
+    /// <summary>
+    /// Runs ArcOs.Files.FileApi.Handle() off the UI thread, on the same serial-queue pattern
+    /// SysWorker uses. It is a separate class rather than a second instance of SysWorker because
+    /// the two have genuinely different tolerances: a SystemApi call that takes 1.5 s is worth a
+    /// warning, whereas a directory sweep over a 2 TB disk taking 8 s is normal and the explorer's
+    /// own progress UI is built for it. Sharing one queue would also let a slow sweep sit in front
+    /// of the volume slider, which is the one coupling worth paying a hundred lines to avoid.
+    ///
+    /// WHY IT MUST NOT RUN ON THE UI THREAD
+    /// fs.list on a cold directory, fs.size on a tree, fs.copy's job start and fs.open's
+    /// ShellExecuteExW all block for as long as the disk takes. On the UI thread that is a frozen
+    /// television with no way back: the pad stops moving focus because the message pump is inside
+    /// the call. Off it, a slow command delays only later file commands.
+    ///
+    /// STA for the same reason SysWorker is STA: FileApi reaches the Windows shell (IShellItem,
+    /// ShellExecuteExW, the recycle bin) and those APIs want a single-threaded apartment.
+    /// </summary>
+    public class FileWorker
+    {
+        /// <summary>One queued request. A pair, not a delimited string: a reqId is page-supplied
+        /// text and any separator picked here would be a separator a page could also send.</summary>
+        sealed class Item
+        {
+            public readonly string ReqId;
+            public readonly string Command;
+            public Item(string reqId, string command) { ReqId = reqId; Command = command; }
+        }
+
+        readonly Queue<Item> _q = new Queue<Item>();
+        readonly object _gate = new object();
+        readonly Action<string, string> _reply;              // (reqId, FileApi envelope) ON THE WORKER THREAD
+        Thread _thread;
+        volatile bool _stop;
+        long _served;
+
+        public long Served { get { return Interlocked.Read(ref _served); } }
+
+        public FileWorker(Action<string, string> reply)
+        {
+            _reply = reply;
+        }
+
+        public void Start()
+        {
+            if (_thread != null) return;
+            _stop = false;
+            _thread = new Thread(new ThreadStart(Loop));
+            _thread.IsBackground = true;
+            _thread.Name = "ArcFileApi";
+            try { _thread.SetApartmentState(ApartmentState.STA); }
+            catch (Exception ex) { Log.Write("FS", "could not set STA on the file worker thread: " + ex.Message); }
+            _thread.Start();
+            Log.Write("FS", "FileApi worker thread started (STA, serial queue)");
+        }
+
+        public void Stop()
+        {
+            _stop = true;
+            lock (_gate) { Monitor.PulseAll(_gate); }
+        }
+
+        /// <summary>Queue one raw FileApi command (the inner object, not the fs envelope).</summary>
+        public void Post(string reqId, string commandJson)
+        {
+            if (string.IsNullOrEmpty(commandJson)) return;
+            lock (_gate)
+            {
+                if (_q.Count > 64)
+                {
+                    Log.Write("FS", "request queue over 64 deep - dropping the oldest");
+                    _q.Dequeue();
+                }
+                _q.Enqueue(new Item(reqId, commandJson));
+                Monitor.Pulse(_gate);
+            }
+        }
+
+        void Loop()
+        {
+            while (!_stop)
+            {
+                Item item = null;
+                try
+                {
+                    lock (_gate)
+                    {
+                        while (!_stop && _q.Count == 0) Monitor.Wait(_gate, 500);
+                        if (_stop) break;
+                        item = _q.Dequeue();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("FS", "queue wait threw (swallowed): " + ex.Message);
+                    continue;
+                }
+                if (item == null) continue;
+                Serve(item.ReqId, item.Command);
+            }
+            Log.Write("FS", "FileApi worker thread stopped after " + Served + " requests");
+        }
+
+        void Serve(string reqId, string command)
+        {
+            string cmd = Json.Str(command, "cmd");
+            string envelope;
+            DateTime t0 = DateTime.UtcNow;
+            try
+            {
+                // FileApi.Handle() is documented never to throw, and its own catch-all proves it
+                // for every input it has been given. This process is the Windows shell, so the
+                // claim is belt-and-braced here too: an escaped exception on this thread would
+                // take the television down with it.
+                envelope = ArcOs.Files.FileApi.Handle(command);
+            }
+            catch (Exception ex)
+            {
+                envelope = "{\"ok\":false" + (reqId == null ? "" : ",\"reqId\":\"" + Esc(reqId) + "\"")
+                    + ",\"error\":\"host_exception\",\"detail\":\"" + Esc(ex.Message) + "\"}";
+                Log.Write("FS", "Handle('" + cmd + "') THREW (contained): " + ex.ToString());
+            }
+            if (envelope == null)
+                envelope = "{\"ok\":false" + (reqId == null ? "" : ",\"reqId\":\"" + Esc(reqId) + "\"")
+                    + ",\"error\":\"host_null\",\"detail\":\"FileApi returned nothing\"}";
+
+            int ms = (int)(DateTime.UtcNow - t0).TotalMilliseconds;
+            Interlocked.Increment(ref _served);
+            bool ok = envelope.StartsWith("{\"ok\":true", StringComparison.Ordinal);
+            // Successful listings are the shell's chattiest traffic by an order of magnitude
+            // (fs.watch polls while a folder is open). Log the shape, never the payload.
+            string tail = ok ? " (" + envelope.Length + " bytes)" : "  " + Trim(envelope, 220);
+            Log.Write("FS", (ok ? "ok  " : "ERR ") + (cmd == null ? "?" : cmd)
+                + " reqId=" + (reqId == null ? "-" : reqId) + " in " + ms + " ms" + tail);
+
+            try { if (_reply != null) _reply(reqId, envelope); }
+            catch (Exception ex) { Log.Write("FS", "reply dispatch threw (swallowed): " + ex.Message); }
+        }
+
+        static string Trim(string s, int n)
+        {
+            if (s == null) return "";
+            return s.Length <= n ? s : s.Substring(0, n) + "...";
+        }
+
+        internal static string Esc(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            StringBuilder b = new StringBuilder(s.Length + 8);
+            foreach (char c in s)
+            {
+                if (c == '"' || c == '\\') { b.Append('\\').Append(c); }
+                else if (c == '\n') b.Append("\\n");
+                else if (c == '\r') b.Append("\\r");
+                else if (c == '\t') b.Append("\\t");
+                else if (c < ' ') b.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                else b.Append(c);
+            }
+            return b.ToString();
+        }
+    }
+
+    /// <summary>
+    /// The WebView2 host object the explorer probes for second, after window.arcFileApi and
+    /// before the postMessage channel.
+    ///
+    /// READ THIS BEFORE ENABLING IT. AddHostObjectToScript dispatches every proxy call onto the
+    /// thread that created the CoreWebView2 - the UI thread. The JavaScript side is asynchronous
+    /// (the proxy returns a promise), which makes it *look* safe, but the host side is not: while
+    /// Handle() is inside a directory sweep the message pump is not running, so the pad is dead
+    /// and the screen is frozen. That is the exact failure this shell cannot have.
+    ///
+    /// So it is registered only under --file-host-object, which exists to prove the transport
+    /// works and to leave the door open if a future FileApi is provably non-blocking. The
+    /// shipping default is the {type:"fs"} message channel, which lands on FileWorker's thread.
+    /// </summary>
+    [System.Runtime.InteropServices.ComVisible(true)]
+    public class FileApiBridge
+    {
+        public string Handle(string json)
+        {
+            try { return ArcOs.Files.FileApi.Handle(json); }
+            catch (Exception ex)
+            {
+                Log.Write("FS", "host-object Handle threw (contained): " + ex.ToString());
+                return "{\"ok\":false,\"error\":\"host_exception\",\"detail\":\""
+                    + FileWorker.Esc(ex.Message) + "\"}";
+            }
+        }
+    }
+
+    #endregion
+
+    #region Browser  (a SECOND WebView2, for web content)
+
+    /// <summary>
+    /// ════════════════════════════════════════════════════════════════════════════════════
+    /// THE SPLIT. This is the crux of the browser's design; everything else follows from it.
+    /// ════════════════════════════════════════════════════════════════════════════════════
+    ///
+    /// There are two entirely separate WebView2 worlds in this process.
+    ///
+    ///   1. THE SHELL WEBVIEW  (HostForm._web, the WinForms control)
+    ///      Draws index.html and nothing else: the home rail, Settings, the on-screen
+    ///      keyboard, the file explorer, and - for the browser - the whole of its chrome.
+    ///      The tab strip, the address bar, the TLS indicator, the history list, the start
+    ///      page of pinned tiles and the hint bar are all ordinary DOM in index.html. It
+    ///      keeps its kiosk hardening exactly as it was and never loads a remote origin.
+    ///
+    ///   2. THE CONTENT WEBVIEWS  (this class)
+    ///      One CoreWebView2Controller per tab, all on a second CoreWebView2Environment with
+    ///      its own user-data folder, parented to a Panel the host positions inside the
+    ///      shell's layout. These load the actual web. They legitimately need script,
+    ///      storage, media and cookies; none of the shell's hardening applies to them and
+    ///      none of it is weakened for them either.
+    ///
+    /// WHY NOT AN IFRAME. An <iframe> inside index.html would be the obvious answer and it
+    /// cannot work: index.html cannot script into a cross-origin document, so it could never
+    /// build a focus list, draw a focus ring, or click a link inside youtube.com. Spatial
+    /// navigation is the entire product here, and it requires code running INSIDE the page.
+    /// AddScriptToExecuteOnDocumentCreatedAsync gives exactly that, at the top of every
+    /// document, on every origin - and it is only available to a WebView the host owns.
+    ///
+    /// WHY A SECOND ENVIRONMENT AND NOT A SECOND CONTROLLER ON THE FIRST ONE. Tabs share one
+    /// environment with each other (the requirement, and the only way cookies and logins
+    /// survive a tab switch), but they do NOT share the shell's. An environment is a browser
+    /// process tree: sharing one would put the shell's renderer, the GPU process and the
+    /// network service in the same failure domain as whatever the human just browsed to. The
+    /// second environment costs one extra browser process, perhaps 60 MB, and buys the
+    /// property this whole machine is built around - a page cannot take the television down.
+    ///
+    /// WHY A PANEL AND NOT A LAYER. A CoreWebView2Controller is a real child HWND, not a
+    /// composited surface, so it cannot be interleaved with the shell page's DOM: nothing
+    /// index.html draws can appear on top of it. Rather than pretend otherwise, the content
+    /// view is a RECTANGLE the shell page reserves in its own layout, and any shell UI that
+    /// needs the whole screen (the keyboard, the tab switcher, the history list) hides the
+    /// content view for as long as it is up. That is an honest, debuggable arrangement;
+    /// the alternative is CoreWebView2CompositionController and a Windows.UI.Composition
+    /// visual tree, which is a great deal of interop for a modal keyboard nobody wants to
+    /// see the page behind anyway.
+    ///
+    /// WHO OWNS INPUT. The pad is read by the host over raw HID and delivered to the SHELL
+    /// page, exactly as before - there is still only one input authority. When the browser's
+    /// content pane has focus the shell page relays the action back down here
+    /// ({type:"browser.pad"}), and this class forwards it to the active tab's injected
+    /// script. The analog sticks are the one exception: they are streamed straight from the
+    /// pad timer to the content view at 30 Hz, because routing 30 messages a second through
+    /// the shell page to move a cursor would be silly.
+    ///
+    /// KEYBOARD FOCUS deliberately never moves to a content view. The shell WebView keeps it,
+    /// which is what keeps Esc/F2/F3 working through the shell's accelerator hook. As a
+    /// second line of defence the same hook is installed on every content controller, so the
+    /// native escape hatches survive even if focus ends up somewhere unexpected.
+    /// </summary>
+    public class BrowserHost
+    {
+        /// <summary>
+        /// Four. Each tab is a CoreWebView2Controller, and each of those is at minimum one
+        /// renderer process plus its own document, compositor surface and JS heap; four tabs
+        /// of ordinary modern web is comfortably 700 MB. This machine is a television, not a
+        /// workstation, and a shell that gets OOM-killed is a black screen with no way back.
+        /// Four is also about the limit of what can be told apart on a tab strip read from
+        /// three metres. Opening a fifth reuses the oldest inactive tab rather than refusing,
+        /// because "no" is a worse answer than "here, in this one".
+        /// </summary>
+        public const int MaxTabs = 4;
+
+        public class Tab
+        {
+            public int Id;
+            public CoreWebView2Controller Ctl;
+            public CoreWebView2 Core;
+            public string Url = "";
+            public string Title = "";
+            public string Favicon = "";
+            public bool Secure;
+            public bool Loading;
+            public bool Crashed;
+            public double Zoom = 1.0;
+            public DateTime Touched = DateTime.UtcNow;
+        }
+
+        readonly Control _parent;                 // the Panel the content views live in
+        readonly Action<string> _toPage;          // post a JSON string to the SHELL page
+        readonly string _script;                  // ui/arcnav.js, injected into every document
+        readonly string _userData;
+        readonly EventHandler<CoreWebView2AcceleratorKeyPressedEventArgs> _accel;
+
+        CoreWebView2Environment _env;
+        readonly List<Tab> _tabs = new List<Tab>();
+        int _nextId = 1;
+        Tab _active;
+        bool _opening;
+
+        public bool Open;                          // the browser is the visible thing
+        public bool ContentFocused;                // the pad's actions belong to the page
+        public bool FullScreen;
+
+        public BrowserHost(Control parent, Action<string> toPage, string script, string userData,
+                           EventHandler<CoreWebView2AcceleratorKeyPressedEventArgs> accel)
+        {
+            _parent = parent;
+            _toPage = toPage;
+            _script = script;
+            _userData = userData;
+            _accel = accel;
+        }
+
+        public int TabCount { get { return _tabs.Count; } }
+        public Tab Active { get { return _active; } }
+
+        // ── Environment ─────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Create the content environment on first use, not at startup: a shell that never
+        /// opens the browser should never pay for a second browser process.
+        /// </summary>
+        void EnsureEnvironment(Action then)
+        {
+            if (_env != null) { then(); return; }
+            if (_opening) return;
+            _opening = true;
+
+            CoreWebView2EnvironmentOptions o = new CoreWebView2EnvironmentOptions();
+            // Not a security setting, and applied to the CONTENT environment only. Every
+            // video on this machine is started by a pad button that becomes a synthesised
+            // click, and a synthesised click is not a user activation as far as Chromium is
+            // concerned - so without this, the play button works and the video does not.
+            // Nothing here disables web security, site isolation or the sandbox.
+            o.AdditionalBrowserArguments = "--autoplay-policy=no-user-gesture-required";
+
+            Log.Write("BROWSER", "creating the content environment (user data: " + _userData + ")");
+            try { Directory.CreateDirectory(_userData); }
+            catch (Exception ex) { Log.Write("BROWSER", "WARN: content user-data folder: " + ex.Message); }
+
+            Task<CoreWebView2Environment> t = CoreWebView2Environment.CreateAsync(null, _userData, o);
+            t.ContinueWith(delegate(Task<CoreWebView2Environment> done)
+            {
+                _opening = false;
+                if (done.IsFaulted || done.Result == null)
+                {
+                    Log.Write("BROWSER", "FATAL for the browser only: content environment failed: "
+                        + (done.Exception == null ? "(no exception)" : done.Exception.GetBaseException().Message));
+                    Say("{\"type\":\"browser\",\"ev\":\"unavailable\",\"detail\":\""
+                        + Esc(done.Exception == null ? "unknown" : done.Exception.GetBaseException().Message) + "\"}");
+                    return;
+                }
+                _env = done.Result;
+                Log.Write("BROWSER", "content environment ready, runtime " + _env.BrowserVersionString);
+                then();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        // ── Tabs ────────────────────────────────────────────────────────────────────────
+
+        public void OpenBrowser(string url)
+        {
+            Open = true;
+            EnsureEnvironment(delegate
+            {
+                if (_tabs.Count == 0) NewTab(url);
+                else { Activate(_active != null ? _active.Id : _tabs[0].Id); if (!string.IsNullOrEmpty(url)) Navigate(url); }
+                Say("{\"type\":\"browser\",\"ev\":\"opened\"}");
+                PushTabs();
+            });
+        }
+
+        public void CloseBrowser()
+        {
+            Open = false;
+            ContentFocused = false;
+            FullScreen = false;
+            /* Tabs are NOT destroyed. Coming back to a browser that lost every page is the
+               single most irritating thing a television browser can do, and four idle
+               renderers cost far less than the human's place in a video. They are torn down
+               on {type:"browser.quit"} and at shell exit. */
+            foreach (Tab t in _tabs) Visible(t, false);
+            _parent.Visible = false;
+            Say("{\"type\":\"browser\",\"ev\":\"closed\"}");
+        }
+
+        public void Quit()
+        {
+            Open = false;
+            ContentFocused = false;
+            List<Tab> all = new List<Tab>(_tabs);
+            foreach (Tab t in all) Destroy(t);
+            _tabs.Clear();
+            _active = null;
+            _parent.Visible = false;
+            Log.Write("BROWSER", "every tab closed; the content processes are gone");
+            Say("{\"type\":\"browser\",\"ev\":\"closed\"}");
+            PushTabs();
+        }
+
+        public void NewTab(string url)
+        {
+            if (_env == null) { EnsureEnvironment(delegate { NewTab(url); }); return; }
+
+            if (_tabs.Count >= MaxTabs)
+            {
+                // Reuse the least recently touched tab that is not the active one.
+                Tab victim = null;
+                foreach (Tab t in _tabs)
+                    if (t != _active && (victim == null || t.Touched < victim.Touched)) victim = t;
+                if (victim == null) victim = _tabs[0];
+                Log.Write("BROWSER", "tab cap of " + MaxTabs + " reached - reusing tab " + victim.Id);
+                Activate(victim.Id);
+                Navigate(url);
+                return;
+            }
+
+            Tab tab = new Tab();
+            tab.Id = _nextId++;
+            _tabs.Add(tab);
+            Log.Write("BROWSER", "creating tab " + tab.Id + " for " + (url == null ? "(blank)" : url));
+
+            Task<CoreWebView2Controller> t2 = _env.CreateCoreWebView2ControllerAsync(_parent.Handle);
+            t2.ContinueWith(delegate(Task<CoreWebView2Controller> done)
+            {
+                if (done.IsFaulted || done.Result == null)
+                {
+                    Log.Write("BROWSER", "tab " + tab.Id + " controller failed: "
+                        + (done.Exception == null ? "?" : done.Exception.GetBaseException().Message));
+                    _tabs.Remove(tab);
+                    PushTabs();
+                    return;
+                }
+                Wire(tab, done.Result, url);
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        void Wire(Tab tab, CoreWebView2Controller ctl, string url)
+        {
+            tab.Ctl = ctl;
+            tab.Core = ctl.CoreWebView2;
+
+            try { ctl.DefaultBackgroundColor = Color.FromArgb(255, 0x04, 0x06, 0x0B); }
+            catch { }
+            ctl.Bounds = new Rectangle(0, 0, Math.Max(1, _parent.ClientSize.Width),
+                                             Math.Max(1, _parent.ClientSize.Height));
+            ctl.IsVisible = false;
+
+            CoreWebView2Settings s = tab.Core.Settings;
+            // Chrome the human must not see inside a kiosk. NOTE what is deliberately NOT
+            // here: script, storage, cookies, media, images and the sandbox are all left at
+            // their defaults, which is to say on. This browser is a browser.
+            s.AreDefaultContextMenusEnabled = false;
+            s.IsStatusBarEnabled = false;
+            s.AreBrowserAcceleratorKeysEnabled = false;
+            s.IsPasswordAutosaveEnabled = false;
+            s.IsGeneralAutofillEnabled = false;
+            s.IsWebMessageEnabled = true;
+            s.IsZoomControlEnabled = false;        // zoom is ours, from the pad
+            s.IsSwipeNavigationEnabled = false;
+            s.IsBuiltInErrorPageEnabled = true;    // unlike the shell: a dead link needs a page
+
+            tab.Core.NavigationStarting += delegate(object o, CoreWebView2NavigationStartingEventArgs e)
+            {
+                tab.Loading = true;
+                tab.Url = e.Uri;
+                tab.Secure = IsSecure(e.Uri);
+                PushTab(tab);
+            };
+            tab.Core.NavigationCompleted += delegate(object o, CoreWebView2NavigationCompletedEventArgs e)
+            {
+                tab.Loading = false;
+                bool cb = false, cf = false;
+                try { cb = tab.Core.CanGoBack; cf = tab.Core.CanGoForward; } catch { }
+                Log.Write("BROWSER", "tab " + tab.Id + " navigation " + (e.IsSuccess ? "ok" : "FAILED " + e.WebErrorStatus)
+                    + " canBack=" + cb + " canForward=" + cf + " -> " + tab.Url);
+                PushTab(tab);
+            };
+            tab.Core.SourceChanged += delegate(object o, CoreWebView2SourceChangedEventArgs e)
+            {
+                try { tab.Url = tab.Core.Source; } catch { }
+                tab.Secure = IsSecure(tab.Url);
+                PushTab(tab);
+            };
+            tab.Core.DocumentTitleChanged += delegate(object o, object e)
+            {
+                try { tab.Title = tab.Core.DocumentTitle; } catch { }
+                PushTab(tab);
+            };
+            tab.Core.HistoryChanged += delegate(object o, object e) { PushTab(tab); };
+            // Favicons are fetched HERE and handed up as data: URIs, never as the remote URL
+            // the site advertised. Putting a third-party image URL into the shell page's tab
+            // strip would make the SHELL's WebView issue a request to that server - the one
+            // thing the shell is not allowed to do, and a rule that exists precisely so that
+            // "what the shell can talk to" stays a short and auditable list. The content
+            // WebView is already talking to that server; letting it do the fetch keeps the
+            // request inside the browsing session where it belongs.
+            try
+            {
+                tab.Core.FaviconChanged += delegate(object o, object e) { FetchFavicon(tab); };
+            }
+            catch (Exception ex) { Log.Write("BROWSER", "no favicon events on this runtime: " + ex.Message); }
+
+            // A page must never be able to spawn a window this shell cannot close.
+            tab.Core.NewWindowRequested += delegate(object o, CoreWebView2NewWindowRequestedEventArgs e)
+            {
+                e.Handled = true;
+                Log.Write("BROWSER", "tab " + tab.Id + " asked for a new window: " + e.Uri);
+                NewTab(e.Uri);
+            };
+
+            tab.Core.ContainsFullScreenElementChanged += delegate(object o, object e)
+            {
+                bool on = false;
+                try { on = tab.Core.ContainsFullScreenElement; } catch { }
+                if (tab != _active) return;
+                FullScreen = on;
+                Log.Write("BROWSER", "tab " + tab.Id + " full screen = " + on);
+                Say("{\"type\":\"browser\",\"ev\":\"fullscreen\",\"on\":" + (on ? "true" : "false") + "}");
+            };
+
+            // THE isolation guarantee, in one handler. A renderer that crashes, hangs or is
+            // killed from Task Manager lands here; the shell is a different process tree
+            // entirely and carries on drawing. Nothing in this method exits the process.
+            tab.Core.ProcessFailed += delegate(object o, CoreWebView2ProcessFailedEventArgs e)
+            {
+                string kind = e.ProcessFailedKind.ToString();
+                Log.Write("BROWSER", "tab " + tab.Id + " PROCESS FAILED kind=" + kind
+                    + " reason=" + e.Reason + " exit=" + e.ExitCode + " desc=" + e.ProcessDescription
+                    + "  (the shell is unaffected: separate environment, separate process tree)");
+                tab.Crashed = true;
+                tab.Loading = false;
+                Say("{\"type\":\"browser\",\"ev\":\"crashed\",\"tab\":" + tab.Id
+                    + ",\"kind\":\"" + Esc(kind) + "\",\"reason\":\"" + Esc(e.Reason.ToString()) + "\"}");
+                PushTab(tab);
+            };
+
+            tab.Core.WebMessageReceived += delegate(object o, CoreWebView2WebMessageReceivedEventArgs e)
+            {
+                string raw = null;
+                try { raw = e.TryGetWebMessageAsString(); }
+                catch { }
+                if (raw == null) { try { raw = e.WebMessageAsJson; } catch { } }
+                if (string.IsNullOrEmpty(raw)) return;
+                // Straight through to the shell page, with the tab stamped on it. The
+                // payload is the injected script's own object; nothing here interprets it,
+                // which is what keeps arcnav.js the single source of truth for its protocol.
+                if (raw.Length > 1 && raw[0] == '{')
+                    Say("{\"type\":\"browser\",\"ev\":\"arcnav\",\"tab\":" + tab.Id + ",\"msg\":" + raw + "}");
+            };
+
+            // The native escape hatches, on this controller too. Keyboard focus is never
+            // moved to a content view - the shell WebView keeps it, which is what normally
+            // routes Esc/F2/F3 to the shell's own hook - but "normally" is not a guarantee
+            // worth betting a television on, so the same handler is installed here as well.
+            try
+            {
+                ctl.AcceleratorKeyPressed += _accel;
+                Log.Write("BROWSER", "tab " + tab.Id + " escape keys hooked (Esc/F2/F3 work even if this view takes focus)");
+            }
+            catch (Exception ex) { Log.Write("BROWSER", "could not hook the escape keys on tab " + tab.Id + ": " + ex.Message); }
+
+            Task<string> add = tab.Core.AddScriptToExecuteOnDocumentCreatedAsync(_script);
+            add.ContinueWith(delegate(Task<string> d2)
+            {
+                if (d2.IsFaulted)
+                    Log.Write("BROWSER", "tab " + tab.Id + " arcnav injection FAILED: " + d2.Exception.GetBaseException().Message);
+                else
+                    Log.Write("BROWSER", "tab " + tab.Id + " arcnav injected (id=" + d2.Result + ", "
+                        + _script.Length + " bytes)");
+                Activate(tab.Id);
+                if (!string.IsNullOrEmpty(url)) Navigate(url);
+                PushTabs();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        /// <summary>
+        /// Pull the favicon out of the CONTENT WebView as bytes and turn it into a data: URI
+        /// for the tab strip. See the comment at the FaviconChanged hook-up for why the raw
+        /// URL never leaves this class.
+        ///
+        /// Anything over 48 KB is dropped rather than sent: a site is free to advertise a
+        /// 2 MB PNG as its icon, and that would arrive at the shell page as a 2.7 MB
+        /// base64 string inside a JSON message posted several times a second while a tab
+        /// loads. The tab strip draws it at about twenty pixels.
+        /// </summary>
+        void FetchFavicon(Tab tab)
+        {
+            if (tab == null || tab.Core == null) return;
+            string uri = null;
+            try { uri = tab.Core.FaviconUri; }
+            catch { }
+            if (string.IsNullOrEmpty(uri)) { tab.Favicon = ""; PushTab(tab); return; }
+
+            Task<System.IO.Stream> t;
+            try { t = tab.Core.GetFaviconAsync(CoreWebView2FaviconImageFormat.Png); }
+            catch (Exception ex) { Log.Write("BROWSER", "favicon read not available: " + ex.Message); return; }
+
+            t.ContinueWith(delegate(Task<System.IO.Stream> done)
+            {
+                if (done.IsFaulted || done.Result == null) return;
+                try
+                {
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        done.Result.CopyTo(ms);
+                        if (ms.Length == 0 || ms.Length > 48 * 1024)
+                        {
+                            if (ms.Length > 0)
+                                Log.Write("BROWSER", "tab " + tab.Id + " favicon is " + ms.Length
+                                    + " bytes - too big for the tab strip, ignored");
+                            return;
+                        }
+                        tab.Favicon = "data:image/png;base64," + Convert.ToBase64String(ms.ToArray());
+                        Log.Write("BROWSER", "tab " + tab.Id + " favicon fetched inside the content "
+                            + "WebView (" + ms.Length + " bytes) and handed up as a data: URI");
+                    }
+                    PushTab(tab);
+                }
+                catch (Exception ex) { Log.Write("BROWSER", "favicon decode: " + ex.Message); }
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        void Destroy(Tab t)
+        {
+            try { if (t.Ctl != null) { t.Ctl.AcceleratorKeyPressed -= _accel; t.Ctl.Close(); } }
+            catch (Exception ex) { Log.Write("BROWSER", "closing tab " + t.Id + " threw (swallowed): " + ex.Message); }
+            t.Ctl = null; t.Core = null;
+        }
+
+        public void CloseTab(int id)
+        {
+            Tab t = Find(id);
+            if (t == null) return;
+            bool wasActive = t == _active;
+            _tabs.Remove(t);
+            Destroy(t);
+            Log.Write("BROWSER", "tab " + id + " closed; " + _tabs.Count + " left");
+            if (wasActive)
+            {
+                _active = null;
+                if (_tabs.Count > 0) Activate(_tabs[_tabs.Count - 1].Id);
+                else { _parent.Visible = false; Say("{\"type\":\"browser\",\"ev\":\"empty\"}"); }
+            }
+            PushTabs();
+        }
+
+        public void Activate(int id)
+        {
+            Tab t = Find(id);
+            if (t == null || t.Ctl == null) return;
+            foreach (Tab other in _tabs) if (other != t) Visible(other, false);
+            _active = t;
+            t.Touched = DateTime.UtcNow;
+            Visible(t, Open);
+            Log.Write("BROWSER", "tab " + id + " active");
+            PushTabs();
+        }
+
+        void Visible(Tab t, bool on)
+        {
+            if (t == null || t.Ctl == null) return;
+            try { t.Ctl.IsVisible = on; }
+            catch (Exception ex) { Log.Write("BROWSER", "IsVisible on tab " + t.Id + ": " + ex.Message); }
+        }
+
+        Tab Find(int id)
+        {
+            foreach (Tab t in _tabs) if (t.Id == id) return t;
+            return null;
+        }
+
+        // ── Geometry ────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// The shell page measures the hole it left in its own layout and posts it here.
+        /// The panel moves; every controller is then resized to fill the panel, so a tab
+        /// that was hidden during a layout change is still the right size when it comes back.
+        /// </summary>
+        public void SetBounds(int x, int y, int w, int h)
+        {
+            if (w < 8 || h < 8) return;
+            Rectangle want = new Rectangle(x, y, w, h);
+            if (_parent.Bounds != want)
+            {
+                _parent.Bounds = want;
+                Log.Write("BROWSER", "content viewport -> " + want);
+            }
+            Rectangle inner = new Rectangle(0, 0, w, h);
+            foreach (Tab t in _tabs)
+            {
+                if (t.Ctl == null) continue;
+                try { if (t.Ctl.Bounds != inner) t.Ctl.Bounds = inner; }
+                catch { }
+            }
+        }
+
+        /// <summary>
+        /// Show or hide the whole content rectangle. The shell page calls this whenever
+        /// something of its own has to cover the screen - the keyboard, the tab switcher,
+        /// the history list, the start page - because a child HWND cannot be drawn over.
+        /// </summary>
+        public void Show(bool on)
+        {
+            if (_parent.Visible != on)
+            {
+                _parent.Visible = on;
+                Log.Write("BROWSER", "content viewport " + (on ? "shown" : "hidden"));
+            }
+            if (on)
+            {
+                _parent.BringToFront();
+                Visible(_active, true);
+            }
+        }
+
+        // ── Navigation ──────────────────────────────────────────────────────────────────
+
+        public void Navigate(string url)
+        {
+            if (_active == null || _active.Core == null) { NewTab(url); return; }
+            _active.Crashed = false;
+            try { _active.Core.Navigate(url); }
+            catch (Exception ex)
+            {
+                Log.Write("BROWSER", "Navigate('" + url + "') threw: " + ex.Message);
+                Say("{\"type\":\"browser\",\"ev\":\"navfail\",\"url\":\"" + Esc(url) + "\",\"detail\":\""
+                    + Esc(ex.Message) + "\"}");
+            }
+        }
+
+        public bool GoBack()
+        {
+            if (_active == null || _active.Core == null) { Log.Write("BROWSER", "back: no active tab"); return false; }
+            bool can = false;
+            string why = "";
+            try { can = _active.Core.CanGoBack; }
+            catch (Exception ex) { why = " (CanGoBack threw: " + ex.Message + ")"; }
+            if (!can) { Log.Write("BROWSER", "back: tab " + _active.Id + " has no history left" + why); return false; }
+            try { _active.Core.GoBack(); }
+            catch (Exception ex) { Log.Write("BROWSER", "back: GoBack threw: " + ex.Message); return false; }
+            Log.Write("BROWSER", "back: tab " + _active.Id + " went back");
+            return true;
+        }
+
+        public void GoForward()
+        {
+            if (_active == null || _active.Core == null) return;
+            try { if (_active.Core.CanGoForward) _active.Core.GoForward(); } catch { }
+        }
+
+        public void Reload()
+        {
+            if (_active == null || _active.Core == null) return;
+            _active.Crashed = false;
+            try { _active.Core.Reload(); } catch { }
+        }
+
+        public void Stop()
+        {
+            if (_active == null || _active.Core == null) return;
+            try { _active.Core.Stop(); } catch { }
+        }
+
+        public void SetZoom(double factor)
+        {
+            if (_active == null || _active.Ctl == null) return;
+            if (factor < 0.4) factor = 0.4;
+            if (factor > 4.0) factor = 4.0;
+            _active.Zoom = factor;
+            try
+            {
+                _active.Ctl.ZoomFactor = factor;
+                Log.Write("BROWSER", "tab " + _active.Id + " zoom -> "
+                    + (int)Math.Round(factor * 100) + "%");
+            }
+            catch (Exception ex) { Log.Write("BROWSER", "zoom: " + ex.Message); }
+            ToActive("{\"t\":\"zoom\"}");
+            PushTab(_active);
+        }
+
+        // ── Relay into the page ─────────────────────────────────────────────────────────
+
+        public void ToActive(string json)
+        {
+            if (_active == null || _active.Core == null) return;
+            try { _active.Core.PostWebMessageAsString(json); }
+            catch (Exception ex) { Log.Write("BROWSER", "post to tab " + _active.Id + " failed: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// One discrete pad action, delivered by ExecuteScriptAsync rather than by
+        /// PostWebMessageAsString.
+        ///
+        /// THE REASON, because it is not obvious and it cost a bench session to find.
+        /// A click synthesised inside a message handler has no user activation behind it.
+        /// Chromium withholds three things from a navigation that lacks one, and the third is
+        /// the expensive one:
+        ///   * requestFullscreen() rejects with "Permissions check failed";
+        ///   * autoplay is blocked (worked around separately, in the environment options);
+        ///   * the history entry the navigation creates is flagged skippable by the
+        ///     back-forward intervention, so CanGoBack stays FALSE however many links the
+        ///     human follows - and Circle can never take them back one page.
+        /// Script delivered through ExecuteScriptAsync is treated as user-initiated, which
+        /// restores all three. It is a heavier call than a web message, and that is fine:
+        /// discrete actions happen at the speed of a human pressing buttons. The analog
+        /// stick stream, which really is 30 a second, stays on ToActive().
+        ///
+        /// If a runtime ever stops granting activation here the failure is visible rather
+        /// than silent: CanGoBack goes back to false and the log says "no history left"
+        /// after a navigation the human just made.
+        /// </summary>
+        public void Pad(string action, string phase)
+        {
+            if (_active == null || _active.Core == null) return;
+            string js = "window.__arcnav&&window.__arcnav.act(\"" + Esc(action) + "\",\"" + Esc(phase) + "\")";
+            try { _active.Core.ExecuteScriptAsync(js); }
+            catch (Exception ex)
+            {
+                Log.Write("BROWSER", "ExecuteScript for '" + action + "' failed (" + ex.Message
+                    + ") - falling back to the message channel, which loses user activation");
+                ToActive("{\"t\":\"act\",\"action\":\"" + Esc(action) + "\",\"phase\":\"" + Esc(phase) + "\"}");
+            }
+        }
+
+        /// <summary>
+        /// Analog sticks, straight from the pad timer. Only sent when the content pane
+        /// actually owns input, and only while something is off centre plus one final
+        /// zeroing message - a permanent 30 Hz stream into an idle page would keep a
+        /// renderer awake for no reason.
+        /// </summary>
+        bool _axesWereLive;
+        DateTime _axesNext = DateTime.MinValue;
+
+        public void Axes(double lx, double ly, double rx, double ry)
+        {
+            if (!Open || !ContentFocused || _active == null) return;
+            bool live = Math.Abs(lx) > 0.14 || Math.Abs(ly) > 0.14 || Math.Abs(rx) > 0.14 || Math.Abs(ry) > 0.14;
+            if (!live && !_axesWereLive) return;
+            DateTime now = DateTime.UtcNow;
+            if (live && now < _axesNext) return;
+            _axesNext = now.AddMilliseconds(33);
+            _axesWereLive = live;
+            ToActive("{\"t\":\"axes\",\"lx\":" + N(lx) + ",\"ly\":" + N(ly)
+                   + ",\"rx\":" + N(rx) + ",\"ry\":" + N(ry) + "}");
+        }
+
+        static string N(double v)
+        {
+            return v.ToString("0.###", CultureInfo.InvariantCulture);
+        }
+
+        // ── Reporting up to the shell page ──────────────────────────────────────────────
+
+        void Say(string json)
+        {
+            try { if (_toPage != null) _toPage(json); }
+            catch (Exception ex) { Log.Write("BROWSER", "reporting to the page failed: " + ex.Message); }
+        }
+
+        void PushTab(Tab t) { PushTabs(); }
+
+        public void PushTabs()
+        {
+            StringBuilder b = new StringBuilder(256);
+            b.Append("{\"type\":\"browser\",\"ev\":\"tabs\",\"max\":").Append(MaxTabs);
+            b.Append(",\"active\":").Append(_active == null ? 0 : _active.Id);
+            b.Append(",\"tabs\":[");
+            for (int i = 0; i < _tabs.Count; i++)
+            {
+                Tab t = _tabs[i];
+                bool back = false, fwd = false;
+                try { if (t.Core != null) { back = t.Core.CanGoBack; fwd = t.Core.CanGoForward; } }
+                catch { }
+                if (i > 0) b.Append(',');
+                b.Append("{\"id\":").Append(t.Id)
+                 .Append(",\"url\":\"").Append(Esc(t.Url)).Append('"')
+                 .Append(",\"title\":\"").Append(Esc(t.Title)).Append('"')
+                 .Append(",\"favicon\":\"").Append(Esc(t.Favicon)).Append('"')
+                 .Append(",\"secure\":").Append(t.Secure ? "true" : "false")
+                 .Append(",\"loading\":").Append(t.Loading ? "true" : "false")
+                 .Append(",\"crashed\":").Append(t.Crashed ? "true" : "false")
+                 .Append(",\"canBack\":").Append(back ? "true" : "false")
+                 .Append(",\"canForward\":").Append(fwd ? "true" : "false")
+                 .Append(",\"zoom\":").Append(N(t.Zoom))
+                 .Append('}');
+            }
+            b.Append("]}");
+            Say(b.ToString());
+        }
+
+        static bool IsSecure(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return false;
+            return url.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+        }
+
+        static string Esc(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            StringBuilder b = new StringBuilder(s.Length + 8);
+            foreach (char c in s)
+            {
+                if (c == '"' || c == '\\') b.Append('\\').Append(c);
+                else if (c == '\n') b.Append("\\n");
+                else if (c == '\r') b.Append("\\r");
+                else if (c == '\t') b.Append("\\t");
+                else if (c < ' ') b.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                else b.Append(c);
+            }
+            return b.ToString();
+        }
+    }
+
+    #endregion
+
+    #region Host form
+
+    public class HostForm : Form
+    {
+        // Small, additive shim. It does not restructure index.html's own JavaScript: it only
+        // listens (capture phase) and forwards to the host, plus reports what the Gamepad API sees.
+        const string Shim = @"
+(function(){
+  if (window.__arcShim) return;
+  window.__arcShim = true;
+  var post = function(o){ try { window.chrome.webview.postMessage(JSON.stringify(o)); } catch(e){} };
+  window.arcPost = post;
+
+  post({type:'ready', target:location.href});
+
+  window.addEventListener('keydown', function(e){
+    // The on-screen keyboard owns Escape while it is up: Escape there means
+    // 'cancel this field', and exiting the shell instead would be a trap. This
+    // listener is on window and therefore runs before the keyboard's own
+    // capture handler, so the check has to live here.
+    var oskUp = false;
+    try { oskUp = !!(window.ArcOSK && window.ArcOSK.isOpen()); } catch(err){}
+    if (oskUp && (e.key === 'Escape' || e.key === 'Enter')) return;
+
+    if (e.key === 'Escape') { post({type:'exit', code:0, target:'Escape'}); return; }
+    if (e.key === '2')      { post({type:'exit', code:2, target:'key2'});   return; }
+    if (e.key === '3')      { post({type:'exit', code:3, target:'key3'});   return; }
+    // Enter is the page's business once the page has a focus manager: posting
+    // launch from here regardless of what is focused would fire the child while
+    // the human is three levels deep in a settings panel. Only a page with no
+    // arcPad (the bare probe pages) still gets the old blunt behaviour.
+    if (e.key === 'Enter' && typeof window.arcPad !== 'function') {
+      post({type:'launch', target:''});
+      return;
+    }
+  }, true);
+
+  var wire = function(){
+    var b = document.getElementById('btnLaunch');
+    if (b && !b.__arcWired){
+      b.__arcWired = true;
+      b.addEventListener('click', function(){ post({type:'launch', target:''}); });
+      post({type:'log', target:'shim wired #btnLaunch'});
+    }
+  };
+
+  // ---- host -> page: semantic pad actions ------------------------------------------
+  // The pad drives index.html's OWN functions (select / setTab / toggleCC / closeCC and a
+  // real click on #btnLaunch). Synthetic KeyboardEvents are the fallback only, and the
+  // deliberate choice for the control-centre cursor, whose index lives in the page's
+  // lexical scope and is owned by the page's own key handler.
+  var ccOpen = function(){
+    var c = document.getElementById('cc');
+    return !!c && c.classList.contains('open');
+  };
+  var synthKey = function(k){
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', {key:k, bubbles:true, cancelable:true}));
+      return true;
+    } catch(e){ return false; }
+  };
+  var focusedTile = function(){
+    var t = document.querySelectorAll('#rail .tile');
+    for (var i = 0; i < t.length; i++)
+      if (t[i].getAttribute('aria-current') === 'true') return i;
+    return 0;
+  };
+  var move = function(d){
+    if (ccOpen()){
+      synthKey(d > 0 ? 'ArrowRight' : 'ArrowLeft');
+      return 'control-centre cursor ' + (d > 0 ? 'right' : 'left');
+    }
+    if (typeof window.select === 'function'){
+      window.select(focusedTile() + d);   // select() already wraps
+      return 'rail index ' + focusedTile();
+    }
+    synthKey(d > 0 ? 'ArrowRight' : 'ArrowLeft');
+    return 'rail via synthetic key (select() not on this page)';
+  };
+
+  var actions = {
+    left:  function(){ return move(-1); },
+    right: function(){ return move(1); },
+    launch: function(){
+      var b = document.getElementById('btnLaunch');
+      if (!b){ post({type:'launch', target:''}); return 'no #btnLaunch here - posted launch directly'; }
+      b.classList.add('pressed');
+      setTimeout(function(){ try { b.classList.remove('pressed'); } catch(e){} }, 160);
+      b.click();                       // the click handler wired above posts {type:launch}
+      return 'clicked #btnLaunch';
+    },
+    back: function(){
+      if (!ccOpen()) return 'nothing to close (control centre already shut)';
+      if (typeof window.closeCC === 'function') window.closeCC(); else synthKey('Escape');
+      return 'closed the control centre';
+    },
+    tabPlay:  function(){
+      if (typeof window.setTab === 'function'){ window.setTab('play'); return 'tab=play'; }
+      synthKey('Tab'); return 'tab toggled via synthetic Tab';
+    },
+    tabMedia: function(){
+      if (typeof window.setTab === 'function'){ window.setTab('media'); return 'tab=media'; }
+      synthKey('Tab'); return 'tab toggled via synthetic Tab';
+    },
+    cc: function(){
+      if (typeof window.toggleCC === 'function'){ window.toggleCC(); return 'control centre now ' + (ccOpen() ? 'OPEN' : 'closed'); }
+      synthKey('c'); return 'control centre via synthetic c';
+    }
+  };
+
+  var onHostMessage = function(ev){
+    var d = ev ? ev.data : null;
+    if (typeof d !== 'string'){ try { d = JSON.stringify(d); } catch(e){ return; } }
+    var m = null;
+    try { m = JSON.parse(d); } catch(e){ post({type:'log', target:'unparsable host message: ' + d}); return; }
+    if (!m || m.type !== 'pad') return;             // hostinfo / sysinfo / launching / returned
+                                                    // are for the page's own listener
+    // A page that owns a focus manager takes every action through one entry
+    // point; the table below is the fallback for pages that do not have one.
+    var r;
+    if (typeof window.arcPad === 'function'){
+      try { r = window.arcPad(m.action, m.phase, m.button); }
+      catch(err){ post({type:'log', target:'arcPad(' + m.action + ') threw: ' + err}); return; }
+      if (m.phase === 'release' || m.phase === 'repeat') return;   // too chatty for the log
+      post({type:'log', target:'pad ' + m.action + ' -> ' + r});
+      return;
+    }
+    if (m.phase === 'release') return;             // the fallback table has no release handling
+    var fn = actions[m.action];
+    if (!fn){ post({type:'log', target:'pad action unknown, ignored: ' + m.action}); return; }
+    try { r = fn(); }
+    catch(err){ post({type:'log', target:'pad action ' + m.action + ' threw: ' + err}); return; }
+    post({type:'log', target:'pad ' + m.action + ' -> ' + r});
+  };
+  try {
+    window.chrome.webview.addEventListener('message', onHostMessage);
+    post({type:'log', target:'shim wired host->page pad channel; actions = ' + Object.keys(actions).join(',')});
+  } catch(e){
+    post({type:'log', target:'FAILED to wire host->page pad channel: ' + e});
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
+  else wire();
+  setTimeout(wire, 500); setTimeout(wire, 2000); setTimeout(wire, 8000);
+
+  var seen = '';
+  var probe = function(){
+    var out = [];
+    try {
+      var gp = navigator.getGamepads ? navigator.getGamepads() : [];
+      for (var i = 0; i < gp.length; i++){
+        var p = gp[i];
+        if (p) out.push('slot' + p.index + ' id=[' + p.id + '] mapping=' + p.mapping
+                        + ' axes=' + p.axes.length + ' buttons=' + p.buttons.length
+                        + ' connected=' + p.connected);
+      }
+    } catch(err){ out.push('getGamepads threw: ' + err); }
+    var s = out.length ? out.join(' ;; ') : 'none visible to navigator.getGamepads()';
+    if (s !== seen){ seen = s; post({type:'gamepad', target:s}); }
+  };
+  window.addEventListener('gamepadconnected', probe);
+  window.addEventListener('gamepaddisconnected', probe);
+  setInterval(probe, 1000);
+  probe();
+
+  window.addEventListener('error', function(ev){
+    post({type:'log', target:'page error: ' + (ev.message || '?') + ' @' + (ev.filename || '?') + ':' + (ev.lineno || 0)});
+  });
+})();
+";
+
+        static readonly Color Void = Color.FromArgb(255, 0x04, 0x06, 0x0B);
+
+        // XInput slot masks (kept for a future Xbox pad; a DualSense never appears here).
+        const ushort XI_DUP = 0x0001;
+        const ushort XI_DDOWN = 0x0002;
+        const ushort XI_DLEFT = 0x0004;
+        const ushort XI_DRIGHT = 0x0008;
+        const ushort XI_START = 0x0010;
+        const ushort XI_BACK = 0x0020;
+        const ushort XI_LB = 0x0100;
+        const ushort XI_RB = 0x0200;
+        const ushort XI_GUIDE = 0x0400;
+        const ushort XI_A = 0x1000;
+        const ushort XI_B = 0x2000;
+        const ushort XI_X = 0x4000;
+        const ushort XI_Y = 0x8000;
+
+        // A DualSense stick axis is one unsigned byte centred on 128, so the XInput-scale
+        // deadzone of 8000/32767 is 8000/32768*128 = 31 counts either side of centre.
+        const int StickDeadzoneByte = 31;
+        const short XiDeadzone = 8000;
+        const int RepeatFirstMs = 400;   // hold this long before the rail starts scrolling...
+        const int RepeatNextMs = 200;    // ...then one tile every 200 ms (~5/sec)
+
+        readonly Options _opt;
+        readonly WebView2 _web = new WebView2();
+        readonly System.Windows.Forms.Timer _timer = new System.Windows.Forms.Timer();
+        readonly System.Windows.Forms.Timer _padTimer = new System.Windows.Forms.Timer();
+        readonly XInput _xi = new XInput();
+        readonly DualSense _ds = new DualSense();
+
+        ChildTracker _tracker;
+        bool _childRunning;
+        int _exitCode;
+        bool _exiting;
+        bool _webReady;
+
+        DateTime _t0;
+        DateTime _launchedAt = DateTime.MinValue;
+        DateTime _returnedAt = DateTime.MinValue;
+        bool _didAutoKill, _didAutoExit;
+        int _launchCount, _returnCount, _returnsPassed, _returnsFailed;
+        readonly List<string> _pathsUsed = new List<string>();
+        string _gamepadReport = "(no gamepad report from the page yet)";
+
+        bool _padConnected;
+        string _padTransport = "";
+        uint _xiConnectedMask;
+        ushort _xiLastButtons;
+        int _padDir;                              // -1 / 0 / +1 held direction, either device
+        DateTime _padRepeatAt = DateTime.MaxValue;
+        int _padDirV;                             // the same, vertically
+        DateTime _padRepeatAtV = DateTime.MaxValue;
+        int _hidPressed;                          // buttons we have announced a press for
+        int _padActionCount;
+        string _lastPadAction = "(none yet)";
+
+        // --pad-selftest drives the page through the same host->page channel a real pad uses,
+        // so the routing can be proven end-to-end without a human at the console. It covers
+        // everything except the HID button decode itself, which is verified in ShellHost.cs.
+        // "launch" is deliberately excluded: it would spawn the child.
+        // "launch" is deliberately excluded: it would spawn the child. Everything
+        // else in the vocabulary is here, including the vertical axis and the face
+        // buttons the focus manager binds, and the walk deliberately ends back at
+        // the shell root so the run leaves the console where it found it.
+        static readonly string[] SelfTestSeq = new string[] {
+            "right", "right", "up", "left", "down", "tabMedia", "right", "tabPlay",
+            "square", "down", "back",
+            "cc", "right", "right", "up", "down", "back", "back"
+        };
+        // --sys-selftest walks the settings tree instead: control centre -> Settings -> every
+        // category in turn, so each pane really builds itself against the real machine and says
+        // so in the log. It ends back at the shell root, like the pad walk does.
+        // The control centre's sixth item (index 5) is Settings; five rights get there from mic.
+        // Then it backs out to the control centre and works the Sound panel's volume slider
+        // with two rights and two lefts - a real pair of writes to the audio endpoint that
+        // deliberately nets to zero, so the run leaves the volume exactly where it found it.
+        static readonly string[] SettingsSelfTestSeq = new string[] {
+            "cc", "right", "right", "right", "right", "right", "select",
+            "down", "down", "down", "down", "down", "down", "down", "down",
+            "right", "left",
+            "back",
+            "left", "left", "left", "left", "select",
+            "right", "right", "left", "left",
+            "back", "back"
+        };
+        // --display-selftest proves the one safety mechanism that cannot be argued about on
+        // paper: pick a mode, then press NOTHING. The walk stops after selecting the mode, so
+        // the countdown runs out on its own and the page must put the old mode back by itself.
+        // Never run this on a machine you cannot see; on the bench it is off by default.
+        //   Settings -> Display -> cross into the pane -> "Resolution and refresh rate"
+        //   -> second row in the mode list -> select -> silence.
+        static readonly string[] DisplaySelfTestSeq = new string[] {
+            "cc", "right", "right", "right", "right", "right", "select",
+            "down", "right", "select", "down", "select"
+        };
+        bool _browseSent;
+        string[] _selfSeq = SelfTestSeq;
+        int _selfGapMs = 600;
+        int _selfTestAt;
+        DateTime _selfTestNext = DateTime.MaxValue;
+
+        // The Settings screen's channel into SystemApi. Runs on its own thread; see SysWorker.
+        SysWorker _sys;
+
+        // The file explorer's channel into FileApi. Its own thread and its own queue, so a
+        // directory sweep cannot sit in front of the volume slider; see FileWorker.
+        FileWorker _files;
+
+        // The browser. A second WebView2 world in its own environment and its own process
+        // tree, living inside _contentPanel. Read the comment on BrowserHost first.
+        readonly Panel _contentPanel = new Panel();
+        BrowserHost _browser;
+
+        public int ExitCodeValue { get { return _exitCode; } }
+        public string GamepadReport { get { return _gamepadReport; } }
+
+        public HostForm(Options opt)
+        {
+            _opt = opt;
+
+            FormBorderStyle = FormBorderStyle.None;
+            StartPosition = FormStartPosition.Manual;
+            BackColor = Void;                   // no white flash behind the control
+            TopMost = false;                    // hard requirement: never fight games
+            ShowInTaskbar = true;               // needed so restore-from-minimized behaves
+            KeyPreview = true;
+            Text = "ARC OS";
+            DoubleBuffered = true;
+
+            Rectangle b = Screen.PrimaryScreen.Bounds;
+            if (_opt.Windowed) b = new Rectangle(b.X + 80, b.Y + 80, 1280, 760);
+            Bounds = b;
+
+            _web.Dock = DockStyle.Fill;
+            _web.DefaultBackgroundColor = Void; // applied to the controller before first paint
+            _web.CreationProperties = new CoreWebView2CreationProperties();
+            _web.CreationProperties.UserDataFolder = _opt.UserDataFolder;
+            _web.CoreWebView2InitializationCompleted += OnCoreInit;
+            Controls.Add(_web);
+
+            // The browser's content rectangle. A real child control rather than a raw HWND
+            // parented to the form, because WinForms then owns the z-order and one
+            // BringToFront() is the whole story - the alternative is SetWindowPos against a
+            // handle the WebView2 wrapper does not expose. It starts hidden and stays hidden
+            // until the browser is opened, so nothing about the shell changes for a human
+            // who never uses it.
+            _contentPanel.BackColor = Void;
+            _contentPanel.Visible = false;
+            _contentPanel.Bounds = new Rectangle(0, 0, 16, 16);
+            Controls.Add(_contentPanel);
+            _contentPanel.BringToFront();
+
+            KeyDown += OnFormKeyDown;
+            Load += OnLoadForm;
+            FormClosing += OnClosingForm;
+        }
+
+        #region startup
+
+        void OnLoadForm(object sender, EventArgs e)
+        {
+            _t0 = DateTime.Now;
+            Log.Write("HOST", "=========================================================");
+            Log.Write("HOST", "ShellHostWeb started. args='" + _opt.RawArgs + "'");
+            Log.Write("HOST", "assets folder     = '" + _opt.AssetFolder + "'");
+            Log.Write("HOST", "user data folder  = '" + _opt.UserDataFolder + "'");
+            Log.Write("HOST", "start url         = '" + _opt.StartUrl + "'");
+            Log.Write("HOST", "child command     = '" + _opt.ChildCommand + "'");
+            Log.Write("HOST", "hwnd=0x" + Handle.ToInt64().ToString("X") + " pid=" + Process.GetCurrentProcess().Id
+                + " bounds=" + Bounds + " topmost=" + TopMost + " session=" + Process.GetCurrentProcess().SessionId);
+
+            if (!Directory.Exists(_opt.AssetFolder))
+                Log.Write("ASSETS", "WARN: asset folder does not exist: " + _opt.AssetFolder);
+            else
+                Log.Write("ASSETS", "index.html present=" + File.Exists(Path.Combine(_opt.AssetFolder, "index.html"))
+                    + " boot.html present=" + File.Exists(Path.Combine(_opt.AssetFolder, "boot.html")));
+
+            try { Directory.CreateDirectory(_opt.UserDataFolder); }
+            catch (Exception ex) { Log.Write("WEBVIEW", "WARN: could not create user data folder: " + ex.Message); }
+
+            _timer.Interval = 200;
+            _timer.Tick += OnTick;
+            _timer.Start();
+
+            if (_opt.NoPad)
+            {
+                Log.Write("PAD", "gamepad input DISABLED by --no-pad");
+            }
+            else
+            {
+                // XInput first: cheap, and it covers a future Xbox pad. It will never see a
+                // DualSense, which is why the raw HID reader below exists at all.
+                try { _xi.Load(); }
+                catch (Exception ex) { Log.Write("XINPUT", "WARN: XInput load threw: " + ex.Message); }
+
+                Log.Write("PAD", "starting raw HID reader thread (DualSense / DualShock)");
+                try { _ds.Start(); }
+                catch (Exception ex) { Log.Write("PAD", "WARN: reader thread failed to start: " + ex.Message); }
+
+                _padTimer.Interval = 16;   // ~60 Hz; the reader thread latches edges between ticks
+                _padTimer.Tick += OnPadTick;
+                _padTimer.Start();
+                Log.Write("PAD", "pad->page routing armed (deadzone=" + StickDeadzoneByte
+                    + "/128 counts, repeat " + RepeatFirstMs + " ms then every " + RepeatNextMs + " ms)");
+                Log.Write("PAD", "mapping: DPadL/R+LStickX=left/right, DPadU/D+LStickY=up/down,"
+                    + " Cross=launch, Circle=back, Square=square, Triangle=triangle,"
+                    + " L1=tabPlay, R1=tabMedia, Options/Touchpad=cc, Create=create, PS=guide."
+                    + " Every message carries button+phase (press/repeat/release)."
+                    + " No pad button can exit this host - Esc/F2/F3 remain the only exits.");
+            }
+
+            // Take foreground on startup so keyboard fallbacks work unattended.
+            string p = Foreground.ForceForeground(Handle);
+            Log.Write("FOREGROUND", "startup activation via " + (p == null ? "FAILED" : p));
+
+            Log.Write("WEBVIEW", "calling EnsureCoreWebView2Async...");
+            try
+            {
+                Task t = _web.EnsureCoreWebView2Async(null);
+                t.ContinueWith(delegate(Task done)
+                {
+                    if (done.IsFaulted && done.Exception != null)
+                        Log.Write("WEBVIEW", "FATAL: EnsureCoreWebView2Async faulted: " + done.Exception.ToString());
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Write("WEBVIEW", "FATAL: EnsureCoreWebView2Async threw synchronously: " + ex.ToString());
+            }
+        }
+
+        void OnCoreInit(object sender, CoreWebView2InitializationCompletedEventArgs e)
+        {
+            if (!e.IsSuccess)
+            {
+                Log.Write("WEBVIEW", "FATAL: CoreWebView2 initialization FAILED: "
+                    + (e.InitializationException == null ? "(no exception)" : e.InitializationException.ToString()));
+                ExitWith(101, "webview-init-failed");
+                return;
+            }
+
+            CoreWebView2 core = _web.CoreWebView2;
+            _webReady = true;
+            Log.Write("WEBVIEW", "CoreWebView2 initialised OK. runtime=" + core.Environment.BrowserVersionString
+                + " browserPid=" + core.BrowserProcessId);
+
+            try { _web.DefaultBackgroundColor = Void; }
+            catch (Exception ex) { Log.Write("WEBVIEW", "WARN: DefaultBackgroundColor: " + ex.Message); }
+
+            // --- kiosk hygiene ---
+            CoreWebView2Settings s = core.Settings;
+            s.AreDefaultContextMenusEnabled = false;
+            s.AreDevToolsEnabled = _opt.DevTools;
+            s.IsZoomControlEnabled = false;
+            s.IsStatusBarEnabled = false;
+            s.AreBrowserAcceleratorKeysEnabled = false;
+            s.IsBuiltInErrorPageEnabled = false;   // a built-in error page would be a white flash
+            s.IsPasswordAutosaveEnabled = false;
+            s.IsGeneralAutofillEnabled = false;
+            s.IsWebMessageEnabled = true;
+            Log.Write("WEBVIEW", "kiosk settings applied (contextMenus=off devTools=" + _opt.DevTools
+                + " zoom=off statusBar=off browserAccelKeys=off builtInErrorPage=off)");
+
+            // --- serve the assets over a virtual host: avoids every file:// restriction ---
+            try
+            {
+                core.SetVirtualHostNameToFolderMapping(_opt.VirtualHost, _opt.AssetFolder,
+                    CoreWebView2HostResourceAccessKind.Allow);
+                Log.Write("WEBVIEW", "virtual host mapping OK: https://" + _opt.VirtualHost + "/ -> " + _opt.AssetFolder);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("WEBVIEW", "WARN: SetVirtualHostNameToFolderMapping failed (" + ex.Message
+                    + ") - falling back to file:// URLs");
+                _opt.UseFileUrls = true;
+            }
+
+            // The Settings screen's channel into the OS. Started before the first navigation so
+            // the page can call it the moment it loads.
+            try
+            {
+                _sys = new SysWorker(OnSysReply);
+                _sys.Start();
+            }
+            catch (Exception ex)
+            {
+                _sys = null;
+                Log.Write("SYS", "FATAL for settings only: could not start the SystemApi worker: " + ex.Message
+                    + " - sys.* calls will be answered with sys_unavailable and the panels will say so");
+            }
+
+            // The file explorer's channel into the file system. Same deal, separate queue.
+            try
+            {
+                _files = new FileWorker(OnFileReply);
+                _files.Start();
+            }
+            catch (Exception ex)
+            {
+                _files = null;
+                Log.Write("FS", "FATAL for the explorer only: could not start the FileApi worker: " + ex.Message
+                    + " - fs.* calls will be answered with fs_unavailable and the explorer will say so");
+            }
+
+            // The host object the explorer probes for before the message channel. Off by default
+            // on purpose: its calls land on THIS thread, and FileApi blocks. See FileApiBridge.
+            if (_opt.FileHostObject)
+            {
+                try
+                {
+                    core.AddHostObjectToScript("arcFiles", new FileApiBridge());
+                    Log.Write("FS", "host object 'arcFiles' registered (--file-host-object). "
+                        + "WARNING: FileApi will run on the UI thread for every call the explorer makes.");
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("FS", "AddHostObjectToScript('arcFiles') failed: " + ex.Message
+                        + " - the explorer will fall back to the {type:\"fs\"} message channel");
+                }
+            }
+            else
+            {
+                Log.Write("FS", "host object 'arcFiles' NOT registered; the explorer will select the "
+                    + "{type:\"fs\"} message channel, which is answered on the FileApi worker thread");
+            }
+
+            // The browser. Its injected navigation layer is read off disk rather than being
+            // a string constant in here: ui/arcnav.js is real, checkable JavaScript, and the
+            // host is only its courier. A missing file disables the browser and says so; it
+            // does not stop the shell.
+            try
+            {
+                string navPath = Path.Combine(_opt.AssetFolder, "arcnav.js");
+                if (!File.Exists(navPath))
+                {
+                    Log.Write("BROWSER", "arcnav.js is not next to index.html (" + navPath
+                        + ") - the browser will refuse to open rather than load pages it cannot navigate");
+                }
+                else
+                {
+                    string nav = File.ReadAllText(navPath);
+                    _browser = new BrowserHost(_contentPanel, PostToPage, nav,
+                        _opt.UserDataFolder + "-content", OnAcceleratorKey);
+                    Log.Write("BROWSER", "browser host ready; arcnav.js is " + nav.Length
+                        + " bytes, cap " + BrowserHost.MaxTabs + " tabs");
+                }
+            }
+            catch (Exception ex)
+            {
+                _browser = null;
+                Log.Write("BROWSER", "FATAL for the browser only: " + ex.Message);
+            }
+
+            core.WebMessageReceived += OnWebMessage;
+            core.NavigationStarting += OnNavStarting;
+            core.NavigationCompleted += OnNavCompleted;
+            core.ProcessFailed += OnProcessFailed;
+            core.NewWindowRequested += OnNewWindowRequested;
+            core.ContainsFullScreenElementChanged += OnFullScreenChanged;
+            HookAcceleratorKeys();
+            core.DocumentTitleChanged += delegate(object o, object a)
+            {
+                Log.Write("PAGE", "document title = '" + _web.CoreWebView2.DocumentTitle + "'");
+            };
+
+            // Register the shim FIRST, then navigate - otherwise the first document can race past it.
+            Task<string> add = core.AddScriptToExecuteOnDocumentCreatedAsync(Shim);
+            add.ContinueWith(delegate(Task<string> done)
+            {
+                if (done.IsFaulted && done.Exception != null)
+                    Log.Write("WEBVIEW", "WARN: AddScriptToExecuteOnDocumentCreatedAsync faulted: " + done.Exception.Message);
+                else
+                    Log.Write("WEBVIEW", "shim registered (AddScriptToExecuteOnDocumentCreated id=" + done.Result + ")");
+                NavigateToStart();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+        }
+
+        void NavigateToStart()
+        {
+            string url = _opt.ResolveStartUrl();
+            Log.Write("NAV", "navigating to " + url);
+            try
+            {
+                _web.CoreWebView2.Navigate(url);
+                _web.Focus();
+            }
+            catch (Exception ex)
+            {
+                Log.Write("NAV", "FATAL: Navigate threw: " + ex.ToString());
+            }
+        }
+
+        #endregion
+
+        #region webview events
+
+        void OnNavStarting(object sender, CoreWebView2NavigationStartingEventArgs e)
+        {
+            Log.Write("NAV", "starting -> " + e.Uri);
+        }
+
+        void OnNavCompleted(object sender, CoreWebView2NavigationCompletedEventArgs e)
+        {
+            Log.Write("NAV", "completed success=" + e.IsSuccess + " status=" + e.WebErrorStatus
+                + " url=" + _web.Source);
+            if (e.IsSuccess) _web.Focus();
+
+            // Match on the path only: the boot URL carries "next=index.html" in its query,
+            // and firing the self-test at boot.html would test a page that has no shell UI.
+            string src = (_web.Source == null) ? "" : _web.Source.ToString();
+            int qmark = src.IndexOf('?');
+            if (qmark >= 0) src = src.Substring(0, qmark);
+
+            bool onShell = src.EndsWith("index.html", StringComparison.OrdinalIgnoreCase);
+
+            if (_opt.PadSelfTest && e.IsSuccess && _selfTestNext == DateTime.MaxValue && onShell)
+            {
+                _selfSeq = SelfTestSeq;
+                _selfGapMs = 600;
+                _selfTestNext = DateTime.Now.AddMilliseconds(2000);
+                Log.Write("PAD", "--pad-selftest armed: " + _selfSeq.Length
+                    + " synthetic pad actions over the real host->page channel, starting in 2 s");
+            }
+
+            if (_opt.SysSelfTest && e.IsSuccess && _selfTestNext == DateTime.MaxValue && onShell)
+            {
+                _selfSeq = SettingsSelfTestSeq;
+                _selfGapMs = 2000;                 // each category reads the OS before it renders
+                _selfTestNext = DateTime.Now.AddMilliseconds(4000);
+                Log.Write("SYS", "--sys-selftest armed: a direct read-only command sweep, then "
+                    + _selfSeq.Length + " pad actions walking every settings category ("
+                    + _selfGapMs + " ms apart, starting in 4 s)");
+                SysCommandSweep();
+            }
+
+            // --browse opens the browser on a real URL before the walk starts, so an
+            // unattended run can exercise spatial navigation on an actual site. The page
+            // does the opening, not this class: going straight to BrowserHost would leave
+            // the chrome undrawn and the content view with no bounds.
+            if (!string.IsNullOrEmpty(_opt.Browse) && e.IsSuccess && onShell && !_browseSent)
+            {
+                _browseSent = true;
+                Log.Write("BROWSER", "--browse: asking the page to open " + _opt.Browse);
+                PostToPage("{\"type\":\"browse\",\"url\":\"" + JsonEsc(_opt.Browse) + "\"}");
+            }
+
+            // --walk is the general form of all of the above: an explicit comma-separated list
+            // of pad actions. Anything that can be reached with the pad can be verified with no
+            // human present, which is the only kind of verification a TV shell can have.
+            if (!string.IsNullOrEmpty(_opt.Walk) && e.IsSuccess && _selfTestNext == DateTime.MaxValue && onShell)
+            {
+                List<string> steps = new List<string>();
+                foreach (string s2 in _opt.Walk.Split(','))
+                {
+                    string t = s2.Trim();
+                    if (t.Length > 0) steps.Add(t);
+                }
+                if (steps.Count > 0)
+                {
+                    _selfSeq = steps.ToArray();
+                    _selfGapMs = _opt.WalkGapMs;
+                    _selfTestNext = DateTime.Now.AddMilliseconds(4000);
+                    Log.Write("WALK", "--walk armed: " + _selfSeq.Length + " actions, "
+                        + _selfGapMs + " ms apart, starting in 4 s: " + string.Join(" ", _selfSeq));
+                }
+            }
+
+            if (_opt.DisplaySelfTest && e.IsSuccess && _selfTestNext == DateTime.MaxValue && onShell)
+            {
+                _selfSeq = DisplaySelfTestSeq;
+                _selfGapMs = 2600;
+                _selfTestNext = DateTime.Now.AddMilliseconds(4000);
+                Log.Write("SYS", "--display-selftest armed: walks to a display mode, applies it, then "
+                    + "DELIBERATELY presses nothing so the confirm-or-revert countdown has to revert on its own");
+            }
+        }
+
+        /// <summary>
+        /// Fire every READ-ONLY command straight at the worker. Nothing here writes, disconnects,
+        /// pairs, changes a mode or ends a session: the point is to prove each one answers in the
+        /// shell's real security context and session, and the log line SysWorker writes for each
+        /// is the evidence. display.* is included deliberately - it is the one family that cannot
+        /// be verified over SSH, because session 0 has no window station.
+        /// </summary>
+        void SysCommandSweep()
+        {
+            string[] reads = new string[] {
+                "api.version", "sys.privileges", "sys.info", "sys.storage", "sys.time",
+                "sys.locale", "power.status", "net.status", "audio.devices",
+                "display.list", "display.modes",
+                "wifi.status", "wifi.list", "bt.status", "bt.devices", "accounts.list"
+            };
+            for (int i = 0; i < reads.Length; i++)
+            {
+                string body = "{\"type\":\"sys\",\"reqId\":\"sweep-" + (i + 1) + "\",\"cmd\":\"" + reads[i] + "\"";
+                if (reads[i] == "display.list") body += ",\"modes\":true";
+                body += "}";
+                _sys.Post(body);
+            }
+            Log.Write("SYS", "sweep queued: " + reads.Length + " read-only commands");
+        }
+
+        void OnProcessFailed(object sender, CoreWebView2ProcessFailedEventArgs e)
+        {
+            Log.Write("WEBVIEW", "PROCESS FAILED kind=" + e.ProcessFailedKind + " reason=" + e.Reason
+                + " exit=" + e.ExitCode + " desc=" + e.ProcessDescription);
+            if (e.ProcessFailedKind == CoreWebView2ProcessFailedKind.BrowserProcessExited)
+                ExitWith(102, "browser-process-exited");
+        }
+
+        void OnNewWindowRequested(object sender, CoreWebView2NewWindowRequestedEventArgs e)
+        {
+            // A kiosk never opens a second window; keep the navigation in-place.
+            e.Handled = true;
+            Log.Write("NAV", "new window suppressed for " + e.Uri);
+            try { _web.CoreWebView2.Navigate(e.Uri); }
+            catch { }
+        }
+
+        void OnFullScreenChanged(object sender, object e)
+        {
+            Log.Write("PAGE", "ContainsFullScreenElement = " + _web.CoreWebView2.ContainsFullScreenElement);
+        }
+
+        // AcceleratorKeyPressed lives on CoreWebView2Controller, which the WinForms wrapper keeps
+        // private. Reach it once by reflection; if that ever breaks we still have the injected shim
+        // and the WinForms KeyDown path, so the console is never without an exit.
+        void HookAcceleratorKeys()
+        {
+            try
+            {
+                System.Reflection.FieldInfo fi = typeof(WebView2).GetField("_coreWebView2Controller",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (fi == null)
+                {
+                    Log.Write("KEY", "WARN: _coreWebView2Controller field not found - no native accelerator hook");
+                    return;
+                }
+                CoreWebView2Controller ctl = fi.GetValue(_web) as CoreWebView2Controller;
+                if (ctl == null)
+                {
+                    Log.Write("KEY", "WARN: controller instance was null - no native accelerator hook");
+                    return;
+                }
+                ctl.AcceleratorKeyPressed += OnAcceleratorKey;
+                Log.Write("KEY", "native AcceleratorKeyPressed hook installed (Esc=exit0, F2=exit2, F3=exit3, F9=launch)");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("KEY", "WARN: accelerator hook failed: " + ex.Message);
+            }
+        }
+
+        // Native escape hatch. AcceleratorKeyPressed only fires for keys that are NOT character input,
+        // so Escape and the F-keys arrive here even if the page's JavaScript is dead. Digits 2/3 are
+        // character input and therefore arrive through the injected shim instead.
+        void OnAcceleratorKey(object sender, CoreWebView2AcceleratorKeyPressedEventArgs e)
+        {
+            if (e.KeyEventKind != CoreWebView2KeyEventKind.KeyDown
+                && e.KeyEventKind != CoreWebView2KeyEventKind.SystemKeyDown) return;
+
+            Keys k = (Keys)e.VirtualKey;
+            if (k == Keys.Escape) { e.Handled = true; Log.Write("KEY", "native accelerator: Escape"); ExitWith(0, "Esc(native)"); }
+            else if (k == Keys.F2) { e.Handled = true; Log.Write("KEY", "native accelerator: F2"); ExitWith(2, "F2(native)"); }
+            else if (k == Keys.F3) { e.Handled = true; Log.Write("KEY", "native accelerator: F3"); ExitWith(3, "F3(native)"); }
+            else if (k == Keys.F5) { e.Handled = true; Log.Write("KEY", "native accelerator: F5 (reload suppressed)"); }
+            else if (k == Keys.F9) { e.Handled = true; Log.Write("KEY", "native accelerator: F9 -> launch"); Launch(_opt.ChildCommand); }
+        }
+
+        // Message handling must never take the shell down; the page is chattier now that the
+        // pad channel echoes every action back.
+        void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            try { HandleWebMessage(e); }
+            catch (Exception ex) { Log.Write("MSG", "web message handler caught (swallowed): " + ex.ToString()); }
+        }
+
+        void HandleWebMessage(CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            string raw = null;
+            try { raw = e.TryGetWebMessageAsString(); }
+            catch { }
+            if (raw == null)
+            {
+                try { raw = e.WebMessageAsJson; }
+                catch { }
+            }
+            if (string.IsNullOrEmpty(raw)) return;
+
+            string type = Json.Str(raw, "type");
+            string target = Json.Str(raw, "target");
+            if (type == null) { Log.Write("MSG", "unparsed message: " + raw); return; }
+
+            switch (type)
+            {
+                case "ready":
+                    Log.Write("MSG", "page shim ready on " + target);
+                    // Tell the page what this host can do, so it can route power
+                    // properly instead of guessing from a timeout.
+                    PostToPage("{\"type\":\"hostinfo\",\"host\":\"ShellHostWeb v4\","
+                        + "\"caps\":[\"power\",\"sysinfo\",\"nav\",\"phase\""
+                        + (_sys != null ? ",\"sys\",\"padinfo\"" : "")
+                        + (_files != null ? ",\"fs\"" : "")
+                        + (_browser != null ? ",\"browser\"" : "") + "]}");
+                    break;
+                case "log":
+                    Log.Write("PAGE", target);
+                    break;
+                case "gamepad":
+                    _gamepadReport = target;
+                    Log.Write("GAMEPAD", target);
+                    break;
+                case "launch":
+                    Log.Write("MSG", "launch requested by page, target='" + (target == null ? "" : target) + "'");
+                    Launch(string.IsNullOrEmpty(target) ? _opt.ChildCommand : target);
+                    break;
+                case "exit":
+                    int code = Json.Int(raw, "code", 0);
+                    Log.Write("MSG", "exit requested by page, code=" + code + " trigger=" + target);
+                    ExitWith(code, "page:" + target);
+                    break;
+                case "power":
+                    DoPower(Json.Str(raw, "action"));
+                    break;
+                case "sysinfo":
+                    Log.Write("MSG", "page asked for system information");
+                    PostToPage(SysInfoJson());
+                    break;
+
+                // The Settings screen. The whole message IS the SystemApi request: "type" is
+                // ignored by SystemApi and "reqId" is echoed back by it, so nothing needs
+                // rewriting on the way in. Queued, never executed here - see SysWorker.
+                case "sys":
+                    if (_sys == null)
+                    {
+                        string rid = Json.Str(raw, "reqId");
+                        Log.Write("SYS", "sys request but the worker never started: " + raw);
+                        PostToPage("{\"type\":\"sysres\",\"payload\":{\"ok\":false"
+                            + (rid == null ? "" : ",\"reqId\":\"" + JsonEsc(rid) + "\"")
+                            + ",\"error\":\"sys_unavailable\","
+                            + "\"detail\":\"the host could not start its system-control thread; "
+                            + "restart the shell to try again\"}}");
+                        break;
+                    }
+                    _sys.Post(raw);
+                    break;
+
+                // The file explorer. Unlike "sys", the FileApi command is NOT the outer message:
+                // ui/files.js sends {type:"fs", reqId, command:{cmd:...}} so that its own reqId
+                // can never collide with an argument named "id" inside a command. The inner
+                // object is lifted out verbatim - see Json.Sub - and queued. The reply is the
+                // FileApi envelope with a "type" added; files.js matches on reqId.
+                case "fs":
+                {
+                    string fid = Json.Str(raw, "reqId");
+                    if (_files == null)
+                    {
+                        Log.Write("FS", "fs request but the worker never started: " + raw);
+                        PostToPage("{\"type\":\"fs.reply\",\"ok\":false"
+                            + (fid == null ? "" : ",\"reqId\":\"" + JsonEsc(fid) + "\"")
+                            + ",\"error\":\"fs_unavailable\","
+                            + "\"detail\":\"the host could not start its file-system thread; "
+                            + "restart the shell to try again\"}");
+                        break;
+                    }
+                    string command = Json.Sub(raw, "command");
+                    if (command == null)
+                    {
+                        Log.Write("FS", "fs message with no readable 'command' object: " + raw);
+                        PostToPage("{\"type\":\"fs.reply\",\"ok\":false"
+                            + (fid == null ? "" : ",\"reqId\":\"" + JsonEsc(fid) + "\"")
+                            + ",\"error\":\"bad_request\","
+                            + "\"detail\":\"the fs message carried no command object\"}");
+                        break;
+                    }
+                    _files.Post(fid, command);
+                    break;
+                }
+
+                // Battery and transport for the pad the host itself is reading over raw HID.
+                // The page's Gamepad API view cannot see either.
+                case "padinfo":
+                    PostToPage(PadInfoJson());
+                    break;
+
+                // ── The browser ────────────────────────────────────────────────────────
+                // Every one of these is a command from the shell page's own chrome. They
+                // are deliberately thin: the shell page decides what the browser does, the
+                // host only owns the content WebViews' lifetime, bounds and plumbing.
+                case "browser":
+                    HandleBrowserMessage(raw, Json.Str(raw, "cmd"));
+                    break;
+
+                default:
+                    Log.Write("MSG", "unhandled message type '" + type + "': " + raw);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// The shell page's control channel for the browser. One switch, no cleverness: the
+        /// chrome is drawn and decided upstairs in index.html, and this only carries out
+        /// what it asks for on the content WebViews.
+        /// </summary>
+        void HandleBrowserMessage(string raw, string cmd)
+        {
+            if (_browser == null)
+            {
+                Log.Write("BROWSER", "browser command '" + cmd + "' but the browser host never started");
+                PostToPage("{\"type\":\"browser\",\"ev\":\"unavailable\",\"detail\":\"this host build "
+                    + "could not load arcnav.js, so it will not open pages it cannot navigate\"}");
+                return;
+            }
+
+            switch (cmd)
+            {
+                case "open":     _browser.OpenBrowser(Json.Str(raw, "url")); break;
+                case "close":    _browser.CloseBrowser(); break;
+                case "quit":     _browser.Quit(); break;
+                case "show":     _browser.Show(Json.Int(raw, "on", 1) != 0); break;
+                case "bounds":
+                    _browser.SetBounds(Json.Int(raw, "x", 0), Json.Int(raw, "y", 0),
+                                       Json.Int(raw, "w", 0), Json.Int(raw, "h", 0));
+                    break;
+                case "navigate": _browser.Navigate(Json.Str(raw, "url")); break;
+                case "newtab":   _browser.NewTab(Json.Str(raw, "url")); break;
+                case "closetab": _browser.CloseTab(Json.Int(raw, "tab", 0)); break;
+                case "activate": _browser.Activate(Json.Int(raw, "tab", 0)); break;
+                case "back":
+                    // The page's own history first; the shell page decides what "no history
+                    // left" means (it leaves the browser), so the answer has to go back up.
+                    PostToPage("{\"type\":\"browser\",\"ev\":\"backresult\",\"went\":"
+                        + (_browser.GoBack() ? "true" : "false") + "}");
+                    break;
+                case "forward":  _browser.GoForward(); break;
+                case "reload":   _browser.Reload(); break;
+                case "stop":     _browser.Stop(); break;
+                case "zoom":     _browser.SetZoom(Json.Int(raw, "pct", 100) / 100.0); break;
+                case "tabs":     _browser.PushTabs(); break;
+
+                // Input. "focus" decides whether the analog sticks are streamed at all.
+                case "focus":
+                    _browser.ContentFocused = Json.Int(raw, "content", 0) != 0;
+                    Log.Write("BROWSER", "pad input target = " + (_browser.ContentFocused ? "content" : "chrome"));
+                    break;
+                case "pad":
+                    _browser.Pad(Json.Str(raw, "action"), Json.Str(raw, "phase"));
+                    break;
+                case "mode":
+                    _browser.ToActive("{\"t\":\"mode\",\"mode\":\"" + Json.Str(raw, "mode") + "\"}");
+                    break;
+                case "text":
+                    // The OSK's answer for a field inside the page. Sub-object, not a flat
+                    // field, so a value containing a quote survives the trip intact.
+                    {
+                        string sub = Json.Sub(raw, "payload");
+                        _browser.ToActive("{\"t\":\"text\",\"value\":" + ValueOf(sub, "value") + "}");
+                    }
+                    break;
+                case "option":
+                    _browser.ToActive("{\"t\":\"option\",\"index\":" + Json.Int(raw, "index", 0) + "}");
+                    break;
+                case "cancel":   _browser.ToActive("{\"t\":\"cancel\"}"); break;
+                case "scan":     _browser.ToActive("{\"t\":\"scan\"}"); break;
+
+                default:
+                    Log.Write("BROWSER", "unhandled browser command '" + cmd + "': " + Trim(raw, 200));
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Lift one already-encoded JSON string value out of an object, quotes and all, so
+        /// it can be re-emitted without a decode/encode round trip that could change it.
+        /// </summary>
+        static string ValueOf(string obj, string key)
+        {
+            if (string.IsNullOrEmpty(obj)) return "\"\"";
+            Match m = Regex.Match(obj, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(\"(?:[^\"\\\\]|\\\\.)*\")");
+            return m.Success ? m.Groups[1].Value : "\"\"";
+        }
+
+        static string Trim(string s, int n)
+        {
+            if (s == null) return "";
+            return s.Length <= n ? s : s.Substring(0, n) + "...";
+        }
+
+        void PostToPage(string json)
+        {
+            if (!_webReady) return;
+            try { _web.CoreWebView2.PostWebMessageAsString(json); }
+            catch (Exception ex) { Log.Write("MSG", "PostWebMessageAsString failed: " + ex.Message); }
+        }
+
+        /// <summary>
+        /// Called ON THE SYSTEMAPI WORKER THREAD. PostWebMessageAsString is not thread-safe and
+        /// touching the WebView2 from here would be undefined behaviour, so the envelope is
+        /// marshalled back to the UI thread first. BeginInvoke, not Invoke: the worker must never
+        /// wait on the UI thread, or a slow paint would stall the queue behind it.
+        /// </summary>
+        void OnSysReply(string envelope)
+        {
+            if (envelope == null) return;
+            // Replies to the host's own --sys-selftest sweep have no waiter on the page. Posting
+            // them anyway would make the page log a "response for unknown reqId" line for each,
+            // which is exactly the diagnostic that should stay meaningful. The SYS log line
+            // SysWorker already wrote is the evidence for those.
+            string rid = Json.Str(envelope, "reqId");
+            if (rid != null && rid.StartsWith("sweep-", StringComparison.Ordinal)) return;
+            string wrapped = "{\"type\":\"sysres\",\"payload\":" + envelope + "}";
+            try
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    try { PostToPage(wrapped); }
+                    catch (Exception ex) { Log.Write("SYS", "posting the reply failed: " + ex.Message); }
+                });
+            }
+            catch (Exception ex)
+            {
+                // Happens only if the form is tearing down between the two checks above.
+                Log.Write("SYS", "could not marshal a reply to the UI thread (shell closing?): " + ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Called ON THE FILEAPI WORKER THREAD; marshalled exactly like OnSysReply, and for the
+        /// same reason.
+        ///
+        /// The envelope is not re-serialised, only prefixed: {"ok":... becomes
+        /// {"type":"fs.reply","reqId":"...","ok":... . FileApi echoes reqId inside the envelope
+        /// too, so the key can appear twice; JSON.parse keeps the last, which is FileApi's own and
+        /// identical. Writing ours first is what makes a reply to a request FileApi could not even
+        /// parse still routable back to the promise that is waiting for it.
+        /// </summary>
+        void OnFileReply(string reqId, string envelope)
+        {
+            if (envelope == null || envelope.Length < 2 || envelope[0] != '{') return;
+            string wrapped = "{\"type\":\"fs.reply\""
+                + (reqId == null ? "" : ",\"reqId\":\"" + JsonEsc(reqId) + "\"")
+                + "," + envelope.Substring(1);
+            try
+            {
+                if (IsDisposed || !IsHandleCreated) return;
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    try { PostToPage(wrapped); }
+                    catch (Exception ex) { Log.Write("FS", "posting the reply failed: " + ex.Message); }
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Write("FS", "could not marshal a reply to the UI thread (shell closing?): " + ex.Message);
+            }
+        }
+
+        #endregion
+
+        #region power  (the page confirms; the host acts)
+
+        /// <summary>
+        /// The page is responsible for asking twice. By the time a power
+        /// message arrives the human has already confirmed, so this just acts —
+        /// but it acknowledges first, so a page that gets no acknowledgement
+        /// can tell it is talking to an older host and fall back.
+        /// </summary>
+        void DoPower(string action)
+        {
+            if (string.IsNullOrEmpty(action)) { Log.Write("POWER", "power message with no action, ignored"); return; }
+            action = action.Trim().ToLowerInvariant();
+            Log.Write("POWER", "page requested '" + action + "'");
+            PostToPage("{\"type\":\"powerAck\",\"action\":\"" + JsonEsc(action) + "\"}");
+
+            switch (action)
+            {
+                // Shell Launcher owns these two: exit 2 -> restart device,
+                // exit 3 -> shut down. Reusing them keeps one authority over
+                // the session instead of two racing each other.
+                case "restart":
+                    ExitWith(2, "page:power:restart");
+                    break;
+                case "shutdown":
+                    ExitWith(3, "page:power:shutdown");
+                    break;
+
+                case "sleep":
+                case "rest":
+                    try
+                    {
+                        bool ok = Native.SetSuspendState(false, false, false);
+                        Log.Write("POWER", "SetSuspendState(sleep) returned " + ok
+                            + (ok ? "" : "  err=" + Marshal.GetLastWin32Error()));
+                        if (!ok) PostToPage("{\"type\":\"powerFail\",\"action\":\"sleep\"}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Write("POWER", "SetSuspendState threw (swallowed): " + ex.Message);
+                        PostToPage("{\"type\":\"powerFail\",\"action\":\"sleep\"}");
+                    }
+                    break;
+
+                case "signout":
+                case "logoff":
+                    try
+                    {
+                        bool ok = Native.ExitWindowsEx(Native.EWX_LOGOFF,
+                            Native.SHTDN_REASON_MAJOR_OTHER | Native.SHTDN_REASON_MINOR_OTHER
+                            | Native.SHTDN_REASON_FLAG_PLANNED);
+                        Log.Write("POWER", "ExitWindowsEx(LOGOFF) returned " + ok
+                            + (ok ? "" : "  err=" + Marshal.GetLastWin32Error()));
+                        if (!ok) PostToPage("{\"type\":\"powerFail\",\"action\":\"signout\"}");
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Write("POWER", "ExitWindowsEx threw (swallowed): " + ex.Message);
+                        PostToPage("{\"type\":\"powerFail\",\"action\":\"signout\"}");
+                    }
+                    break;
+
+                default:
+                    Log.Write("POWER", "unknown power action '" + action + "', ignored");
+                    break;
+            }
+        }
+
+        #endregion
+
+        #region system information  (cheap facts only)
+
+        static string JsonEsc(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "";
+            StringBuilder b = new StringBuilder(s.Length + 8);
+            foreach (char c in s)
+            {
+                if (c == '"' || c == '\\') { b.Append('\\').Append(c); }
+                else if (c == '\n') b.Append("\\n");
+                else if (c == '\r') b.Append("\\r");
+                else if (c == '\t') b.Append("\\t");
+                else if (c < ' ') b.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                else b.Append(c);
+            }
+            return b.ToString();
+        }
+
+        static void Field(StringBuilder b, string key, string val)
+        {
+            if (string.IsNullOrEmpty(val)) return;              // omit rather than send an empty
+            if (b[b.Length - 1] != '{') b.Append(',');           // string the page would show as real
+            b.Append('"').Append(JsonEsc(key)).Append("\":\"").Append(JsonEsc(val)).Append('"');
+        }
+
+        /// <summary>
+        /// Only facts that are cheap and certain. Anything that would need a
+        /// COM audio endpoint or a WMI round trip is left out entirely, because
+        /// the page labels a missing value as a placeholder — which is honest —
+        /// whereas a guessed value would not be.
+        /// </summary>
+        string SysInfoJson()
+        {
+            StringBuilder b = new StringBuilder("{\"type\":\"sysinfo\",\"data\":{");
+            try
+            {
+                Field(b, "user", Environment.UserName);
+                Field(b, "domain", Environment.UserDomainName);
+                Field(b, "machine", Environment.MachineName);
+                Field(b, "os", Environment.OSVersion.Version.ToString());
+
+                try
+                {
+                    TimeSpan up = TimeSpan.FromMilliseconds(Environment.TickCount & 0x7FFFFFFF);
+                    Field(b, "uptime", (int)up.TotalHours + " h " + up.Minutes + " min");
+                }
+                catch { }
+
+                try
+                {
+                    System.Net.NetworkInformation.NetworkInterface best = null;
+                    foreach (System.Net.NetworkInformation.NetworkInterface ni
+                             in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                    {
+                        if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up) continue;
+                        if (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Loopback) continue;
+                        if (best == null || ni.Speed > best.Speed) best = ni;
+                    }
+                    if (best != null)
+                    {
+                        Field(b, "netName", best.Name);
+                        Field(b, "netType", best.NetworkInterfaceType.ToString());
+                        if (best.Speed > 0)
+                            Field(b, "netSpeed", (best.Speed / 1000000L).ToString(CultureInfo.InvariantCulture) + " Mbps");
+                        foreach (System.Net.NetworkInformation.UnicastIPAddressInformation ip
+                                 in best.GetIPProperties().UnicastAddresses)
+                        {
+                            if (ip.Address.AddressFamily != System.Net.Sockets.AddressFamily.InterNetwork) continue;
+                            Field(b, "netIp", ip.Address.ToString());
+                            break;
+                        }
+                    }
+                }
+                catch (Exception ex) { Log.Write("SYSINFO", "network probe failed (skipped): " + ex.Message); }
+
+                try
+                {
+                    DriveInfo sys = new DriveInfo(Path.GetPathRoot(Environment.SystemDirectory));
+                    if (sys.IsReady)
+                    {
+                        double tb = sys.AvailableFreeSpace / 1099511627776.0;
+                        Field(b, "diskFree", tb >= 1
+                            ? tb.ToString("0.0", CultureInfo.InvariantCulture) + " TB free"
+                            : (sys.AvailableFreeSpace / 1073741824.0).ToString("0", CultureInfo.InvariantCulture) + " GB free");
+                    }
+                }
+                catch (Exception ex) { Log.Write("SYSINFO", "disk probe failed (skipped): " + ex.Message); }
+
+                try
+                {
+                    Rectangle sb = Screen.PrimaryScreen.Bounds;
+                    Field(b, "screen", sb.Width + " × " + sb.Height);
+                }
+                catch { }
+            }
+            catch (Exception ex)
+            {
+                Log.Write("SYSINFO", "gather failed (sending what we have): " + ex.Message);
+            }
+            b.Append("}}");
+            Log.Write("SYSINFO", "sent " + b.Length + " bytes to the page");
+            return b.ToString();
+        }
+
+        /// <summary>
+        /// What the host's own raw-HID reader knows about the pad, including the battery, which
+        /// no web API exposes. Everything is reported as measured or reported as absent - a pad
+        /// whose battery byte was never seen says so rather than showing a plausible number.
+        /// </summary>
+        string PadInfoJson()
+        {
+            StringBuilder b = new StringBuilder("{\"type\":\"padinfo\",\"data\":{");
+            try
+            {
+                PadSnapshot s = _ds == null ? null : _ds.Snapshot;
+                if (s == null) s = new PadSnapshot();
+                b.Append("\"connected\":").Append(s.Connected ? "true" : "false");
+                b.Append(",\"status\":\"").Append(JsonEsc(s.Status)).Append("\"");
+                b.Append(",\"model\":\"").Append(JsonEsc(s.Model)).Append("\"");
+                b.Append(",\"transport\":\"").Append(JsonEsc(s.Transport)).Append("\"");
+                b.Append(",\"vid\":").Append(s.Vid.ToString(CultureInfo.InvariantCulture));
+                b.Append(",\"pid\":").Append(s.Pid.ToString(CultureInfo.InvariantCulture));
+                b.Append(",\"reports\":").Append(s.Reports.ToString(CultureInfo.InvariantCulture));
+                b.Append(",\"reportId\":").Append(((int)s.ReportId).ToString(CultureInfo.InvariantCulture));
+                b.Append(",\"reportLength\":").Append(s.ReportLength.ToString(CultureInfo.InvariantCulture));
+                if (s.BatteryKnown)
+                {
+                    b.Append(",\"batteryKnown\":true");
+                    b.Append(",\"batteryPercent\":").Append(s.BatteryPercent.ToString(CultureInfo.InvariantCulture));
+                    b.Append(",\"batteryState\":\"").Append(JsonEsc(s.BatteryState)).Append("\"");
+                    b.Append(",\"batteryRaw\":").Append(((int)s.BatteryRaw).ToString(CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    b.Append(",\"batteryKnown\":false");
+                    b.Append(",\"batteryNote\":\"this pad's report layout does not carry a battery byte the host can read\"");
+                }
+                b.Append(",\"xinputPads\":").Append(CountBits(_xiConnectedMask).ToString(CultureInfo.InvariantCulture));
+            }
+            catch (Exception ex)
+            {
+                Log.Write("PADINFO", "gather failed (sending what we have): " + ex.Message);
+            }
+            b.Append("}}");
+            return b.ToString();
+        }
+
+        static int CountBits(uint v)
+        {
+            int n = 0;
+            while (v != 0) { n += (int)(v & 1u); v >>= 1; }
+            return n;
+        }
+
+        #endregion
+
+        #region keys / exit
+
+        // Only reached when the WebView does not have focus (e.g. before init).
+        void OnFormKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Escape) ExitWith(0, "Esc(form)");
+            else if (e.KeyCode == Keys.D2) ExitWith(2, "2(form)");
+            else if (e.KeyCode == Keys.D3) ExitWith(3, "3(form)");
+            else if (e.KeyCode == Keys.Enter) Launch(_opt.ChildCommand);
+        }
+
+        void ExitWith(int code, string why)
+        {
+            if (_exiting) return;
+            _exiting = true;
+            _exitCode = code;
+            Log.Write("EXIT", "exiting with code " + code + " (trigger=" + why + ")");
+            Log.Write("SUMMARY", "launches=" + _launchCount + " returns=" + _returnCount
+                + " foregroundPASS=" + _returnsPassed + " foregroundFAIL=" + _returnsFailed
+                + " paths=[" + string.Join(" | ", _pathsUsed.ToArray()) + "]");
+            Log.Write("SUMMARY", "gamepad (navigator.getGamepads inside WebView2): " + _gamepadReport);
+            Log.Write("SUMMARY", "pad (raw HID): " + PadSummary());
+            Log.Write("SUMMARY", "pad actions sent to the page = " + _padActionCount + "   last: " + _lastPadAction);
+            _timer.Stop();
+            _padTimer.Stop();
+            Close();
+        }
+
+        void OnClosingForm(object sender, FormClosingEventArgs e)
+        {
+            _timer.Stop();
+            _padTimer.Stop();
+            try { _ds.Stop(); }
+            catch { }
+            try { if (_sys != null) _sys.Stop(); }
+            catch { }
+            try { if (_files != null) _files.Stop(); }
+            catch { }
+            // Close every content WebView before the form goes: they are child HWNDs of a
+            // panel that is about to be destroyed, and an orphaned controller leaves a
+            // browser process behind that nothing will ever reap.
+            try { if (_browser != null) _browser.Quit(); }
+            catch (Exception ex) { Log.Write("BROWSER", "teardown threw (swallowed): " + ex.Message); }
+            if (_tracker != null) _tracker.Cleanup();
+            try { _web.Dispose(); }
+            catch { }
+            Log.Write("HOST", "ShellHostWeb exiting with code " + _exitCode);
+        }
+
+        #endregion
+
+        #region pad input -> page
+
+        // The whole pad path is wrapped: this process IS the shell, so an escaped exception
+        // here would blank the console. Anything unexpected is logged and swallowed.
+        void OnPadTick(object sender, EventArgs e)
+        {
+            try { PumpPad(); }
+            catch (Exception ex) { Log.Write("PAD", "pad tick caught (swallowed): " + ex.ToString()); }
+        }
+
+        void PumpPad()
+        {
+            PadSnapshot s = _ds.Snapshot;
+            TracePadState(s);
+
+            // Always drain, even when the input is going to be discarded, so nothing piles up.
+            int hidEdges = _ds.TakePressEdges();
+            int xiHeldDir, xiHeldDirV;
+            ushort xiEdges = PollXInput(out xiHeldDir, out xiHeldDirV);
+
+            if (!_webReady) return;
+
+            // Same rule as the native host: while a launched child owns the screen the human is
+            // playing, and a stray press must not reach the shell behind the game.
+            if (_childRunning)
+            {
+                if (hidEdges != 0 || xiEdges != 0)
+                    Log.Write("PAD", "pad input ignored - child owns the screen (hid=["
+                        + DualSense.ButtonNames(hidEdges) + "] xinput=0x" + xiEdges.ToString("X4") + ")");
+                _padDir = 0;
+                _padRepeatAt = DateTime.MaxValue;
+                _padDirV = 0;
+                _padRepeatAtV = DateTime.MaxValue;
+                _hidPressed = 0;
+                return;
+            }
+
+            // The browser's analog channel. Straight from here to the content WebView, not
+            // through the shell page: a cursor being pushed around by a thumbstick is 30
+            // messages a second and there is nothing for index.html to decide about any of
+            // them. BrowserHost.Axes() no-ops unless the content pane actually owns input.
+            if (_browser != null && _browser.Open && s.Connected)
+            {
+                _browser.Axes(
+                    ((int)s.LX - 128) / 127.0, ((int)s.LY - 128) / 127.0,
+                    ((int)s.RX - 128) / 127.0, ((int)s.RY - 128) / 127.0);
+            }
+
+            PumpDirection(s, xiHeldDir, xiHeldDirV, hidEdges, xiEdges);
+
+            if (hidEdges != 0)
+            {
+                Log.Write("PAD", "press edge 0x" + hidEdges.ToString("X5") + " [" + DualSense.ButtonNames(hidEdges)
+                    + "]  LX=" + s.LX + " LY=" + s.LY + " RX=" + s.RX + " RY=" + s.RY);
+                DispatchHid(hidEdges);
+            }
+            if (xiEdges != 0)
+            {
+                Log.Write("XINPUT", "press edge 0x" + xiEdges.ToString("X4"));
+                DispatchXInput(xiEdges);
+            }
+
+            PumpReleases(s);
+        }
+
+        /// <summary>
+        /// One direction machine per axis, for both the d-pad and the left stick on either
+        /// device: a flick moves exactly one step, a hold auto-repeats after an initial
+        /// delay, and letting go emits a release so a consumer doing its own hold-to-repeat
+        /// (the on-screen keyboard) knows when to stop.
+        /// </summary>
+        void PumpDirection(PadSnapshot s, int xiHeldDir, int xiHeldDirV, int hidEdges, ushort xiEdges)
+        {
+            int heldX = 0, heldY = 0;
+            if (s.Connected)
+            {
+                if ((s.Buttons & DualSense.BTN_DLEFT) != 0) heldX = -1;
+                else if ((s.Buttons & DualSense.BTN_DRIGHT) != 0) heldX = 1;
+                else
+                {
+                    int dx = (int)s.LX - 128;
+                    if (dx <= -StickDeadzoneByte) heldX = -1;
+                    else if (dx >= StickDeadzoneByte) heldX = 1;
+                }
+
+                // A DualSense Y axis grows downwards, so "less than centre" is up.
+                if ((s.Buttons & DualSense.BTN_DUP) != 0) heldY = -1;
+                else if ((s.Buttons & DualSense.BTN_DDOWN) != 0) heldY = 1;
+                else
+                {
+                    int dy = (int)s.LY - 128;
+                    if (dy <= -StickDeadzoneByte) heldY = -1;
+                    else if (dy >= StickDeadzoneByte) heldY = 1;
+                }
+            }
+            if (heldX == 0) heldX = xiHeldDir;
+            if (heldY == 0) heldY = xiHeldDirV;
+
+            DateTime now = DateTime.Now;
+            bool movedX = PumpAxis(heldX, now, ref _padDir, ref _padRepeatAt, "left", "right");
+            bool movedY = PumpAxis(heldY, now, ref _padDirV, ref _padRepeatAtV, "up", "down");
+
+            // A d-pad tap shorter than one tick is invisible to the sampler above, but the
+            // reader thread latched its edge - honour that so no tap is ever dropped.
+            if (!movedX && heldX == 0)
+            {
+                if ((hidEdges & DualSense.BTN_DLEFT) != 0) SendPad("left", "d-pad tap", "dpadLeft", "press");
+                else if ((hidEdges & DualSense.BTN_DRIGHT) != 0) SendPad("right", "d-pad tap", "dpadRight", "press");
+                else if ((xiEdges & XI_DLEFT) != 0) SendPad("left", "xinput d-pad tap", "dpadLeft", "press");
+                else if ((xiEdges & XI_DRIGHT) != 0) SendPad("right", "xinput d-pad tap", "dpadRight", "press");
+            }
+            if (!movedY && heldY == 0)
+            {
+                if ((hidEdges & DualSense.BTN_DUP) != 0) SendPad("up", "d-pad tap", "dpadUp", "press");
+                else if ((hidEdges & DualSense.BTN_DDOWN) != 0) SendPad("down", "d-pad tap", "dpadDown", "press");
+                else if ((xiEdges & XI_DUP) != 0) SendPad("up", "xinput d-pad tap", "dpadUp", "press");
+                else if ((xiEdges & XI_DDOWN) != 0) SendPad("down", "xinput d-pad tap", "dpadDown", "press");
+            }
+        }
+
+        bool PumpAxis(int held, DateTime now, ref int dir, ref DateTime repeatAt, string neg, string pos)
+        {
+            if (held != dir)
+            {
+                int was = dir;
+                dir = held;
+                if (held == 0)
+                {
+                    repeatAt = DateTime.MaxValue;
+                    if (was != 0) SendPad(was < 0 ? neg : pos, "released", was < 0 ? neg : pos, "release");
+                    return false;
+                }
+                SendPad(held < 0 ? neg : pos, "held", held < 0 ? neg : pos, "press");
+                repeatAt = now.AddMilliseconds(RepeatFirstMs);
+                return true;
+            }
+            if (held != 0 && now >= repeatAt)
+            {
+                SendPad(held < 0 ? neg : pos, "auto-repeat", held < 0 ? neg : pos, "repeat");
+                repeatAt = now.AddMilliseconds(RepeatNextMs);
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Face and shoulder buttons. The semantic names that already existed
+        /// (launch / back / tabPlay / tabMedia / cc) are unchanged — pages in the
+        /// wild bind to them — and every message now also carries the literal
+        /// button name, so a consumer that wants "the Options button" rather than
+        /// "the control-centre action" has it. The on-screen keyboard is exactly
+        /// such a consumer: while it is open, L1/R1 move the caret and Options
+        /// commits, which are not the shell meanings of those buttons.
+        /// </summary>
+        void DispatchHid(int e)
+        {
+            if ((e & DualSense.BTN_CROSS) != 0) SendPad("launch", "Cross", "cross", "press");
+            if ((e & DualSense.BTN_CIRCLE) != 0) SendPad("back", "Circle", "circle", "press");
+            if ((e & DualSense.BTN_SQUARE) != 0) SendPad("square", "Square", "square", "press");
+            if ((e & DualSense.BTN_TRIANGLE) != 0) SendPad("triangle", "Triangle", "triangle", "press");
+            if ((e & DualSense.BTN_L1) != 0) SendPad("tabPlay", "L1", "l1", "press");
+            if ((e & DualSense.BTN_R1) != 0) SendPad("tabMedia", "R1", "r1", "press");
+            if ((e & DualSense.BTN_OPTIONS) != 0) SendPad("cc", "Options", "options", "press");
+            if ((e & DualSense.BTN_TOUCHPAD) != 0) SendPad("cc", "Touchpad click", "touchpad", "press");
+            if ((e & DualSense.BTN_CREATE) != 0) SendPad("create", "Create", "create", "press");
+            if ((e & DualSense.BTN_PS) != 0) SendPad("guide", "PS", "ps", "press");
+            // The stick clicks had no shell meaning until the browser arrived. L3 is the
+            // documented toggle between spatial navigation and the virtual cursor - the one
+            // control the human must be able to find when a site defeats the focus ring -
+            // and R3 recentres on whatever is focused. They are semantic-name-free on
+            // purpose: nothing outside the browser binds them, so the literal button is the
+            // action.
+            if ((e & DualSense.BTN_L3) != 0) SendPad("l3", "L3 (stick click)", "l3", "press");
+            if ((e & DualSense.BTN_R3) != 0) SendPad("r3", "R3 (stick click)", "r3", "press");
+
+            // Still true, and worth keeping written down: no pad button exits this
+            // host. Square and Triangle used to be exit codes 2 and 3 in the bare
+            // native harness; in the real UI that would reboot the machine
+            // mid-browse. Power lives behind a confirmation in the control centre.
+        }
+
+        void DispatchXInput(ushort e)
+        {
+            if ((e & XI_A) != 0) SendPad("launch", "xinput A", "cross", "press");
+            if ((e & XI_B) != 0) SendPad("back", "xinput B", "circle", "press");
+            if ((e & XI_X) != 0) SendPad("square", "xinput X", "square", "press");
+            if ((e & XI_Y) != 0) SendPad("triangle", "xinput Y", "triangle", "press");
+            if ((e & XI_LB) != 0) SendPad("tabPlay", "xinput LB", "l1", "press");
+            if ((e & XI_RB) != 0) SendPad("tabMedia", "xinput RB", "r1", "press");
+            if ((e & (XI_START | XI_BACK)) != 0) SendPad("cc", "xinput Start/Back", "options", "press");
+            if ((e & XI_GUIDE) != 0) SendPad("guide", "xinput GUIDE", "ps", "press");
+        }
+
+        // Buttons whose release matters to the page (hold-to-repeat in the on-screen
+        // keyboard). Directions are handled by the axis machine, which emits its own
+        // release; these are the face and shoulder buttons.
+        static readonly int[] ReleaseWatch = new int[] {
+            DualSense.BTN_CROSS, DualSense.BTN_CIRCLE, DualSense.BTN_SQUARE, DualSense.BTN_TRIANGLE,
+            DualSense.BTN_L1, DualSense.BTN_R1, DualSense.BTN_OPTIONS, DualSense.BTN_TOUCHPAD,
+            DualSense.BTN_CREATE, DualSense.BTN_PS, DualSense.BTN_L3, DualSense.BTN_R3
+        };
+        static readonly string[] ReleaseAction = new string[] {
+            "launch", "back", "square", "triangle", "tabPlay", "tabMedia", "cc", "cc", "create", "guide",
+            "l3", "r3"
+        };
+        static readonly string[] ReleaseButton = new string[] {
+            "cross", "circle", "square", "triangle", "l1", "r1", "options", "touchpad", "create", "ps",
+            "l3", "r3"
+        };
+
+        /// <summary>
+        /// Emit a release for any watched button we announced a press for and that
+        /// the snapshot no longer shows held. A tap too short to appear in any
+        /// snapshot releases on the very next tick, which is what we want: a
+        /// consumer must never be left repeating a key nobody is holding.
+        /// </summary>
+        void PumpReleases(PadSnapshot s)
+        {
+            int held = s.Connected ? s.Buttons : 0;
+            for (int i = 0; i < ReleaseWatch.Length; i++)
+            {
+                int bit = ReleaseWatch[i];
+                bool down = (held & bit) != 0;
+                bool announced = (_hidPressed & bit) != 0;
+                if (down && !announced) _hidPressed |= bit;
+                else if (!down && announced)
+                {
+                    _hidPressed &= ~bit;
+                    SendPad(ReleaseAction[i], "released", ReleaseButton[i], "release");
+                }
+            }
+        }
+
+        void SendPad(string action, string why)
+        {
+            SendPad(action, why, action, "press");
+        }
+
+        void SendPad(string action, string why, string button, string phase)
+        {
+            _padActionCount++;
+            _lastPadAction = action + " (" + why + ")";
+            // Releases are frequent and uninteresting; log them at a lower volume.
+            if (phase != "release")
+                Log.Write("PAD", "-> page: " + action + "   [" + why + "]");
+            PostToPage("{\"type\":\"pad\",\"action\":\"" + action
+                + "\",\"button\":\"" + button + "\",\"phase\":\"" + phase + "\"}");
+        }
+
+        void TracePadState(PadSnapshot s)
+        {
+            if (s.Connected != _padConnected)
+            {
+                _padConnected = s.Connected;
+                if (s.Connected)
+                    Log.Write("PAD", "pad CONNECTED: " + s.Model + " VID=0x" + s.Vid.ToString("X4")
+                        + " PID=0x" + s.Pid.ToString("X4"));
+                else
+                {
+                    Log.Write("PAD", "pad DISCONNECTED - rescanning");
+                    _padTransport = "";
+                    _padDir = 0;
+                    _padRepeatAt = DateTime.MaxValue;
+                }
+            }
+            if (s.Connected && s.Transport != _padTransport && s.Transport != "?")
+            {
+                _padTransport = s.Transport;
+                Log.Write("PAD", "transport now " + s.Transport + " (report id 0x" + s.ReportId.ToString("X2")
+                    + ", " + s.ReportLength + " bytes)  resting sticks LX=" + s.LX + " LY=" + s.LY
+                    + " RX=" + s.RX + " RY=" + s.RY);
+            }
+        }
+
+        ushort PollXInput(out int heldDir, out int heldDirV)
+        {
+            heldDir = 0;
+            heldDirV = 0;
+            if (!_xi.Available) return 0;
+
+            uint mask = 0;
+            ushort buttons = 0;
+            for (uint i = 0; i < 4; i++)
+            {
+                XINPUT_STATE st;
+                uint res = _xi.ExAvailable ? _xi.GetStateEx(i, out st) : _xi.GetState(i, out st);
+                if (res != 0) continue;
+                mask |= (1u << (int)i);
+                buttons |= st.Gamepad.wButtons;
+                if (st.Gamepad.sThumbLX <= -XiDeadzone || (st.Gamepad.wButtons & XI_DLEFT) != 0) heldDir = -1;
+                else if (st.Gamepad.sThumbLX >= XiDeadzone || (st.Gamepad.wButtons & XI_DRIGHT) != 0) heldDir = 1;
+                // XInput's Y axis grows upwards, the opposite of the DualSense's,
+                // so the comparisons are the other way round here.
+                if (st.Gamepad.sThumbLY >= XiDeadzone || (st.Gamepad.wButtons & XI_DUP) != 0) heldDirV = -1;
+                else if (st.Gamepad.sThumbLY <= -XiDeadzone || (st.Gamepad.wButtons & XI_DDOWN) != 0) heldDirV = 1;
+            }
+            if (mask != _xiConnectedMask)
+            {
+                Log.Write("XINPUT", "connection mask changed 0x" + _xiConnectedMask.ToString("X")
+                    + " -> 0x" + mask.ToString("X"));
+                _xiConnectedMask = mask;
+            }
+
+            ushort pressed = (ushort)(buttons & ~_xiLastButtons);
+            _xiLastButtons = buttons;
+            return pressed;
+        }
+
+        string PadSummary()
+        {
+            PadSnapshot s = _ds.Snapshot;
+            if (!s.Connected) return "no pad seen (raw HID scan found no DualSense / DualShock)";
+            return s.Model + " over " + (s.Transport == "?" ? "(detecting)" : s.Transport)
+                + "  reportId=0x" + s.ReportId.ToString("X2") + " len=" + s.ReportLength
+                + " reports=" + s.Reports + "  resting L=" + s.LX + "," + s.LY + " R=" + s.RX + "," + s.RY;
+        }
+
+        #endregion
+
+        #region launch / return  (same cycle as ShellHost.cs)
+
+        void Launch(string command)
+        {
+            if (_childRunning) { Log.Write("LAUNCH", "ignored - child already running"); return; }
+            if (string.IsNullOrEmpty(command)) command = _opt.ChildCommand;
+
+            _launchCount++;
+            _launchedAt = DateTime.Now;
+            _childRunning = true;
+
+            _tracker = new ChildTracker();
+            _tracker.TreeEmpty += OnTreeEmpty;
+
+            Log.Write("LAUNCH", "launching child, then yielding the screen...");
+            if (!_tracker.Start(command, _opt.NoJob))
+            {
+                _childRunning = false;
+                Log.Write("LAUNCH", "launch FAILED - staying in foreground");
+                return;
+            }
+
+            PostToPage("{\"type\":\"launching\"}");
+            Native.ShowWindow(Handle, Native.SW_MINIMIZE);
+            Log.Write("HANDOFF", "host minimized (SW_MINIMIZE); tracking mode=" + _tracker.Mode
+                + " rootPid=" + _tracker.RootPid);
+        }
+
+        void OnTreeEmpty()
+        {
+            try
+            {
+                if (IsHandleCreated) BeginInvoke(new Action(OnChildTreeGone));
+            }
+            catch { }
+        }
+
+        void OnChildTreeGone()
+        {
+            if (!_childRunning) return;
+            _childRunning = false;
+            _returnCount++;
+            DateTime detected = DateTime.Now;
+            Log.Write("RETURN", "child tree empty detected; beginning forced-foreground return");
+            Log.Write("RETURN", "foreground before restore: " + Foreground.Describe(Native.GetForegroundWindow()));
+
+            WindowState = FormWindowState.Normal;
+            Stopwatch sw = Stopwatch.StartNew();
+            string path = Foreground.ForceForeground(Handle);
+            sw.Stop();
+
+            bool ok = Native.GetForegroundWindow() == Handle;
+            if (ok) _returnsPassed++; else _returnsFailed++;
+            _pathsUsed.Add("c" + _returnCount + ":" + (path == null ? "FAILED" : path));
+            string lastFgPath = (path == null ? "ALL PATHS FAILED" : path) + "  (" + sw.ElapsedMilliseconds + " ms)";
+            string lastVerify = ok
+                ? "PASS GetForegroundWindow()==host hwnd (0x" + Handle.ToInt64().ToString("X") + ")"
+                : "FAIL foreground is " + Foreground.Describe(Native.GetForegroundWindow());
+
+            Log.Write("RETURN", "forced-foreground path: " + lastFgPath);
+            Log.Write("VERIFY", lastVerify);
+
+            if (_tracker != null) { _tracker.Cleanup(); _tracker = null; }
+            _returnedAt = detected;
+
+            // Put keyboard focus back inside the page, otherwise the UI stops responding to keys.
+            try { _web.Focus(); }
+            catch { }
+            PostToPage("{\"type\":\"returned\"}");
+        }
+
+        #endregion
+
+        #region unattended automation  (for headless verification runs)
+
+        void OnTick(object sender, EventArgs e)
+        {
+            DateTime now = DateTime.Now;
+
+            if (_selfTestNext != DateTime.MaxValue && _selfTestAt < _selfSeq.Length && now >= _selfTestNext)
+            {
+                string step = _selfSeq[_selfTestAt];
+                _selfTestAt++;
+                SendPad(step, "self-test step " + _selfTestAt + "/" + _selfSeq.Length);
+                _selfTestNext = now.AddMilliseconds(_selfGapMs);
+            }
+
+            if (_opt.AutoLaunchMs >= 0 && !_childRunning && _launchCount < _opt.Cycles)
+            {
+                DateTime baseline = (_launchCount == 0) ? _t0 : _returnedAt;
+                if (baseline != DateTime.MinValue && (now - baseline).TotalMilliseconds >= _opt.AutoLaunchMs)
+                {
+                    _didAutoKill = false;
+                    Log.Write("AUTO", "auto-launch fired, cycle " + (_launchCount + 1) + "/" + _opt.Cycles);
+                    Launch(_opt.ChildCommand);
+                }
+            }
+
+            if (_opt.AutoKillMs >= 0 && !_didAutoKill && _childRunning
+                && (now - _launchedAt).TotalMilliseconds >= _opt.AutoKillMs)
+            {
+                _didAutoKill = true;
+                KillChildTree();
+            }
+
+            if (_opt.AutoExitMs >= 0 && !_didAutoExit)
+            {
+                DateTime baseline = _t0;
+                if (_opt.AutoLaunchMs >= 0)
+                {
+                    baseline = (_returnCount >= _opt.Cycles && _returnedAt != DateTime.MinValue)
+                        ? _returnedAt : DateTime.MaxValue;
+                }
+                if (baseline != DateTime.MaxValue && (now - baseline).TotalMilliseconds >= _opt.AutoExitMs)
+                {
+                    _didAutoExit = true;
+                    Log.Write("AUTO", "auto-exit fired");
+                    ExitWith(0, "auto-exit");
+                }
+            }
+
+            if (_opt.WatchdogMs > 0 && (now - _t0).TotalMilliseconds >= _opt.WatchdogMs && !_exiting)
+            {
+                Log.Write("AUTO", "WATCHDOG TRIPPED at " + _opt.WatchdogMs + " ms; exiting 99");
+                ExitWith(99, "watchdog");
+            }
+        }
+
+        void KillChildTree()
+        {
+            if (_tracker == null) return;
+            List<int> pids = _tracker.GetTrackedPids();
+            Log.Write("AUTO", "auto-kill: tracked pids = [" + string.Join(",", pids.ConvertAll<string>(
+                delegate(int p) { return p.ToString(CultureInfo.InvariantCulture); }).ToArray()) + "]");
+            foreach (int pid in pids)
+            {
+                try
+                {
+                    ProcessStartInfo psi = new ProcessStartInfo("taskkill.exe", "/PID " + pid + " /T /F");
+                    psi.UseShellExecute = false;
+                    psi.CreateNoWindow = true;
+                    psi.RedirectStandardOutput = true;
+                    psi.RedirectStandardError = true;
+                    Process tk = Process.Start(psi);
+                    string outp = tk.StandardOutput.ReadToEnd().Trim() + " " + tk.StandardError.ReadToEnd().Trim();
+                    tk.WaitForExit(5000);
+                    Log.Write("AUTO", "taskkill /PID " + pid + " /T /F -> exit " + tk.ExitCode + " : " + outp.Trim());
+                }
+                catch (Exception ex)
+                {
+                    Log.Write("AUTO", "taskkill for pid " + pid + " threw: " + ex.Message);
+                }
+            }
+            if (pids.Count == 0)
+                Log.Write("AUTO", "auto-kill: NO tracked pids found - tracker has lost the tree");
+        }
+
+        #endregion
+    }
+
+    #endregion
+
+    #region Options + entry point
+
+    public class Options
+    {
+        public string ChildCommand = "notepad.exe";
+        public string RawArgs = "";
+        public string AssetFolder;
+        public string UserDataFolder;
+        public string VirtualHost = "arcos.local";
+        public string StartUrl = null;              // explicit override
+        public int BootDuration = 6400;
+        public bool UseFileUrls;
+        public bool NoBoot;
+        public bool NoJob;
+        public bool NoPad;
+        public bool PadSelfTest;
+        public bool SysSelfTest;
+        public bool DisplaySelfTest;
+        public string Walk;
+        public int WalkGapMs = 2500;
+        public string Browse;               // --browse=<url>: unattended entry into the browser
+        public bool Windowed;
+        public bool DevTools;
+        // Register the arcFiles COM host object. Off by default: its calls run on the UI thread
+        // and FileApi blocks. See FileApiBridge for the whole argument.
+        public bool FileHostObject;
+        public int AutoLaunchMs = -1;
+        public int AutoKillMs = -1;
+        public int AutoExitMs = -1;
+        public int WatchdogMs = 0;
+        public int Cycles = 1;
+        public string LogPath = null;
+
+        public string ResolveStartUrl()
+        {
+            if (!string.IsNullOrEmpty(StartUrl)) return StartUrl;
+            if (UseFileUrls)
+            {
+                string f = Path.Combine(AssetFolder, NoBoot ? "index.html" : "boot.html");
+                string u = new Uri(f).AbsoluteUri;
+                if (NoBoot) return u;
+                return u + "?duration=" + BootDuration.ToString(CultureInfo.InvariantCulture) + "&next=index.html";
+            }
+            string b = "https://" + VirtualHost + "/";
+            if (NoBoot) return b + "index.html";
+            return b + "boot.html?duration=" + BootDuration.ToString(CultureInfo.InvariantCulture) + "&next=index.html";
+        }
+
+        public static Options Parse(string[] args)
+        {
+            Options o = new Options();
+            o.RawArgs = string.Join(" ", args);
+            o.AssetFolder = Path.GetDirectoryName(Application.ExecutablePath);
+            o.UserDataFolder = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "ArcOS\\WebView2");
+
+            foreach (string a in args)
+            {
+                if (!a.StartsWith("--")) continue;
+                string key = a, val = "";
+                int eq = a.IndexOf('=');
+                if (eq > 0) { key = a.Substring(0, eq); val = a.Substring(eq + 1); }
+                if (val.Length > 1 && val[0] == '"' && val[val.Length - 1] == '"')
+                    val = val.Substring(1, val.Length - 2);
+                switch (key)
+                {
+                    case "--child": o.ChildCommand = val; break;
+                    case "--assets": o.AssetFolder = Path.GetFullPath(val); break;
+                    case "--user-data": o.UserDataFolder = val; break;
+                    case "--virtual-host": o.VirtualHost = val; break;
+                    case "--url": o.StartUrl = val; break;
+                    case "--duration": o.BootDuration = int.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "--file-urls": o.UseFileUrls = true; break;
+                    case "--no-boot": o.NoBoot = true; break;
+                    case "--no-job": o.NoJob = true; break;
+                    case "--no-pad": o.NoPad = true; break;
+                    case "--pad-selftest": o.PadSelfTest = true; break;
+                    case "--sys-selftest": o.SysSelfTest = true; break;
+                    case "--display-selftest": o.DisplaySelfTest = true; break;
+                    case "--walk": o.Walk = val; break;
+                    // Open the browser on this URL as soon as the shell page is up, so a
+                    // --walk can start from inside a real web page. The pad vocabulary
+                    // cannot type an address, and driving the on-screen keyboard one key at
+                    // a time to reach one is forty walk steps of nothing useful.
+                    case "--browse": o.Browse = val; break;
+                    case "--walk-gap": o.WalkGapMs = int.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "--windowed": o.Windowed = true; break;
+                    case "--dev-tools": o.DevTools = true; break;
+                    case "--file-host-object": o.FileHostObject = true; break;
+                    case "--auto-launch": o.AutoLaunchMs = int.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "--auto-kill": o.AutoKillMs = int.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "--auto-exit": o.AutoExitMs = int.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "--watchdog": o.WatchdogMs = int.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "--cycles": o.Cycles = int.Parse(val, CultureInfo.InvariantCulture); break;
+                    case "--log": o.LogPath = val; break;
+                }
+            }
+            return o;
+        }
+    }
+
+    public static class Program
+    {
+        [STAThread]
+        public static int Main(string[] args)
+        {
+            Options opt = Options.Parse(args);
+            Log.Init(opt.LogPath);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+
+            AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
+            {
+                Log.Write("FATAL", "unhandled: " + (e.ExceptionObject == null ? "(null)" : e.ExceptionObject.ToString()));
+            };
+
+            HostForm f = new HostForm(opt);
+            try
+            {
+                Application.Run(f);
+            }
+            catch (Exception ex)
+            {
+                Log.Write("FATAL", ex.ToString());
+                return 100;
+            }
+            return f.ExitCodeValue;
+        }
+    }
+
+    #endregion
+}

@@ -1,0 +1,287 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   ARC OS — on-screen keyboard  (ui/osk.css)
+
+   Kept as a separate sheet rather than injected from JS: a strict CSP
+   (`style-src 'self'`) blocks an inline <style> element but allows a
+   same-origin stylesheet. osk.js probes for --osk-loaded below and links
+   this file itself if the host page forgot to.
+
+   Every token is read through the host page's ARC variable of the same name
+   with the ARC value as the fallback, so the keyboard inherits index.html's
+   palette when it is dropped into the shell and still paints correctly on a
+   bare page (the test harness) that defines nothing.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.arc-osk-probe{ --osk-loaded:1 }
+
+.arc-osk{
+  --osk-void:     var(--void,      #04060b);
+  --osk-deep:     var(--deep,      #0c1422);
+  --osk-haze:     var(--haze,      #17253c);
+  --osk-line:     var(--line,      #24344f);
+  --osk-ice:      var(--ice,       #e6f0ff);
+  --osk-steel:    var(--steel,     #7f96b8);
+  --osk-dim:      var(--dim,       #4e6183);
+  --osk-beam:     var(--beam,      #4c8dff);
+  --osk-beam-hot: var(--beam-hot,  #a6d4ff);
+  --osk-beam-deep:var(--beam-deep, #1b3f8a);
+  --osk-warn:     var(--warn,      #ffb457);
+
+  --osk-sans:    var(--sans,    "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
+  --osk-display: var(--display, "Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif);
+  --osk-e-out:   var(--e-out,   cubic-bezier(.16,.84,.24,1));
+
+  /* Sized for a three-metre read: a key cap is never below 44px tall and
+     grows with the viewport rather than with the font. */
+  --osk-key-h:    clamp(44px, 7.0vh, 74px);
+  --osk-key-gap:  clamp(5px, .62vh, 10px);
+  --osk-key-font: clamp(19px, .95vw + .55vh, 30px);
+  --osk-mod-font: clamp(14px, .62vw + .42vh, 20px);
+  --osk-radius:   12px;
+
+  position:fixed; inset:0; z-index:60;
+  display:flex; align-items:flex-end; justify-content:center;
+  font-family:var(--osk-sans);
+  color:var(--osk-ice);
+  background:rgba(2,4,9,.62);
+  -webkit-backdrop-filter:blur(18px);
+  backdrop-filter:blur(18px);
+  opacity:0; pointer-events:none;
+  transition:opacity .3s var(--osk-e-out);
+}
+.arc-osk.is-open{ opacity:1; pointer-events:auto }
+
+.arc-osk *{ box-sizing:border-box }
+/* Deliberately NOT `font:inherit`: the shorthand would reset font-size, and
+   `.arc-osk button` out-specifies `.osk-key`, so every key cap would silently
+   render at the host page's body size instead of the sofa-legible clamp. */
+.arc-osk button{
+  font-family:inherit;
+  color:inherit; background:none; border:0; cursor:pointer;
+}
+
+/* ── the sheet ─────────────────────────────────────────────────────────
+   Slides up from the bottom like the control centre: whatever you were
+   doing stays visible behind it. */
+.osk-panel{
+  /* On a 1080p TV this lands at 1400px — about 73% of the width, which keeps
+     a 10-key row at ~131px per cap. Narrower reads as a phone keyboard on a
+     television; full-bleed makes the outer keys a long journey from centre. */
+  width:min(1400px, 92vw);
+  padding:clamp(14px,2.2vh,26px) clamp(16px,2.2vw,34px) clamp(16px,2.4vh,30px);
+  translate:0 34px;
+  transition:translate .42s var(--osk-e-out);
+}
+.arc-osk.is-open .osk-panel{ translate:0 0 }
+.arc-osk.osk--number .osk-panel{ width:min(560px, 92vw) }
+
+/* ── head: context line, field, counter ────────────────────────────── */
+.osk-head{ margin-bottom:clamp(10px,1.6vh,20px) }
+
+/* The eyebrow treatment from the design language, but scaled: in the shell an
+   eyebrow sits above a 34–68px hero title, whereas here it IS the label that
+   tells you what you are typing into. */
+.osk-title{
+  font-size:clamp(12px, .55vw + .40vh, 18px);
+  letter-spacing:.34em; text-transform:uppercase;
+  color:var(--osk-beam-hot);
+  margin-bottom:10px;
+}
+
+/* No gap: the field's two children are the input and the Show toggle, and the
+   toggle's width is set from the nav model so that pressing up from the keys
+   lands on it. A gap here would put the model and the pixels out of step. */
+.osk-field{
+  display:flex; align-items:stretch; gap:0;
+  border:1px solid var(--osk-line);
+  border-radius:14px;
+  background:rgba(12,20,34,.78);
+  box-shadow:0 10px 30px rgba(2,4,9,.55), inset 0 1px 0 rgba(255,255,255,.03);
+  transition:border-color .25s var(--osk-e-out), box-shadow .25s var(--osk-e-out);
+}
+.osk-field.is-hit{ animation:osk-nudge .28s var(--osk-e-out) }
+@keyframes osk-nudge{
+  0%{ translate:0 0 } 30%{ translate:-5px 0 } 60%{ translate:4px 0 } 100%{ translate:0 0 }
+}
+
+.osk-input{
+  flex:1; min-width:0;
+  position:relative;
+  display:flex; align-items:center;
+  padding:clamp(10px,1.5vh,18px) clamp(12px,1vw,20px);
+  overflow:hidden; white-space:pre;
+  font-family:var(--osk-display); font-weight:300;
+  /* CSS math needs whitespace around +: "1.1vw+.7vh" parses as an invalid
+     value and the whole declaration is dropped, silently. */
+  font-size:clamp(20px, 1.1vw + .7vh, 32px);
+  line-height:1.25;
+  letter-spacing:.01em;
+}
+.osk-input.is-password{ letter-spacing:.14em }
+
+.osk-pre,.osk-post{ white-space:pre }
+
+.osk-caret{
+  display:inline-block; flex:0 0 auto;
+  width:2px; height:1.15em; margin:0 1px;
+  background:var(--osk-beam-hot);
+  box-shadow:0 0 10px rgba(166,212,255,.9);
+  animation:osk-blink 1.06s steps(1,end) infinite;
+}
+@keyframes osk-blink{ 0%,55%{opacity:1} 56%,100%{opacity:0} }
+
+.osk-ph{
+  position:absolute; left:clamp(12px,1vw,20px); top:50%; translate:0 -50%;
+  color:var(--osk-dim); pointer-events:none;
+}
+
+/* flex-basis is written by osk.js from the model. Padding must stay
+   symmetric: the button's centre is what "up" aims at. */
+.osk-field-actions{ display:flex; align-items:stretch; padding:6px; min-width:0 }
+/* no toggle (any mode but password) means no slot, not an empty one */
+.osk-field-actions:empty{ display:none }
+
+.osk-line{
+  display:flex; align-items:center; justify-content:space-between;
+  margin-top:8px; min-height:16px;
+  font-size:11.5px; letter-spacing:.18em; text-transform:uppercase;
+  color:var(--osk-dim);
+}
+.osk-count{ font-variant-numeric:tabular-nums; letter-spacing:.1em }
+.osk-count.is-full{ color:var(--osk-warn) }
+.osk-count.is-hit{ animation:osk-pop .3s var(--osk-e-out) }
+@keyframes osk-pop{ 0%{scale:1} 40%{scale:1.22} 100%{scale:1} }
+
+/* ── key grid ──────────────────────────────────────────────────────── */
+.osk-keys{ display:grid; gap:var(--osk-key-gap) }
+.osk-row{ display:grid; gap:var(--osk-key-gap) }
+.osk-spacer{ pointer-events:none }
+
+.osk-key{
+  position:relative;
+  display:flex; align-items:center; justify-content:center; gap:7px;
+  height:var(--osk-key-h);
+  border:1px solid var(--osk-line);
+  border-radius:var(--osk-radius);
+  background:linear-gradient(180deg, rgba(23,37,60,.92), rgba(12,20,34,.92));
+  color:var(--osk-ice);
+  font-size:var(--osk-key-font);
+  line-height:1;
+  box-shadow:0 3px 10px rgba(2,4,9,.45), inset 0 1px 0 rgba(255,255,255,.045);
+  transition:background .18s var(--osk-e-out), border-color .18s var(--osk-e-out),
+             color .18s var(--osk-e-out), transform .18s var(--osk-e-out),
+             box-shadow .18s var(--osk-e-out);
+}
+.osk-key .osk-keyicon{ display:flex }
+.osk-key svg{
+  width:1.05em; height:1.05em;
+  fill:none; stroke:currentColor; stroke-width:1.6;
+  stroke-linecap:round; stroke-linejoin:round;
+}
+.osk-key.osk-mod svg{ width:1.35em; height:1.35em }
+
+.osk-mod{
+  background:linear-gradient(180deg, rgba(16,26,44,.95), rgba(9,15,26,.95));
+  color:var(--osk-steel);
+  font-size:var(--osk-mod-font);
+  letter-spacing:.14em; text-transform:uppercase;
+}
+.osk-space{ letter-spacing:.34em }
+
+/* The commit key is the primary action: outlined in the accent even when it
+   is not the focused key, so "how do I finish?" is answerable at a glance. */
+.osk-commit{
+  border-color:rgba(76,141,255,.55);
+  color:var(--osk-beam-hot);
+  background:linear-gradient(180deg, rgba(27,63,138,.55), rgba(12,26,58,.7));
+  font-weight:600;
+}
+
+/* Shift, lit while armed, brighter while locked. */
+.osk-key.is-on{ color:var(--osk-beam-hot); border-color:rgba(166,212,255,.45) }
+.osk-key.is-lock{
+  color:var(--osk-void);
+  background:linear-gradient(180deg,#cfe4ff,#a6d4ff);
+  border-color:#cfe4ff;
+}
+
+.osk-reveal{ flex:1; min-width:0; height:auto; padding:8px 10px; border-radius:10px }
+.osk-reveal .osk-keytext{ overflow:hidden; text-overflow:clip }
+
+.arc-osk .osk-key:hover{ border-color:rgba(166,212,255,.4) }
+
+/* ── focus: the one thing that must be unmistakable from the sofa ──────
+   Not a border treatment — a filled beam cap with dark text, lifted off the
+   sheet and glowing. Nothing else on the keyboard looks remotely like it. */
+.osk-key.is-focus{
+  background:linear-gradient(180deg,#79aeff,#3c7ae8);
+  border-color:#cfe4ff;
+  color:#04060b;
+  font-weight:600;
+  transform:translateY(-3px);
+  box-shadow:
+    0 0 0 2px rgba(207,228,255,.55),
+    0 12px 28px rgba(2,4,9,.7),
+    0 0 34px rgba(76,141,255,.55);
+  z-index:1;
+}
+.osk-key.is-focus svg{ stroke-width:1.9 }
+.osk-key.is-focus.is-lock{ background:linear-gradient(180deg,#e8f2ff,#a6d4ff) }
+
+/* press feedback */
+.osk-key.is-hit{ animation:osk-press .18s var(--osk-e-out) }
+@keyframes osk-press{
+  0%{ transform:translateY(-3px) scale(1) }
+  45%{ transform:translateY(0) scale(.955) }
+  100%{ transform:translateY(-3px) scale(1) }
+}
+
+/* ── hint bar ──────────────────────────────────────────────────────── */
+.osk-hints{
+  display:flex; align-items:center; flex-wrap:wrap;
+  gap:clamp(12px,1.4vw,26px);
+  margin-top:clamp(10px,1.6vh,20px);
+  font-size:12px; letter-spacing:.05em; color:var(--osk-dim);
+}
+.osk-hint{ display:flex; align-items:center; gap:8px }
+.osk-glyph{ display:flex; color:var(--osk-steel) }
+.osk-glyph svg{
+  width:17px; height:17px; fill:none; stroke:currentColor;
+  stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round;
+}
+.osk-padkey{
+  display:inline-grid; place-items:center; height:20px; padding:0 7px;
+  border:1px solid var(--osk-line); border-radius:5px;
+  background:rgba(12,20,34,.7);
+  font-size:10px; letter-spacing:.14em; color:var(--osk-steel);
+}
+
+/* ── short screens: give the keys the room, drop the decoration ─────── */
+@media (max-height:640px){
+  .arc-osk{ --osk-key-h:clamp(38px,8.4vh,52px) }
+  .osk-hints{ display:none }
+  .osk-title{ margin-bottom:6px }
+}
+@media (max-width:720px){
+  .arc-osk{ --osk-key-font:clamp(15px,3.4vw,22px); --osk-mod-font:11px }
+  .osk-panel{ padding:12px 12px 16px }
+  /* the toggle keeps its modelled width, so below this the eye carries it */
+  .osk-reveal .osk-keytext{ display:none }
+}
+
+/* ── reduced motion ────────────────────────────────────────────────────
+   Everything collapses, including the caret blink: a blinking cursor is an
+   animation like any other, and steady is the accessible default here. */
+@media (prefers-reduced-motion:reduce){
+  .arc-osk,
+  .arc-osk *,
+  .arc-osk *::before,
+  .arc-osk *::after{
+    animation-duration:.001s !important;
+    animation-iteration-count:1 !important;
+    animation-delay:0s !important;
+    transition-duration:.12s !important;
+  }
+  .osk-caret{ animation:none !important; opacity:1 }
+}
+.arc-osk.is-still .osk-caret{ animation:none; opacity:1 }
