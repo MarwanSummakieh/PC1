@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — on-screen keyboard  (ui/osk.js)
+   PC1 — on-screen keyboard  (ui/osk.js)
 
    A controller-driven text-entry surface. No dependencies, no build step,
    no module system: this file defines one global, `ArcOSK`, in the same
@@ -402,10 +402,15 @@ var SVG = {
   space:     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.5v3.2h16v-3.2"/></svg>',
   eye:       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
   eyeOff:    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 6.5 12 6.5c1.6 0 3 .4 4.2 1M21.5 12s-3.5 5.5-9.5 5.5c-1.7 0-3.2-.4-4.4-1.1"/><path d="M4 4l16 16"/></svg>',
-  cross:     '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8.6 8.6 6.8 6.8M15.4 8.6l-6.8 6.8"/></svg>',
-  circle:    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4.4"/></svg>',
-  square:    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><rect x="8.2" y="8.2" width="7.6" height="7.6" rx="1"/></svg>',
-  triangle:  '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.4 16 15H8z"/></svg>'
+  /* The four PlayStation face symbols, matching index.html's PAD_GLYPH
+     exactly — bare rather than ringed, unequal in size the way Sony draws
+     them, square-cut and sharp-cornered. See the long note beside
+     PAD_GLYPH for the references. The keyboard's hint bar sits beside the
+     shell's and the two have to agree about what a Cross looks like. */
+  cross:     '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="face" d="M5.7 5.7 18.3 18.3M18.3 5.7 5.7 18.3"/></svg>',
+  circle:    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle class="face" cx="12" cy="12" r="6.15"/></svg>',
+  square:    '<svg viewBox="0 0 24 24" aria-hidden="true"><rect class="face" x="6.45" y="6.45" width="11.1" height="11.1"/></svg>',
+  triangle:  '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="face tri" d="M12 3.7 20 17.9H4z"/></svg>'
 };
 
 var HINTS = [

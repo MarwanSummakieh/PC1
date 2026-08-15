@@ -1,0 +1,66 @@
+{
+  "//": [
+    "ARC install broker - package manifest.",
+    "",
+    "This file is the ONLY authority the broker has. A request from the shell carries",
+    "an 'id' from this file and nothing else - never a URL, a path, or an argument.",
+    "Everything that gets downloaded or executed is named here, by an administrator.",
+    "",
+    "Deployed to C:\\ProgramData\\ARC\\packages.json, writable by administrators only.",
+    "The worker refuses to run if that stops being true.",
+    "",
+    "Fields:",
+    "  id           required. Slug the shell asks for. [a-z0-9._-], max 64 chars.",
+    "  name         required. Human label for logs and the shell UI.",
+    "  url          https:// only. The installer to fetch.",
+    "  publisher    required with url. Substring that MUST appear in the downloaded",
+    "               file's Authenticode signer subject. The signature must also be",
+    "               Valid. This is the provenance pin - it survives vendor version",
+    "               bumps, which a sha256 pin does not.",
+    "  sha256       optional. Exact content pin. Use for installers that never change.",
+    "               When present it is enforced IN ADDITION to the publisher check.",
+    "  type         'exe' (default) or 'msi'.",
+    "  args         argument array passed to the installer. Silent switches go here.",
+    "               For msi the worker supplies /i /qn /norestart itself.",
+    "  verifyPath   optional. Path that must exist afterwards for the install to be",
+    "               reported OK, regardless of the installer's exit code.",
+    "  wingetId     optional. If winget is present it is preferred over url. This",
+    "               image has no winget, so it is unused here - kept so the same",
+    "               manifest works on the laptop.",
+    "",
+    "Adding an entry is a decision to let the console shell install that software",
+    "with nobody at the machine. Adding a wildcard, a caller-supplied url, or a",
+    "'skip verification' flag would hand arcshell the box. Don't."
+  ],
+
+  "packages": [
+    {
+      "id": "steam",
+      "name": "Steam",
+      "url": "https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe",
+      "publisher": "Valve",
+      "type": "exe",
+      "args": [ "/S" ],
+      "verifyPath": "C:\\Program Files (x86)\\Steam\\steam.exe",
+      "wingetId": "Valve.Steam"
+    },
+    {
+      "id": "vcredist2015-x64",
+      "name": "Visual C++ 2015-2022 Redistributable (x64)",
+      "url": "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+      "publisher": "Microsoft Corporation",
+      "type": "exe",
+      "args": [ "/install", "/quiet", "/norestart" ],
+      "wingetId": "Microsoft.VCRedist.2015+.x64"
+    },
+    {
+      "id": "vcredist2015-x86",
+      "name": "Visual C++ 2015-2022 Redistributable (x86)",
+      "url": "https://aka.ms/vs/17/release/vc_redist.x86.exe",
+      "publisher": "Microsoft Corporation",
+      "type": "exe",
+      "args": [ "/install", "/quiet", "/norestart" ],
+      "wingetId": "Microsoft.VCRedist.2015+.x86"
+    }
+  ]
+}

@@ -1,34 +1,36 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — on-screen keyboard  (ui/osk.css)
+   PC1 — on-screen keyboard  (ui/osk.css)
 
    Kept as a separate sheet rather than injected from JS: a strict CSP
    (`style-src 'self'`) blocks an inline <style> element but allows a
    same-origin stylesheet. osk.js probes for --osk-loaded below and links
    this file itself if the host page forgot to.
 
-   Every token is read through the host page's ARC variable of the same name
-   with the ARC value as the fallback, so the keyboard inherits index.html's
-   palette when it is dropped into the shell and still paints correctly on a
-   bare page (the test harness) that defines nothing.
+   Every token is read through the shell's variable of the same name with a
+   literal fallback, so the keyboard inherits index.html's palette when it is
+   dropped into the shell and still paints correctly on a bare page (the test
+   harness) that defines nothing. Keep the fallbacks LITERAL — a
+   self-referential var(--x, var(--x)) is invalid CSS and silently unsets.
    ═══════════════════════════════════════════════════════════════════════ */
 
 .arc-osk-probe{ --osk-loaded:1 }
 
 .arc-osk{
-  --osk-void:     var(--void,      #04060b);
-  --osk-deep:     var(--deep,      #0c1422);
-  --osk-haze:     var(--haze,      #17253c);
-  --osk-line:     var(--line,      #24344f);
-  --osk-ice:      var(--ice,       #e6f0ff);
-  --osk-steel:    var(--steel,     #7f96b8);
-  --osk-dim:      var(--dim,       #4e6183);
-  --osk-beam:     var(--beam,      #4c8dff);
-  --osk-beam-hot: var(--beam-hot,  #a6d4ff);
-  --osk-beam-deep:var(--beam-deep, #1b3f8a);
-  --osk-warn:     var(--warn,      #ffb457);
+  --osk-void:     var(--void, #0b0b0d);
+  --osk-deep:     var(--deep, #141417);
+  --osk-haze:     var(--haze, #1c1c21);
+  --osk-line:     var(--line, #2b2b32);
+  --osk-ice:      var(--ice, #f4f5f7);
+  --osk-steel:    var(--steel, #9c9da5);
+  --osk-dim:      var(--dim, #6a6b73);
+  --osk-beam:     var(--beam, #1a86ff);
+  --osk-beam-hot: var(--beam-hot, #57a6ff);
+  --osk-beam-deep:var(--beam-deep, #0b4fa8);
+  --osk-sel:      var(--sel, #ffffff);
+  --osk-warn:     var(--warn, #ffb457);
 
-  --osk-sans:    var(--sans,    "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
-  --osk-display: var(--display, "Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif);
+  --osk-sans:    var(--sans,    Inter,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
+  --osk-display: var(--display, "Inter Tight",Inter,"Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif);
   --osk-e-out:   var(--e-out,   cubic-bezier(.16,.84,.24,1));
 
   /* Sized for a three-metre read: a key cap is never below 44px tall and
@@ -37,13 +39,31 @@
   --osk-key-gap:  clamp(5px, .62vh, 10px);
   --osk-key-font: clamp(19px, .95vw + .55vh, 30px);
   --osk-mod-font: clamp(14px, .62vw + .42vh, 20px);
-  --osk-radius:   12px;
+  --osk-radius:   6px;
 
-  position:fixed; inset:0; z-index:60;
+  /* ── Above EVERY shell surface, without exception ──────────────────────
+     The keyboard is the shell's innermost modal: it can be opened over the
+     home screen (z 20-60), over the file explorer (.arcfs, z 50) and over
+     the browser chrome (.arcbw, z 820). It must out-rank all of them.
+
+     This was 60, and that number cost a day. `.arcbw` is `inset:0` with an
+     OPAQUE background, so with the browser open the keyboard rendered
+     underneath it and was simply not on the screen — while still taking
+     every pad press, because being modal is a JavaScript fact and has
+     nothing to do with what is painted. The bench log for that session is
+     unambiguous, and reads exactly like a dead controller:
+
+         [PAGE] OSK open: Add a site
+         [PAGE] pad down -> osk: down
+         [PAGE] pad left -> osk: left
+
+     Three keyboard actions, nothing visible. If a new full-screen surface
+     is ever added to the shell, its z-index goes BELOW this one. */
+  position:fixed; inset:0; z-index:900;
   display:flex; align-items:flex-end; justify-content:center;
   font-family:var(--osk-sans);
   color:var(--osk-ice);
-  background:rgba(2,4,9,.62);
+  background:rgba(0,0,0,.62);
   -webkit-backdrop-filter:blur(18px);
   backdrop-filter:blur(18px);
   opacity:0; pointer-events:none;
@@ -83,8 +103,8 @@
    tells you what you are typing into. */
 .osk-title{
   font-size:clamp(12px, .55vw + .40vh, 18px);
-  letter-spacing:.34em; text-transform:uppercase;
-  color:var(--osk-beam-hot);
+  letter-spacing:-.01em; font-weight:600;
+  color:var(--osk-ice);
   margin-bottom:10px;
 }
 
@@ -95,8 +115,8 @@
   display:flex; align-items:stretch; gap:0;
   border:1px solid var(--osk-line);
   border-radius:14px;
-  background:rgba(12,20,34,.78);
-  box-shadow:0 10px 30px rgba(2,4,9,.55), inset 0 1px 0 rgba(255,255,255,.03);
+  background:rgba(20,20,24,.78);
+  box-shadow:0 10px 30px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.03);
   transition:border-color .25s var(--osk-e-out), box-shadow .25s var(--osk-e-out);
 }
 .osk-field.is-hit{ animation:osk-nudge .28s var(--osk-e-out) }
@@ -110,7 +130,7 @@
   display:flex; align-items:center;
   padding:clamp(10px,1.5vh,18px) clamp(12px,1vw,20px);
   overflow:hidden; white-space:pre;
-  font-family:var(--osk-display); font-weight:300;
+  font-family:var(--osk-display); font-weight:600; letter-spacing:-.02em;
   /* CSS math needs whitespace around +: "1.1vw+.7vh" parses as an invalid
      value and the whole declaration is dropped, silently. */
   font-size:clamp(20px, 1.1vw + .7vh, 32px);
@@ -125,7 +145,7 @@
   display:inline-block; flex:0 0 auto;
   width:2px; height:1.15em; margin:0 1px;
   background:var(--osk-beam-hot);
-  box-shadow:0 0 10px rgba(166,212,255,.9);
+  box-shadow:0 0 10px rgba(255,255,255,.9);
   animation:osk-blink 1.06s steps(1,end) infinite;
 }
 @keyframes osk-blink{ 0%,55%{opacity:1} 56%,100%{opacity:0} }
@@ -144,7 +164,7 @@
 .osk-line{
   display:flex; align-items:center; justify-content:space-between;
   margin-top:8px; min-height:16px;
-  font-size:11.5px; letter-spacing:.18em; text-transform:uppercase;
+  font-size:12.5px; letter-spacing:0;
   color:var(--osk-dim);
 }
 .osk-count{ font-variant-numeric:tabular-nums; letter-spacing:.1em }
@@ -163,11 +183,11 @@
   height:var(--osk-key-h);
   border:1px solid var(--osk-line);
   border-radius:var(--osk-radius);
-  background:linear-gradient(180deg, rgba(23,37,60,.92), rgba(12,20,34,.92));
+  background:linear-gradient(180deg, rgba(28,28,33,.92), rgba(20,20,24,.92));
   color:var(--osk-ice);
   font-size:var(--osk-key-font);
   line-height:1;
-  box-shadow:0 3px 10px rgba(2,4,9,.45), inset 0 1px 0 rgba(255,255,255,.045);
+  box-shadow:0 3px 10px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.045);
   transition:background .18s var(--osk-e-out), border-color .18s var(--osk-e-out),
              color .18s var(--osk-e-out), transform .18s var(--osk-e-out),
              box-shadow .18s var(--osk-e-out);
@@ -181,7 +201,7 @@
 .osk-key.osk-mod svg{ width:1.35em; height:1.35em }
 
 .osk-mod{
-  background:linear-gradient(180deg, rgba(16,26,44,.95), rgba(9,15,26,.95));
+  background:linear-gradient(180deg, rgba(20,20,24,.95), rgba(9,15,26,.95));
   color:var(--osk-steel);
   font-size:var(--osk-mod-font);
   letter-spacing:.14em; text-transform:uppercase;
@@ -191,42 +211,42 @@
 /* The commit key is the primary action: outlined in the accent even when it
    is not the focused key, so "how do I finish?" is answerable at a glance. */
 .osk-commit{
-  border-color:rgba(76,141,255,.55);
+  border-color:rgba(255,255,255,.55);
   color:var(--osk-beam-hot);
   background:linear-gradient(180deg, rgba(27,63,138,.55), rgba(12,26,58,.7));
   font-weight:600;
 }
 
 /* Shift, lit while armed, brighter while locked. */
-.osk-key.is-on{ color:var(--osk-beam-hot); border-color:rgba(166,212,255,.45) }
+.osk-key.is-on{ color:var(--osk-beam-hot); border-color:rgba(255,255,255,.45) }
 .osk-key.is-lock{
   color:var(--osk-void);
-  background:linear-gradient(180deg,#cfe4ff,#a6d4ff);
-  border-color:#cfe4ff;
+  background:linear-gradient(180deg,var(--ice),var(--ice));
+  border-color:var(--ice);
 }
 
 .osk-reveal{ flex:1; min-width:0; height:auto; padding:8px 10px; border-radius:10px }
 .osk-reveal .osk-keytext{ overflow:hidden; text-overflow:clip }
 
-.arc-osk .osk-key:hover{ border-color:rgba(166,212,255,.4) }
+.arc-osk .osk-key:hover{ border-color:rgba(255,255,255,.4) }
 
 /* ── focus: the one thing that must be unmistakable from the sofa ──────
    Not a border treatment — a filled beam cap with dark text, lifted off the
    sheet and glowing. Nothing else on the keyboard looks remotely like it. */
 .osk-key.is-focus{
-  background:linear-gradient(180deg,#79aeff,#3c7ae8);
-  border-color:#cfe4ff;
-  color:#04060b;
+  background:var(--beam);
+  border-color:var(--ice);
+  color:var(--void);
   font-weight:600;
   transform:translateY(-3px);
   box-shadow:
-    0 0 0 2px rgba(207,228,255,.55),
-    0 12px 28px rgba(2,4,9,.7),
-    0 0 34px rgba(76,141,255,.55);
+    0 0 0 2px rgba(255,255,255,.55),
+    0 12px 28px rgba(0,0,0,.7),
+    0 0 34px rgba(255,255,255,.55);
   z-index:1;
 }
 .osk-key.is-focus svg{ stroke-width:1.9 }
-.osk-key.is-focus.is-lock{ background:linear-gradient(180deg,#e8f2ff,#a6d4ff) }
+.osk-key.is-focus.is-lock{ background:var(--ice) }
 
 /* press feedback */
 .osk-key.is-hit{ animation:osk-press .18s var(--osk-e-out) }
@@ -249,10 +269,14 @@
   width:17px; height:17px; fill:none; stroke:currentColor;
   stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round;
 }
+/* The face symbols carry Sony's heavier absolute stroke, square-cut ends
+   and sharp corners — see the note beside PAD_GLYPH in index.html. */
+.osk-glyph svg .face{ stroke-width:1.9; stroke-linecap:butt; stroke-linejoin:miter }
+.osk-glyph svg .tri{ stroke-linejoin:miter }
 .osk-padkey{
   display:inline-grid; place-items:center; height:20px; padding:0 7px;
   border:1px solid var(--osk-line); border-radius:5px;
-  background:rgba(12,20,34,.7);
+  background:rgba(20,20,24,.7);
   font-size:10px; letter-spacing:.14em; color:var(--osk-steel);
 }
 

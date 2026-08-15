@@ -1,4 +1,4 @@
-/* ARC OS - captured FileApi output, replayed by files-test.html.
+/* PC1 - captured FileApi output, replayed by files-test.html.
    REAL output from ArcOs.Files.FileApi.Handle() on the bench DESKTOP-6BCSJ3P,
    captured as the standard user arcshell (not elevated) on 2026-08-14.
    Replaying it proves ui/files.js parses what the native layer actually emits,

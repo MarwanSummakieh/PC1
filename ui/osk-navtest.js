@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — on-screen keyboard: grid navigation test  (ui/osk-navtest.js)
+   PC1 — on-screen keyboard: grid navigation test  (ui/osk-navtest.js)
 
    Grid navigation is where on-screen keyboards fail, and the failures are
    very visible: a cursor that sticks in a corner, a "down" that lands two

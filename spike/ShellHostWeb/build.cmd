@@ -14,6 +14,13 @@ REM FileApi.cs (the native file-operations layer behind the file explorer, ui/fi
 REM same deal: no extra /reference, call it as ArcOs.Files.FileApi.Handle(json). Its namespace
 REM and helper type names are distinct from SystemApi's, so the two coexist in one binary.
 REM Build its standalone harness with build-file-cli.cmd.
+REM
+REM LibraryApi.cs (the installed-software scan behind the home rail, ui/library.js) is the third:
+REM call it as ArcOs.Library.LibraryApi.Handle(json). Namespace ArcOs.Library, helper types
+REM prefixed L*, so all three coexist. It is the only one that needs System.Drawing.dll - already
+REM referenced below because ShellHostWeb.cs is a WinForms host - and it needs it only for
+REM lib.icon, which turns an HICON or an on-disk logo into a PNG data URI.
+REM Build its standalone harness with build-lib-cli.cmd.
 
 setlocal
 set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
@@ -40,11 +47,14 @@ if not exist "%OUTDIR%" mkdir "%OUTDIR%"
   /reference:System.Core.dll ^
   /reference:System.Drawing.dll ^
   /reference:System.Windows.Forms.dll ^
+  /reference:System.IO.Compression.dll ^
+  /reference:System.IO.Compression.FileSystem.dll ^
   /reference:"%SDK%\lib\net462\Microsoft.Web.WebView2.Core.dll" ^
   /reference:"%SDK%\lib\net462\Microsoft.Web.WebView2.WinForms.dll" ^
   "%HERE%ShellHostWeb.cs" ^
   "%HERE%SystemApi.cs" ^
-  "%HERE%FileApi.cs"
+  "%HERE%FileApi.cs" ^
+  "%HERE%LibraryApi.cs"
 
 if errorlevel 1 (
   echo BUILD FAILED

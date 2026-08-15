@@ -33,6 +33,8 @@ Firmware → no Windows logo → no logon screen → `arcshell` signed in automa
 | Settings | Nine panels on real state: network, display, sound, controllers, power, storage, system/update, date & time, about. |
 | File explorer | Real file management with recycle/permanent delete, copy/move as cancellable jobs with progress, 10,000-entry folders at 46 ms first paint. |
 | Browser | Tabs, address bar, TLS chip, history, per-site zoom, pinned apps, media keys, spatial + cursor navigation. Crash-isolated from the shell. |
+| Extensions | Installable from the sofa: the sheet lists `.zip`/`.crx` files the browser has downloaded and unpacked folders on a USB stick, unpacks the chosen one into `C:\ArcOS\extensions` and adds it to the profile live. On/off and remove-with-confirmation too. Bench-verified by pad presses only — install, running, remove, files deleted. |
+| Downloads | Taken off Chromium at `DownloadStarting` (its own flyout is suppressed) and drawn by the shell: progress chip in the chrome row, a focusable Downloads sheet with pause/resume/cancel/forget, show-in-Files, and a stated reason for every failure. Bench-verified end to end against a local server, 4 MB undeclared-length and 24 MB declared-length, both landing in `%USERPROFILE%\Downloads`. |
 
 ## Known gaps — read before trusting anything above
 
@@ -47,8 +49,25 @@ Firmware → no Windows logo → no logon screen → `arcshell` signed in automa
   good at 3440×1440 from three metres.
 * **Wi-Fi and Bluetooth panels** cannot be finished on the bench — no radios. Needs a USB adapter.
 * **USB removable-drive detection and eject** have never run against hardware. Needs a stick plugged in.
-* **`hostinfo` race** (pre-existing): the host's capability reply can beat the page's listener, leaving
-  `Host.caps` all false and the About panel misreporting. Intermittent; deserves its own pass.
+* ~~**`hostinfo` race**~~ — **fixed 2026-08-14.** The host answered the shim's document-created `ready`
+  before index.html had attached its own listener, and WebView2 drops a message with no listener, so
+  `Host.caps` stayed all false on a host that had everything. The page now re-sends `ready` itself the
+  moment its listener exists and reads the reply it can actually hear; `ready` rather than a new verb so
+  the already-deployed binaries are repaired too. Verified 10/10 consecutive bench runs on
+  `ArcShellHostWeb-v5.exe`, logs under `C:\ArcOS\web\hostinfo-runs\`. Run 5 caught the old race live —
+  one `hostinfo` line instead of two, i.e. the unsolicited reply was lost and only the requested one
+  arrived.
+* **The bench rebooted uncleanly twice on 2026-08-14** (00:50 and 11:17), Kernel-Power 41 with no
+  bugcheck, no minidump, no `MEMORY.DMP` — so a hard hang or power loss, not a BSOD. The 11:17 one
+  killed a verification sweep mid-run. Windows logged `RADAR_PRE_LEAK_64` against `msedgewebview2.exe`
+  four minutes earlier, so memory pressure on the 8 GB box is a suspect but not proven. Untriaged, and
+  it undermines every long unattended run on the machine everything is verified on.
+* **The live shell restarted once mid-sweep** (12:09:25, during run 4) with no reboot and no session
+  change — Shell Launcher silently restarting it on a clean exit. No WER report, no Application or
+  System event, so it did not crash; why it exited is unknown. It cannot be known: the Shell Launcher
+  shell runs with **no `--log`**, so every restart it does is invisible. Worth noting that the harness
+  starts the test host *into the live arcshell session*, where it shares the DualSense HID and the
+  foreground with the running shell. Untriaged, and unrelated to the `hostinfo` fix.
 * The bench is an **evaluation** licence with a 90-day clock.
 
 ## Things learned that changed the design

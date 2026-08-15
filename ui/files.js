@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — file explorer  (ui/files.js)
+   PC1 — file explorer  (ui/files.js)
 
    A controller-driven file manager. No dependencies, no build step, no module
    system: this file defines one global, `ArcFiles`, in the same plain-JS style
@@ -157,7 +157,7 @@ function typeLabel(entry) {
 }
 
 /* ═══ Inline SVG ═══════════════════════════════════════════════════════
-   Same 24×24 stroke language as every other icon in ARC OS. */
+   Same 24×24 stroke language as every other icon in PC1. */
 
 var ICON = {
   folder:  '<path d="M3.2 6.6a1.6 1.6 0 0 1 1.6-1.6h4l2 2.4h7.4a1.6 1.6 0 0 1 1.6 1.6v8.4a1.6 1.6 0 0 1-1.6 1.6H4.8a1.6 1.6 0 0 1-1.6-1.6z"/>',
@@ -205,20 +205,32 @@ function svg(name, cls) {
 
 /* ── DualSense glyphs ─────────────────────────────────────────────────
    Lifted verbatim from index.html's vocabulary so the two hint bars are the
-   same object. Generic geometric shapes; nothing here is anyone's mark. */
+   same object — read the long note beside PAD_GLYPH there for where each of
+   these shapes comes from and why the PS button is not among them. Keep the
+   two tables in step: a file explorer whose Cross is a different Cross from
+   the home screen's is worse than either drawing on its own. */
 var PAD_GLYPH = {
-  cross:    '<circle cx="12" cy="12" r="9.2"/><path d="M8.6 8.6 15.4 15.4M15.4 8.6 8.6 15.4"/>',
-  circle:   '<circle cx="12" cy="12" r="9.2"/><circle cx="12" cy="12" r="4"/>',
-  square:   '<circle cx="12" cy="12" r="9.2"/><rect x="8.2" y="8.2" width="7.6" height="7.6" rx="1.1"/>',
-  triangle: '<circle cx="12" cy="12" r="9.2"/><path d="M12 7.3 16.2 15.1H7.8z"/>',
-  dpad:     '<path d="M9.6 3.7h4.8v5.9h5.9v4.8h-5.9v5.9H9.6v-5.9H3.7V9.6h5.9z"/>',
-  dpadLR:   '<path d="M9.6 3.7h4.8v5.9h5.9v4.8h-5.9v5.9H9.6v-5.9H3.7V9.6h5.9z" opacity=".45"/>'
-          + '<path class="solid" d="M8.6 10.4H5.2v3.2h3.4z"/><path class="solid" d="M15.4 10.4h3.4v3.2h-3.4z"/>',
-  dpadUD:   '<path d="M9.6 3.7h4.8v5.9h5.9v4.8h-5.9v5.9H9.6v-5.9H3.7V9.6h5.9z" opacity=".45"/>'
-          + '<path class="solid" d="M10.4 8.6V5.2h3.2v3.4z"/><path class="solid" d="M10.4 15.4v3.4h3.2v-3.4z"/>',
-  l1:       '<rect x="2.4" y="6.4" width="19.2" height="11.2" rx="3.4"/><text class="lbl" x="12" y="15.3" text-anchor="middle">L1</text>',
-  r1:       '<rect x="2.4" y="6.4" width="19.2" height="11.2" rx="3.4"/><text class="lbl" x="12" y="15.3" text-anchor="middle">R1</text>',
-  options:  '<rect x="7.2" y="4.4" width="9.6" height="15.2" rx="2.6"/><path d="M9.9 9.2h4.2M9.9 12h4.2M9.9 14.8h2.6"/>'
+  cross:    '<path class="face" d="M5.7 5.7 18.3 18.3M18.3 5.7 5.7 18.3"/>',
+  circle:   '<circle class="face" cx="12" cy="12" r="6.15"/>',
+  square:   '<rect class="face" x="6.45" y="6.45" width="11.1" height="11.1"/>',
+  triangle: '<path class="face tri" d="M12 3.7 20 17.9H4z"/>',
+  dpad:     '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z"/>'
+          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z"/>'
+          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z"/>'
+          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z"/>',
+  dpadLR:   '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z" opacity=".3"/>'
+          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z" opacity=".3"/>'
+          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z"/>'
+          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z"/>',
+  dpadUD:   '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z"/>'
+          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z"/>'
+          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z" opacity=".3"/>'
+          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z" opacity=".3"/>',
+  l1:       '<rect x="1.2" y="6.8" width="21.6" height="10.4" rx="2.6"/>'
+          + '<text class="lbl" x="12" y="15.1" text-anchor="middle">L1</text>',
+  r1:       '<rect x="1.2" y="6.8" width="21.6" height="10.4" rx="2.6"/>'
+          + '<text class="lbl" x="12" y="15.1" text-anchor="middle">R1</text>',
+  options:  '<path class="solid" d="M3 4.76h18v2H3zM3 11h18v2H3zM3 17.24h18v2H3z"/>'
 };
 
 function glyphSVG(name) {

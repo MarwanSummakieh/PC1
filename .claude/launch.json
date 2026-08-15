@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "arc-stage",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [".stage/serve.mjs"],
+      "port": 8777
+    },
+    {
+      "name": "arc-stage-alt",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [".stage/serve-dl.mjs"],
+      "port": 8788
+    }
+  ]
+}

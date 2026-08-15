@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — browser chrome  (ui/browser.css)
+   PC1 — browser chrome  (ui/browser.css)
 
    The chrome only. The web page itself is drawn by a second WebView2 that
    the host positions over the .arcbw-stage rectangle below — a real child
@@ -17,117 +17,202 @@
 .arcbw{
   position:fixed; inset:0; z-index:820;
   display:none; flex-direction:column;
-  background:var(--void, #04060b);
-  color:var(--ice, #e6f0ff);
+  background:var(--void);
+  color:var(--ice);
   font-family:var(--sans, "Segoe UI", system-ui, sans-serif);
 }
 .arcbw.is-open{ display:flex; }
 
 /* ── The chrome bar ──────────────────────────────────────────────────── */
 
+/* ── Safe area ───────────────────────────────────────────────────────
+   Two separate things are being respected here and they are not the same.
+
+   --edge is the shell's own margin, a design value shared with the rest of
+   the interface. env(safe-area-inset-*) is the DISPLAY telling us it is
+   eating the edges — an overscanning television, which crops several
+   percent off every side and is why a control flush to the right margin is
+   a control the human can see half of. They add: the design margin is
+   measured from the edge of what is actually visible, not from the edge of
+   the framebuffer.
+
+   The fallback in env() is 0px, so on a monitor that reports nothing this
+   is exactly the old layout. */
+:root{
+  --arcbw-safe-l: calc(var(--edge, 2.5rem) + env(safe-area-inset-left, 0px));
+  --arcbw-safe-r: calc(var(--edge, 2.5rem) + env(safe-area-inset-right, 0px));
+}
+
 .arcbw-chrome{
   flex:0 0 auto;
   display:flex; flex-direction:column; gap:.55rem;
-  padding:calc(var(--safe-y, 1.6rem) * .75) var(--edge, 2.5rem) .7rem;
-  background:linear-gradient(180deg, #0a1220 0%, #08101c 100%);
-  border-bottom:.0625rem solid var(--line, #24344f);
+  padding:calc(var(--safe-y, 1.6rem) * .75) var(--arcbw-safe-r) .7rem var(--arcbw-safe-l);
+  background:var(--deep);
+  border-bottom:.0625rem solid var(--line);
+  /* The backstop. Nothing in the chrome may paint outside the chrome — if a
+     future control does overflow, it is clipped here rather than drawn over
+     the edge of the display where it cannot be reached or seen. */
+  min-width:0; overflow:hidden;
 }
 .arcbw.is-immersive .arcbw-chrome{ display:none; }
 .arcbw.is-immersive .arcbw-hints{ display:none; }
 
 /* ── Tab strip ───────────────────────────────────────────────────────── */
 
-.arcbw-tabs{ display:flex; gap:.5rem; align-items:stretch; min-height:2.9rem; }
+.arcbw-tabs{ display:flex; gap:.5rem; align-items:stretch; min-height:2.9rem; min-width:0; }
 
+/* min-width:9rem was the overflow. It is a FLOOR, so four tabs could not be
+   made to fit in less than 36rem however narrow the display got, and the
+   strip pushed the + button off the right-hand end — where it could not be
+   seen and, because the focus ring followed it off-screen, could not be
+   used either. flex-basis says the same "about nine rem each" as an
+   intention while still allowing the row to shrink, and min-width:0 is what
+   actually lets a flex item go below its content width. */
 .arcbw-tab{
   position:relative;
   display:flex; align-items:center; gap:.55rem;
-  min-width:9rem; max-width:20rem; flex:0 1 auto;
+  min-width:0; max-width:20rem; flex:1 1 9rem;
   padding:.4rem .85rem;
   border-radius:.5rem .5rem 0 0;
-  background:#0e1828;
-  border:.0625rem solid var(--line, #24344f);
+  background:var(--haze);
+  border:.0625rem solid var(--line);
   border-bottom-color:transparent;
-  color:var(--steel, #7f96b8);
+  color:var(--steel);
   font-size:.92rem; line-height:1.25;
   overflow:hidden;
 }
-.arcbw-tab.is-active{ background:#16233a; color:var(--ice, #e6f0ff); }
+.arcbw-tab.is-active{ background:var(--haze); color:var(--ice); }
 .arcbw-tab[data-focus="on"]{
-  outline:.1875rem solid var(--beam, #4c8dff);
-  outline-offset:-.1875rem;
-  box-shadow:0 0 1.6rem rgba(76,141,255,.4);
+  outline:.125rem solid var(--sel, #fff);
+  outline-offset:-.125rem;
 }
 .arcbw-tab-fav{
   flex:0 0 auto; width:1.15rem; height:1.15rem; border-radius:.2rem;
-  background:#22344f; object-fit:contain;
+  background:#26262e; object-fit:contain;
 }
 .arcbw-tab-title{ flex:1 1 auto; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .arcbw-tab.is-loading .arcbw-tab-fav{ animation:arcbw-spin 1.1s linear infinite; border-radius:50%;
-  border:.125rem solid var(--beam-deep, #1b3f8a); border-top-color:var(--beam, #4c8dff); background:none; }
-.arcbw-tab.is-crashed{ border-color:#7a2f3d; color:#ff9db0; }
+  border:.125rem solid var(--beam-deep); border-top-color:var(--beam); background:none; }
+.arcbw-tab.is-crashed{ border-color:#5a2b31; color:var(--bad); }
 @keyframes arcbw-spin{ to{ transform:rotate(360deg); } }
 
 .arcbw-newtab{
   flex:0 0 auto; width:2.6rem;
   display:grid; place-items:center;
   border-radius:.5rem .5rem 0 0;
-  background:#0b1524; border:.0625rem solid var(--line, #24344f); border-bottom-color:transparent;
-  color:var(--steel, #7f96b8); font-size:1.3rem;
+  background:var(--deep); border:.0625rem solid var(--line); border-bottom-color:transparent;
+  color:var(--steel); font-size:1.3rem;
 }
-.arcbw-newtab[data-focus="on"]{ outline:.1875rem solid var(--beam, #4c8dff); outline-offset:-.1875rem; }
+.arcbw-newtab[data-focus="on"]{ outline:.125rem solid var(--sel, #fff); outline-offset:-.125rem; }
 .arcbw-newtab[aria-disabled="true"]{ opacity:.35; }
 
 /* ── Address row ─────────────────────────────────────────────────────── */
 
-.arcbw-omni{ display:flex; gap:.6rem; align-items:stretch; }
+.arcbw-omni{ display:flex; gap:.6rem; align-items:stretch; min-width:0; }
 
 .arcbw-addr{
   flex:1 1 auto; min-width:0;
   display:flex; align-items:center; gap:.7rem;
   padding:.5rem 1rem;
-  background:#0b1524;
-  border:.0625rem solid var(--line, #24344f);
+  background:var(--deep);
+  border:.0625rem solid var(--line);
   border-radius:.55rem;
   font-size:1.05rem;
 }
 .arcbw-addr[data-focus="on"]{
-  border-color:var(--beam, #4c8dff);
-  box-shadow:0 0 0 .125rem rgba(76,141,255,.35), 0 0 1.8rem rgba(76,141,255,.28);
-  background:#0e1c30;
+  border-color:transparent;
+  box-shadow:0 0 0 .125rem var(--sel, #fff);
+  background:var(--haze);
 }
 .arcbw-tls{ flex:0 0 auto; display:flex; align-items:center; gap:.35rem; font-size:.85rem; letter-spacing:.02em; }
 .arcbw-tls svg{ width:1.05rem; height:1.05rem; fill:none; stroke:currentColor; stroke-width:1.7; }
-.arcbw-tls.is-secure{ color:var(--good, #56d6a0); }
-.arcbw-tls.is-plain{ color:var(--warn, #ffb457); }
-.arcbw-tls.is-none{ color:var(--dim, #4e6183); }
+.arcbw-tls.is-secure{ color:var(--good); }
+.arcbw-tls.is-plain{ color:var(--warn); }
+.arcbw-tls.is-none{ color:var(--dim); }
 .arcbw-url{
   flex:1 1 auto; min-width:0;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
-  color:var(--ice, #e6f0ff);
+  color:var(--ice);
 }
-.arcbw-url .arcbw-host{ color:var(--ice, #e6f0ff); font-weight:600; }
-.arcbw-url .arcbw-rest{ color:var(--steel, #7f96b8); }
-.arcbw-url.is-placeholder{ color:var(--dim, #4e6183); }
+.arcbw-url .arcbw-host{ color:var(--ice); font-weight:600; }
+.arcbw-url .arcbw-rest{ color:var(--steel); }
+.arcbw-url.is-placeholder{ color:var(--dim); }
 
+/* The zoom and Menu chips never shrink and never wrap: they are the two
+   controls the human is most likely to be reaching for, and a chip that has
+   given up half its label to make room is worse than an address bar that is
+   a little shorter. The address bar carries min-width:0 precisely so that it
+   is the thing that yields. */
 .arcbw-chip{
   flex:0 0 auto;
   display:flex; align-items:center; gap:.45rem;
+  white-space:nowrap;
   padding:.5rem .85rem;
-  background:#0b1524; border:.0625rem solid var(--line, #24344f); border-radius:.55rem;
-  color:var(--steel, #7f96b8); font-size:.92rem; white-space:nowrap;
+  background:var(--deep); border:.0625rem solid var(--line); border-radius:.55rem;
+  color:var(--steel); font-size:.92rem; white-space:nowrap;
 }
-.arcbw-chip[data-focus="on"]{ border-color:var(--beam, #4c8dff); color:var(--ice, #e6f0ff);
-  box-shadow:0 0 0 .125rem rgba(76,141,255,.35); }
+.arcbw-chip[data-focus="on"]{ border-color:transparent; color:var(--ice);
+  box-shadow:0 0 0 .125rem var(--sel, #fff); }
 .arcbw-chip svg{ width:1.15rem; height:1.15rem; fill:none; stroke:currentColor; stroke-width:1.7;
   stroke-linecap:round; stroke-linejoin:round; }
 .arcbw-chip[aria-disabled="true"]{ opacity:.35; }
+
+/* ── The downloads chip ──────────────────────────────────────────────
+   In the chrome row only while there is a download to talk about, because
+   a control that is permanently there and permanently empty teaches people
+   to stop reading that part of the screen. browser.js adds .is-off when the
+   list is empty and takes the chip out of the D-pad's row at the same time —
+   an element that is display:none but still in the cursor's list is a press
+   that appears to do nothing.
+
+   The progress bar is a child of the chip rather than a border or a
+   background-image so that it can be positioned under the label without
+   touching the chip's own box: this row is the one part of the browser
+   whose layout is shared with the address bar, and the address bar yields
+   its width to everything else here. */
+.arcbw-chip.is-dl{ position:relative; overflow:hidden; }
+.arcbw-chip.is-dl.is-off{ display:none; }
+.arcbw-chip.is-dl.is-bad{ color:var(--bad); border-color:#5a2b31; }
+.arcbw-chip-bar{
+  position:absolute; left:0; bottom:0; height:.1875rem; width:0;
+  background:var(--beam, #4d8dff);
+  transition:width .25s var(--e-out, ease);
+}
+.arcbw-chip.is-bad .arcbw-chip-bar{ background:var(--bad); }
+/* No declared length, so no percentage to draw. A bar that sat at 0% while
+   bytes were arriving would read as a stuck download; a dim full-width bar
+   reads as "working, length unknown", which is the truth. */
+.arcbw-chip.is-unknown .arcbw-chip-bar{ opacity:.4; }
+
+/* ── Download rows ───────────────────────────────────────────────────
+   The list row shape with a progress bar under the two lines of text. The
+   bar keeps its space in every state so a row does not change height when a
+   download finishes and the cursor does not move under the human's thumb. */
+.arcbw-bar{
+  margin-top:.45rem; height:.25rem; border-radius:.125rem;
+  background:var(--haze, #1b2536); overflow:hidden;
+}
+.arcbw-row[data-focus="on"] .arcbw-bar{ background:rgba(0,0,0,.35); }
+.arcbw-bar > i{
+  display:block; height:100%; width:0;
+  background:var(--beam, #4d8dff);
+  transition:width .25s var(--e-out, ease);
+}
+.arcbw-drow.is-done .arcbw-bar > i{ background:var(--good); }
+.arcbw-drow.is-paused .arcbw-bar > i{ background:var(--warn); }
+.arcbw-drow.is-failed .arcbw-bar > i,
+.arcbw-drow.is-cancelled .arcbw-bar > i{ background:var(--bad); }
+.arcbw-drow.is-cancelled .arcbw-row-label,
+.arcbw-drow.is-cancelled .arcbw-row-tail{ color:var(--dim); }
+/* The name of the file is the thing being looked for in a list of them. */
+.arcbw-drow .arcbw-row-label{ font-weight:600; }
+.arcbw-drow .arcbw-row-tail{ font-variant-numeric:tabular-nums; min-width:4.5rem; text-align:right; }
 
 /* ── The hole the content WebView occupies ───────────────────────────── */
 
 .arcbw-stage{
   flex:1 1 auto; position:relative; min-height:0;
-  background:#05080f;
+  background:var(--void);
 }
 /* A page that has not painted yet, or a crashed one, shows this instead of
    a hole in the interface. */
@@ -137,78 +222,128 @@
   gap:.9rem; text-align:center; padding:0 12%;
 }
 .arcbw-stage.is-blank .arcbw-stage-msg{ display:flex; }
-.arcbw-stage-msg h3{ margin:0; font-family:var(--display, inherit); font-weight:300; font-size:2rem; }
-.arcbw-stage-msg p{ margin:0; color:var(--steel, #7f96b8); font-size:1.05rem; max-width:44rem; }
+.arcbw-stage-msg h3{ margin:0; font-family:var(--display, inherit); font-weight:700; letter-spacing:-.03em; font-size:2rem; }
+.arcbw-stage-msg p{ margin:0; color:var(--steel); font-size:1.05rem; max-width:44rem; }
 
 /* ── Full-screen surfaces (start page, history, menu, tab switcher) ──── */
 
 .arcbw-sheet{
   position:absolute; inset:0;
   display:none; flex-direction:column;
-  background:linear-gradient(180deg,#070d18 0%, #04060b 70%);
-  padding:calc(var(--safe-y, 1.6rem)) var(--edge, 2.5rem);
+  background:var(--void);
+  padding:calc(var(--safe-y, 1.6rem)) var(--arcbw-safe-r) calc(var(--safe-y, 1.6rem)) var(--arcbw-safe-l);
   overflow:hidden;
 }
 .arcbw-sheet.is-open{ display:flex; }
 .arcbw-sheet h2{
-  margin:0 0 .3rem; font-family:var(--display, inherit); font-weight:300;
-  font-size:2.3rem; letter-spacing:-.01em;
+  margin:0 0 .3rem; font-family:var(--display, inherit); font-weight:700;
+  font-size:2.1rem; letter-spacing:-.03em;
 }
-.arcbw-sheet .arcbw-sub{ margin:0 0 1.4rem; color:var(--steel, #7f96b8); font-size:1.05rem; }
+.arcbw-sheet .arcbw-sub{ margin:0 0 1.4rem; color:var(--steel); font-size:1.05rem; }
 
 /* Pinned apps: big, because this is the path most people will use. */
+/* Same clip, worse symptom: these tiles GROW when focused, so the scroller
+   was cutting the ring and the raised edge off the first and last column.
+   The padding is the tile's overshoot (1.035 of a 15rem tile is about a
+   quarter of a rem each side) plus the ring itself. */
 .arcbw-pins{
   display:grid; gap:1.1rem;
   grid-template-columns:repeat(auto-fill, minmax(15rem, 1fr));
-  align-content:start; overflow:auto; padding-bottom:1rem;
+  align-content:start; overflow:auto;
+  padding:.4rem .4rem 1rem; margin:-.4rem -.4rem 0;
 }
 .arcbw-pin{
   position:relative; aspect-ratio:16/9;
-  border-radius:.9rem; overflow:hidden;
-  border:.0625rem solid var(--line, #24344f);
+  border-radius:.5rem; overflow:hidden;
+  border:.0625rem solid var(--line);
   display:flex; flex-direction:column; justify-content:flex-end;
   padding:1rem 1.1rem;
   transition:transform .16s var(--e-out, ease), box-shadow .16s var(--e-out, ease);
 }
 .arcbw-pin[data-focus="on"]{
-  transform:scale(1.045);
-  border-color:var(--beam, #4c8dff);
-  box-shadow:0 0 0 .1875rem var(--beam, #4c8dff), 0 1.4rem 3rem rgba(0,0,0,.6),
-             0 0 3rem rgba(76,141,255,.35);
+  transform:scale(1.035);
+  border-color:transparent;
+  box-shadow:inset 0 0 0 .1875rem var(--sel, #fff), 0 1.4rem 3rem rgba(0,0,0,.6);
   z-index:2;
 }
 .arcbw-pin-name{ font-size:1.35rem; font-weight:600; text-shadow:0 .125rem .5rem rgba(0,0,0,.7); }
-.arcbw-pin-host{ font-size:.9rem; color:rgba(230,240,255,.72); text-shadow:0 .125rem .5rem rgba(0,0,0,.7); }
+.arcbw-pin-host{ font-size:.9rem; color:var(--steel); text-shadow:0 .125rem .5rem rgba(0,0,0,.7); }
 .arcbw-pin-glyph{
   position:absolute; top:1rem; right:1.1rem;
   width:2.4rem; height:2.4rem; border-radius:.6rem;
-  background:rgba(4,6,11,.5); display:grid; place-items:center;
+  background:rgba(11,11,13,.5); display:grid; place-items:center;
   font-size:1.25rem; font-weight:700;
 }
-.arcbw-pin.is-add{ background:#0a1322; align-items:center; justify-content:center; }
-.arcbw-pin.is-add .arcbw-pin-name{ color:var(--steel, #7f96b8); }
+.arcbw-pin.is-add{ background:var(--deep); align-items:center; justify-content:center; }
+.arcbw-pin.is-add .arcbw-pin-name{ color:var(--steel); }
+
+/* ── The address tile ────────────────────────────────────────────────
+   First cell of the grid and the one the cursor starts on, so it is the
+   only tile that is drawn as a call to action rather than as a site. It
+   spans the full row on purpose: it is not one of the pinned apps, it is
+   the way to everything that is not pinned, and on a console with no pins
+   yet it is the entire reason the start page is not a dead end. */
+.arcbw-pin.is-go{
+  grid-column:1 / -1;
+  aspect-ratio:auto; min-height:7.5rem;
+  background:linear-gradient(140deg, var(--haze, #1b2536) 0%, var(--deep, #0d131d) 76%);
+  border-color:var(--line);
+  justify-content:center; gap:.3rem;
+}
+/* The pins grow slightly when focused. This one must not: it is already the
+   full width of the grid, and `.arcbw-pins` scrolls — so scaling it pushed
+   both ends under the clip and the label read "earch or enter an addres".
+   The inset ring is the whole focus signal here. */
+.arcbw-pin.is-go[data-focus="on"]{ transform:none; }
+.arcbw-pin.is-go .arcbw-pin-name{ font-size:1.6rem; }
+/* Centred rather than pinned to the top corner: on a tile this wide a glyph
+   in the top right reads as unrelated to the label on the left. */
+.arcbw-pin.is-go .arcbw-pin-glyph{ top:50%; translate:0 -50%; }
+.arcbw-pin.is-go .arcbw-pin-glyph svg{
+  width:1.5rem; height:1.5rem; fill:none; stroke:currentColor; stroke-width:1.8;
+  stroke-linecap:round; stroke-linejoin:round;
+}
 
 /* Lists: history and the menu share one row shape. */
-.arcbw-list{ flex:1 1 auto; overflow:auto; display:flex; flex-direction:column; gap:.35rem; }
+
+/* ── Why this scroller has padding and a matching negative margin ─────
+   The focus ring is a box-shadow, and a box-shadow is painted OUTSIDE the
+   element's border box. A scroll container clips precisely that: with the
+   rows at the full width of the list, the ring's left and right strokes
+   fell outside the scroller's content box and were cut off, so a focused
+   row appeared to have a ring across the top and bottom and nothing down
+   the sides. The corners survived, which made it read as a rendering fault
+   rather than as a clip.
+
+   The padding gives the ring room to exist inside the scroller; the equal
+   negative margin gives that room back to the layout, so the rows still
+   line up with the sheet's title instead of stepping in by a few pixels.
+   It has to be all four sides: the first and last row are flush against
+   the ends of the scroller and lose their outer stroke the same way. */
+.arcbw-list{
+  flex:1 1 auto; overflow:auto;
+  display:flex; flex-direction:column; gap:.35rem;
+  padding:.25rem; margin:-.25rem;
+}
 .arcbw-row{
   display:flex; align-items:center; gap:1rem;
   padding:.85rem 1.1rem; border-radius:.6rem;
-  background:#0a1322; border:.0625rem solid transparent;
+  background:var(--deep); border:.0625rem solid transparent;
 }
 .arcbw-row[data-focus="on"]{
-  background:#16233a; border-color:var(--beam, #4c8dff);
-  box-shadow:0 0 0 .0625rem var(--beam, #4c8dff), 0 0 2rem rgba(76,141,255,.25);
+  background:var(--haze); border-color:transparent;
+  box-shadow:0 0 0 .125rem var(--sel, #fff);
 }
 .arcbw-row-main{ flex:1 1 auto; min-width:0; }
 .arcbw-row-label{ font-size:1.1rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.arcbw-row-sub{ font-size:.88rem; color:var(--steel, #7f96b8); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.arcbw-row-tail{ flex:0 0 auto; color:var(--steel, #7f96b8); font-size:.95rem; }
-.arcbw-row.is-danger[data-focus="on"]{ border-color:#e2607a; box-shadow:0 0 0 .0625rem #e2607a; }
-.arcbw-empty{ color:var(--dim, #4e6183); font-size:1.05rem; padding:1.2rem .2rem; }
+.arcbw-row-sub{ font-size:.88rem; color:var(--steel); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.arcbw-row-tail{ flex:0 0 auto; color:var(--steel); font-size:.95rem; }
+.arcbw-row.is-danger[data-focus="on"]{ border-color:var(--bad); box-shadow:0 0 0 .0625rem var(--bad); }
+.arcbw-empty{ color:var(--dim); font-size:1.05rem; padding:1.2rem .2rem; }
 
 .arcbw-sec{
-  margin:1.1rem 0 .5rem; font-size:.82rem; letter-spacing:.14em; text-transform:uppercase;
-  color:var(--dim, #4e6183); font-weight:600;
+  margin:1.1rem 0 .5rem; font-size:.875rem; letter-spacing:0;
+  color:var(--dim); font-weight:500;
 }
 .arcbw-sec:first-child{ margin-top:0; }
 
@@ -217,15 +352,24 @@
 .arcbw-hints{
   flex:0 0 auto;
   display:flex; gap:1.4rem; align-items:center; flex-wrap:wrap;
-  padding:.55rem var(--edge, 2.5rem) calc(var(--safe-y, 1.6rem) * .75);
-  border-top:.0625rem solid var(--line, #24344f);
-  background:#070d18;
-  color:var(--steel, #7f96b8); font-size:.92rem;
+  padding:.55rem var(--arcbw-safe-r) calc(var(--safe-y, 1.6rem) * .75) var(--arcbw-safe-l);
+  border-top:.0625rem solid var(--line);
+  min-width:0; overflow:hidden;
+  background:var(--void);
+  color:var(--steel); font-size:.92rem;
 }
 .arcbw-hint{ display:flex; align-items:center; gap:.4rem; }
-.arcbw-hint svg{ width:1.25rem; height:1.25rem; fill:none; stroke:currentColor; stroke-width:1.6; }
-.arcbw-hint b{ font-weight:600; color:var(--ice, #e6f0ff); font-size:.86rem;
-  border:.0625rem solid var(--line, #24344f); border-radius:.3rem; padding:0 .35rem; }
+.arcbw-hint svg{ width:1.25rem; height:1.25rem; fill:none; stroke:currentColor; stroke-width:1.6;
+                 stroke-linecap:round; stroke-linejoin:round; }
+/* The four PlayStation face symbols are bare, outlined at a heavier
+   absolute stroke than a UI icon, with square-cut ends and sharp corners —
+   see the note beside PAD_GLYPH in index.html. `solid` is the d-pad's four
+   segments and the Options bars, which are filled rather than stroked. */
+.arcbw-hint svg .face{ stroke-width:1.9; stroke-linecap:butt; stroke-linejoin:miter; }
+.arcbw-hint svg .tri{ stroke-linejoin:miter; }
+.arcbw-hint svg .solid{ fill:currentColor; stroke:none; }
+.arcbw-hint b{ font-weight:600; color:var(--ice); font-size:.86rem;
+  border:.0625rem solid var(--line); border-radius:.3rem; padding:0 .35rem; }
 
 /* ── Toast ───────────────────────────────────────────────────────────
    It sits OVER THE CHROME BAND, not over the page, and that is not a
@@ -241,7 +385,7 @@
 .arcbw-toast{
   position:absolute; left:50%; top:.75rem; transform:translateX(-50%) translateY(-.6rem);
   z-index:4;
-  background:#1b2c47; border:.0625rem solid var(--beam-deep, #1b3f8a);
+  background:#26262e; border:.0625rem solid var(--beam-deep);
   box-shadow:0 .5rem 1.6rem rgba(0,0,0,.55);
   border-radius:.6rem; padding:.6rem 1.3rem; font-size:1rem;
   opacity:0; pointer-events:none; transition:opacity .18s, transform .18s;
@@ -252,5 +396,6 @@
 /* ── Reduced motion ──────────────────────────────────────────────────── */
 
 @media (prefers-reduced-motion: reduce){
-  .arcbw-pin, .arcbw-toast, .arcbw-tab-fav{ transition:none !important; animation:none !important; }
+  .arcbw-pin, .arcbw-toast, .arcbw-tab-fav,
+  .arcbw-chip-bar, .arcbw-bar > i{ transition:none !important; animation:none !important; }
 }

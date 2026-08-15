@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — file explorer  (ui/files.css)
+   PC1 — file explorer  (ui/files.css)
 
    A separate sheet rather than an injected <style> block: a strict CSP
    (`style-src 'self'`) blocks an inline style element but allows a
@@ -7,13 +7,14 @@
    this file itself if the host page forgot to — the same lesson the
    on-screen keyboard already learned.
 
-   Every token is read through the host page's ARC variable of the same name
-   with the ARC value as the fallback, so the explorer inherits index.html's
-   palette when it is dropped into the shell and still paints correctly on a
-   bare page that defines nothing.
+   Every token is read through the shell's variable of the same name with a
+   literal fallback, so the explorer inherits index.html's palette when it is
+   dropped into the shell and still paints correctly on a bare page that
+   defines nothing (ui/files-test.html). Keep the fallbacks LITERAL — a
+   self-referential var(--x, var(--x)) is invalid and silently unsets.
 
    SIZING: everything is rem. index.html sets
-       :root{ font-size: clamp(11px, min(1.4815vh, 2.3vw), 34px) }
+       :root{ font-size: clamp(12px, min(1.62vh, 2.05vw), 40px) }
    so one root scale drives 1080p, 1440p and 4K identically. Nothing here is
    in px except hairlines and shadows.
    ═══════════════════════════════════════════════════════════════════════ */
@@ -21,22 +22,23 @@
 .arc-files-probe{ --fx-loaded:1 }
 
 .arc-files{
-  --fx-void:     var(--void,      #04060b);
-  --fx-deep:     var(--deep,      #0c1422);
-  --fx-haze:     var(--haze,      #17253c);
-  --fx-line:     var(--line,      #24344f);
-  --fx-ice:      var(--ice,       #e6f0ff);
-  --fx-steel:    var(--steel,     #7f96b8);
-  --fx-dim:      var(--dim,       #4e6183);
-  --fx-beam:     var(--beam,      #4c8dff);
-  --fx-beam-hot: var(--beam-hot,  #a6d4ff);
-  --fx-beam-deep:var(--beam-deep, #1b3f8a);
-  --fx-good:     var(--good,      #56d6a0);
-  --fx-warn:     var(--warn,      #ffb457);
-  --fx-bad:      #ff6b81;
+  --fx-void:     var(--void, #0b0b0d);
+  --fx-deep:     var(--deep, #141417);
+  --fx-haze:     var(--haze, #1c1c21);
+  --fx-line:     var(--line, #2b2b32);
+  --fx-ice:      var(--ice, #f4f5f7);
+  --fx-steel:    var(--steel, #9c9da5);
+  --fx-dim:      var(--dim, #6a6b73);
+  --fx-beam:     var(--beam, #1a86ff);
+  --fx-beam-hot: var(--beam-hot, #57a6ff);
+  --fx-beam-deep:var(--beam-deep, #0b4fa8);
+  --fx-good:     var(--good, #3fd18b);
+  --fx-warn:     var(--warn, #ffb457);
+  --fx-bad:      var(--bad, #ff5c68);
+  --fx-sel:      var(--sel, #ffffff);
 
-  --fx-sans:    var(--sans,    "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
-  --fx-display: var(--display, "Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif);
+  --fx-sans:    var(--sans,    Inter,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
+  --fx-display: var(--display, "Inter Tight",Inter,"Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif);
   --fx-e-out:   var(--e-out,   cubic-bezier(.16,.84,.24,1));
   --fx-e-in:    cubic-bezier(.6,0,.9,.4);
 
@@ -53,8 +55,8 @@
   font-size:1rem;
   color:var(--fx-ice);
   background:
-    radial-gradient(120% 90% at 16% 4%,  #12233f 0%, rgba(4,6,11,0) 56%),
-    radial-gradient(90% 70% at 86% 96%,  #0d1c36 0%, rgba(4,6,11,0) 58%),
+    radial-gradient(120% 90% at 16% 4%,  #17171d 0%, rgba(11,11,13,0) 56%),
+    radial-gradient(90% 70% at 86% 96%,  #121217 0%, rgba(11,11,13,0) 58%),
     var(--fx-void);
   opacity:0; pointer-events:none;
   transition:opacity .28s var(--fx-e-out);
@@ -80,17 +82,17 @@
   flex:0 0 auto;
   padding:var(--fx-safe-y) var(--fx-edge) .9rem;
   display:flex; align-items:flex-end; gap:1.2rem;
-  border-bottom:1px solid rgba(36,52,79,.6);
+  border-bottom:1px solid rgba(43,43,50,.6);
 }
 .fx-head-main{ min-width:0; flex:1 1 auto }
 .fx-eyebrow{
-  font-size:.66rem; letter-spacing:.34em; text-transform:uppercase;
-  color:var(--fx-beam-hot); margin-bottom:.35rem;
+  font-size:.75rem; font-weight:500; letter-spacing:0;
+  color:var(--fx-dim); margin-bottom:.35rem;
 }
 .fx-crumbs{
   display:flex; align-items:center; gap:.15rem;
   min-width:0; flex-wrap:nowrap; overflow:hidden;
-  font-family:var(--fx-display); font-weight:200;
+  font-family:var(--fx-display); font-weight:700; letter-spacing:-.03em;
   font-size:1.9rem; line-height:1.18;
 }
 .fx-crumb{
@@ -106,9 +108,9 @@
 .fx-head-side{ flex:0 0 auto; display:flex; align-items:center; gap:.7rem }
 .fx-chip{
   display:inline-flex; align-items:center; gap:.45rem;
-  padding:.3rem .75rem; border-radius:99px;
-  border:1px solid var(--fx-line); background:rgba(12,20,34,.7);
-  font-size:.78rem; letter-spacing:.06em; color:var(--fx-steel);
+  padding:.3rem .625rem; border-radius:.25rem;
+  border:1px solid var(--fx-line); background:var(--fx-deep);
+  font-size:.78rem; font-weight:500; letter-spacing:0; color:var(--fx-steel);
   white-space:nowrap;
 }
 .fx-chip svg{ width:1rem; height:1rem }
@@ -145,7 +147,7 @@
   transition:background .18s var(--fx-e-out), border-color .18s var(--fx-e-out), color .18s var(--fx-e-out);
   contain:layout style paint;
 }
-.fx-row:nth-child(even){ background:rgba(12,20,34,.28) }
+.fx-row:nth-child(even){ background:rgba(20,20,24,.28) }
 .fx-row .fx-ico{
   width:2.6rem; height:2.6rem; display:grid; place-items:center;
   color:var(--fx-dim);
@@ -164,18 +166,18 @@
 .fx-when{ text-align:right }
 
 .fx-row[data-focus="on"]{
-  background:linear-gradient(90deg, rgba(76,141,255,.20), rgba(76,141,255,.06));
-  border-color:rgba(166,212,255,.55);
-  box-shadow:0 0 0 1px rgba(76,141,255,.25), 0 .5rem 1.6rem rgba(4,10,24,.55);
+  background:#26262e;
+  border-color:transparent;
+  box-shadow:inset 0 0 0 2px var(--fx-sel);
   color:var(--fx-ice);
 }
 .fx-row[data-focus="on"] .fx-size,
 .fx-row[data-focus="on"] .fx-when{ color:var(--fx-steel) }
-.fx-row[data-focus="stale"]{ border-color:rgba(76,141,255,.22) }
+.fx-row[data-focus="stale"]{ border-color:rgba(255,255,255,.22) }
 
 .fx-row.is-sel{ background:linear-gradient(90deg, rgba(86,214,160,.16), rgba(86,214,160,.04)) }
 .fx-row.is-sel[data-focus="on"]{
-  background:linear-gradient(90deg, rgba(86,214,160,.24), rgba(76,141,255,.10));
+  background:linear-gradient(90deg, rgba(86,214,160,.24), rgba(255,255,255,.10));
   border-color:rgba(86,214,160,.6);
 }
 .fx-tick{
@@ -193,7 +195,7 @@
 }
 .fx-drives::-webkit-scrollbar{ display:none }
 .fx-sec{
-  font-size:.68rem; letter-spacing:.26em; text-transform:uppercase;
+  font-size:.8125rem; font-weight:500; letter-spacing:0;
   color:var(--fx-dim); margin:.4rem 0 .8rem;
 }
 .fx-sec + .fx-sec{ margin-top:1.6rem }
@@ -204,18 +206,18 @@
 }
 .fx-card{
   border:1px solid var(--fx-line); border-radius:1rem;
-  background:linear-gradient(180deg, rgba(23,37,60,.55), rgba(12,20,34,.72));
+  background:linear-gradient(180deg, rgba(28,28,33,.55), rgba(20,20,24,.72));
   padding:.85rem 1.1rem;
   display:flex; flex-direction:column; justify-content:center; gap:.1rem;
   width:100%; overflow:hidden;
   transition:border-color .22s var(--fx-e-out), transform .22s var(--fx-e-out), box-shadow .22s var(--fx-e-out);
 }
 .fx-card[data-focus="on"]{
-  border-color:rgba(166,212,255,.6);
+  border-color:transparent;
   transform:translateY(-2px);
-  box-shadow:0 0 0 1px rgba(76,141,255,.3), 0 1rem 2.4rem rgba(2,6,16,.6);
+  box-shadow:0 0 0 2px var(--fx-sel), 0 1rem 2.4rem rgba(0,0,0,.6);
 }
-.fx-card[data-focus="stale"]{ border-color:rgba(76,141,255,.25) }
+.fx-card[data-focus="stale"]{ border-color:rgba(255,255,255,.25) }
 .fx-card-top{ display:flex; align-items:center; gap:.7rem; margin-bottom:.15rem }
 .fx-card-top svg{ width:1.5rem; height:1.5rem; color:var(--fx-beam) }
 .fx-card.is-removable .fx-card-top svg{ color:var(--fx-warn) }
@@ -224,24 +226,24 @@
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 auto;
 }
 .fx-badge{
-  font-size:.6rem; letter-spacing:.2em; text-transform:uppercase;
-  padding:.16rem .45rem; border-radius:.35rem;
+  font-size:.6875rem; font-weight:500; letter-spacing:0;
+  padding:.16rem .45rem; border-radius:.25rem;
   border:1px solid rgba(255,180,87,.45); color:var(--fx-warn);
   white-space:nowrap;
 }
 .fx-card-sub{ font-size:.78rem; color:var(--fx-dim); margin:.1rem 0 .6rem;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 .fx-bar{
-  height:.38rem; border-radius:99px; background:rgba(4,6,11,.75);
-  overflow:hidden; border:1px solid rgba(36,52,79,.7);
+  height:.38rem; border-radius:99px; background:rgba(11,11,13,.75);
+  overflow:hidden; border:1px solid rgba(43,43,50,.7);
 }
 .fx-bar-fill{
   height:100%; border-radius:99px;
   background:linear-gradient(90deg, var(--fx-beam-deep), var(--fx-beam));
   transition:width .5s var(--fx-e-out);
 }
-.fx-bar-fill.is-tight{ background:linear-gradient(90deg,#8a4a1b,var(--fx-warn)) }
-.fx-bar-fill.is-full{ background:linear-gradient(90deg,#7a1f2c,var(--fx-bad)) }
+.fx-bar-fill.is-tight{ background:var(--fx-warn) }
+.fx-bar-fill.is-full{ background:var(--fx-bad) }
 .fx-card-free{
   display:flex; justify-content:space-between; gap:1rem;
   font-size:.76rem; color:var(--fx-steel); margin-top:.45rem;
@@ -254,7 +256,7 @@
   gap:.6rem; text-align:center; padding:2rem;
 }
 .fx-empty svg{ width:3rem; height:3rem; color:var(--fx-line) }
-.fx-empty b{ font-family:var(--fx-display); font-weight:200; font-size:1.5rem; color:var(--fx-steel) }
+.fx-empty b{ font-family:var(--fx-display); font-weight:700; letter-spacing:-.03em; font-size:1.5rem; color:var(--fx-steel) }
 .fx-empty span{ font-size:.9rem; color:var(--fx-dim); max-width:52ch; line-height:1.55 }
 .fx-empty.is-error b{ color:var(--fx-warn) }
 
@@ -263,8 +265,8 @@
 .fx-details{
   flex:0 0 auto;
   padding:.8rem var(--fx-edge);
-  border-top:1px solid rgba(36,52,79,.6);
-  background:rgba(4,6,11,.5);
+  border-top:1px solid rgba(43,43,50,.6);
+  background:rgba(11,11,13,.5);
   display:flex; align-items:center; gap:1.4rem;
   min-height:3.6rem;
 }
@@ -272,7 +274,7 @@
   width:2.4rem; height:2.4rem; flex:0 0 auto;
   display:grid; place-items:center; color:var(--fx-beam);
   border:1px solid var(--fx-line); border-radius:.6rem;
-  background:rgba(12,20,34,.7);
+  background:rgba(20,20,24,.7);
 }
 .fx-det-ico svg{ width:1.3rem; height:1.3rem }
 .fx-det-main{ min-width:0; flex:1 1 auto }
@@ -288,7 +290,7 @@
 .fx-det-facts{ display:flex; gap:1.4rem; flex:0 0 auto }
 .fx-fact{ text-align:right }
 .fx-fact span{
-  display:block; font-size:.6rem; letter-spacing:.2em; text-transform:uppercase; color:var(--fx-dim);
+  display:block; font-size:.75rem; letter-spacing:0; color:var(--fx-dim);
 }
 .fx-fact b{
   display:block; font-size:.85rem; font-weight:400; color:var(--fx-steel);
@@ -309,13 +311,20 @@
 }
 .fx-hint{ display:inline-flex; align-items:center; gap:.4rem; white-space:nowrap }
 .fx-hint-glyphs{ display:inline-flex; align-items:center; gap:.18rem }
-.fx-hints .glyph{ width:1.15rem; height:1.15rem; fill:none; stroke:currentColor; stroke-width:1.5 }
+.fx-hints .glyph{ width:1.15rem; height:1.15rem; fill:none; stroke:currentColor; stroke-width:1.5;
+                  stroke-linecap:round; stroke-linejoin:round }
+/* The four face symbols carry Sony's heavier absolute stroke, square-cut
+   ends and sharp corners — see the note beside PAD_GLYPH in index.html. */
+.fx-hints .glyph .face{ stroke-width:1.9; stroke-linecap:butt; stroke-linejoin:miter }
+.fx-hints .glyph .tri{ stroke-linejoin:miter }
 .fx-hints .glyph .solid{ fill:currentColor; stroke:none }
-.fx-hints .glyph .lbl{ font-size:8px; fill:currentColor; stroke:none; font-family:var(--fx-sans); letter-spacing:.04em }
+.fx-hints .glyph .lbl{ font-size:8px; fill:currentColor; stroke:none; font-family:var(--fx-sans);
+                       font-weight:600; letter-spacing:.04em }
+.fx-hints .glyph .lbl.sm{ font-size:7.2px }
 .fx-key{
   display:inline-grid; place-items:center; min-width:1.5rem; height:1.25rem;
   padding:0 .3rem; border:1px solid var(--fx-line); border-radius:.28rem;
-  background:rgba(12,20,34,.8); font-size:.66rem; color:var(--fx-steel);
+  background:rgba(20,20,24,.8); font-size:.66rem; color:var(--fx-steel);
 }
 
 /* ═══ Overlays — menu, confirm, progress, properties ═════════════════ */
@@ -324,7 +333,7 @@
   position:absolute; inset:0; z-index:5;
   display:flex; align-items:center; justify-content:center;
   padding:var(--fx-safe-y) var(--fx-edge);
-  background:rgba(2,4,9,.62);
+  background:rgba(0,0,0,.62);
   -webkit-backdrop-filter:blur(14px);
   backdrop-filter:blur(14px);
   opacity:0; pointer-events:none;
@@ -337,7 +346,7 @@
   width:min(46rem, 92vw);
   max-height:82vh; overflow:auto;
   border:1px solid var(--fx-line); border-radius:1.1rem;
-  background:linear-gradient(180deg, rgba(23,37,60,.92), rgba(9,15,26,.96));
+  background:linear-gradient(180deg, rgba(28,28,33,.92), rgba(9,15,26,.96));
   box-shadow:0 1.6rem 4rem rgba(1,3,8,.7);
   padding:1.5rem 1.6rem 1.4rem;
   translate:0 1rem;
@@ -349,11 +358,11 @@
 .fx-scrim.is-menu .fx-panel{ width:min(26rem, 84vw); padding:1rem .8rem }
 
 .fx-panel-eyebrow{
-  font-size:.62rem; letter-spacing:.34em; text-transform:uppercase;
-  color:var(--fx-beam-hot); margin-bottom:.4rem;
+  font-size:.75rem; font-weight:500; letter-spacing:0;
+  color:var(--fx-dim); margin-bottom:.4rem;
 }
 .fx-panel-title{
-  font-family:var(--fx-display); font-weight:200; font-size:1.6rem;
+  font-family:var(--fx-display); font-weight:700; letter-spacing:-.03em; font-size:1.6rem;
   margin:0 0 .35rem; line-height:1.2;
 }
 .fx-panel-sub{
@@ -373,8 +382,9 @@
 .fx-item small{ display:block; font-size:.72rem; color:var(--fx-dim); margin-top:.1rem }
 .fx-item .fx-item-tail{ font-size:.76rem; color:var(--fx-dim) }
 .fx-item[data-focus="on"]{
-  background:linear-gradient(90deg, rgba(76,141,255,.22), rgba(76,141,255,.06));
-  border-color:rgba(166,212,255,.55);
+  background:#26262e;
+  border-color:transparent;
+  box-shadow:inset 0 0 0 2px var(--fx-sel);
 }
 .fx-item[aria-disabled="true"]{ opacity:.38 }
 .fx-item.is-danger svg,
@@ -389,7 +399,7 @@
 }
 .fx-facts .fx-f{
   display:flex; justify-content:space-between; gap:1rem;
-  padding:.42rem 0; border-bottom:1px solid rgba(36,52,79,.5);
+  padding:.42rem 0; border-bottom:1px solid rgba(43,43,50,.5);
   font-size:.85rem;
 }
 .fx-facts .fx-f span{ color:var(--fx-dim) }
@@ -401,28 +411,28 @@
 
 .fx-actions{ display:flex; gap:.7rem; margin-top:1.2rem; flex-wrap:wrap }
 .fx-btn{
-  padding:.6rem 1.4rem; border-radius:99px;
-  border:1px solid var(--fx-line); background:rgba(23,37,60,.75);
-  color:var(--fx-ice); font-size:.92rem; letter-spacing:.03em;
+  padding:.6rem 1.25rem; border-radius:6px;
+  border:1px solid var(--fx-line); background:var(--fx-haze);
+  color:var(--fx-ice); font-size:.92rem; font-weight:600; letter-spacing:0;
   transition:border-color .2s var(--fx-e-out), background .2s var(--fx-e-out), transform .18s var(--fx-e-out);
 }
 .fx-btn[data-focus="on"]{
-  border-color:var(--fx-beam-hot);
-  background:linear-gradient(180deg,#f2f7ff,#cfe0fb); color:#06101f; font-weight:600;
-  transform:translateY(-1px);
+  border-color:transparent;
+  background:var(--fx-beam); color:#fff;
+  box-shadow:0 0 0 2px var(--fx-sel);
 }
 .fx-btn.is-danger[data-focus="on"]{
-  background:linear-gradient(180deg,#ffd7a3,#ffb457); color:#2a1406; border-color:#ffb457;
+  background:var(--warn); color:#1a1205; border-color:var(--warn);
 }
 .fx-btn.is-nuke[data-focus="on"]{
-  background:linear-gradient(180deg,#ffb9c3,#ff6b81); color:#2a0610; border-color:#ff6b81;
+  background:var(--bad); color:#1f0a0d; border-color:var(--bad);
 }
 
 /* ── progress ─────────────────────────────────────────────────────── */
 .fx-prog{ margin:.4rem 0 .2rem }
 .fx-prog-bar{
-  height:.5rem; border-radius:99px; background:rgba(4,6,11,.8);
-  border:1px solid rgba(36,52,79,.8); overflow:hidden;
+  height:.5rem; border-radius:99px; background:rgba(11,11,13,.8);
+  border:1px solid rgba(43,43,50,.8); overflow:hidden;
 }
 .fx-prog-fill{
   height:100%; width:0%;
@@ -464,7 +474,7 @@
   transition:opacity .25s var(--fx-e-out), translate .25s var(--fx-e-out);
 }
 .fx-toast.is-show{ opacity:1; translate:-50% 0 }
-.fx-toast.is-bad{ border-color:rgba(255,107,129,.5); color:#ffd7dd }
+.fx-toast.is-bad{ border-color:rgba(255,92,104,.5); color:#ffd7dd }
 
 /* ═══ Busy ═══════════════════════════════════════════════════════════ */
 
@@ -490,7 +500,7 @@
   position:absolute; left:0; right:0;
   display:flex; align-items:flex-end;
   padding:0 0 .45rem .7rem;
-  font-size:.68rem; letter-spacing:.26em; text-transform:uppercase;
+  font-size:.8125rem; font-weight:500; letter-spacing:0;
   color:var(--fx-dim);
 }
 .fx-note-row .fx-name{ color:var(--fx-dim) }

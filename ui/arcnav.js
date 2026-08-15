@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — the navigation layer injected into every browsed page
+   PC1 — the navigation layer injected into every browsed page
    (ui/arcnav.js)
 
    WHERE THIS RUNS
@@ -385,7 +385,15 @@ function focusItem(it) {
   /* Real DOM focus as well as the ring: it is what makes the Enter key,
      screen readers and the page's own :focus styling agree with us, and it
      is what scrolls a scroll container to the item without us having to work
-     out which container that is. */
+     out which container that is.
+
+     But it must not raise the keyboard. Moving the ring ACROSS a page is not
+     the human asking to type - a search results page with a search box at
+     the top would throw a keyboard up every time the D-pad passed over it,
+     and there would be no way to get past it. Cross on the field opens the
+     keyboard; the focus listener covers the case the human did not drive,
+     which is the page moving focus itself. */
+  suppress(it.el);
   try { it.el.focus({ preventScroll: true }); } catch (e) {}
   ensureVisible(it.el);
   reFocus();
@@ -413,24 +421,45 @@ function reFocus() {
   if (kindOf(st.el) === "video") reportMedia(st.el);
 }
 
-function ensureVisible(el) {
+/* padFrac biases how much clearance the element is given. The default 0.16
+   is the navigation case ("do not leave it against an edge"). A text field
+   asks for more, and for it to sit high rather than centred, because the
+   keyboard occupies the bottom of the display: when the content view is
+   shown again after a commit, the field and the text now in it should be in
+   the upper half where they are certainly not behind anything. */
+function ensureVisible(el, padFrac) {
   var r = rectOf(el); if (!r) return;
   var vh = window.innerHeight, vw = window.innerWidth;
-  var pad = Math.round(vh * 0.16);
+  var frac = (typeof padFrac === "number") ? padFrac : 0.16;
+  var pad = Math.round(vh * frac);
   if (r.top < pad || r.bottom > vh - pad || r.left < 0 || r.right > vw) {
     try { el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" }); }
     catch (e) { try { el.scrollIntoView(); } catch (e2) {} }
   }
 }
 
+/* NEVER let a field's contents into this string.
+ *
+ * describe() is the label that goes into {ev:"focus"}, and the shell writes
+ * that straight to the host log so an unattended run can be read back. It used
+ * to fall back to el.value for an <input>, which meant that every time the ring
+ * landed on a filled-in field its contents were logged - including a password,
+ * whose type carries no placeholder to shadow it. The value is never a
+ * legitimate label. What a field IS gets described here; what is IN it does
+ * not leave the page except in the {ev:"edit"} payload, which exists solely to
+ * seed the keyboard and is never logged.
+ */
 function describe(el) {
   var t = "";
   try {
-    t = (el.getAttribute && el.getAttribute("aria-label")) ||
-        (el.getAttribute && el.getAttribute("title")) ||
-        (el.tagName === "INPUT" ? (el.placeholder || el.value || el.name || el.type) : "") ||
-        (el.innerText || el.textContent || "").trim() ||
-        (el.tagName === "IMG" ? el.alt : "") || "";
+    if (isTextField(el)) {
+      t = fieldTitle(el);
+    } else {
+      t = (el.getAttribute && el.getAttribute("aria-label")) ||
+          (el.getAttribute && el.getAttribute("title")) ||
+          (el.innerText || el.textContent || "").trim() ||
+          (el.tagName === "IMG" ? el.alt : "") || "";
+    }
   } catch (e) {}
   t = String(t).replace(/\s+/g, " ").trim();
   if (!t) t = "<" + String(el.tagName || "?").toLowerCase() + ">";
@@ -438,6 +467,217 @@ function describe(el) {
 }
 
 var TEXTY = { text:1, search:1, email:1, url:1, tel:1, number:1, password:1, "":1 };
+
+/* ═══ Editable fields ══════════════════════════════════════════════════
+   The set the keyboard opens for, and it is deliberately narrower than the
+   set the RING stops on. A <input type=checkbox> is focusable and is not
+   typeable; a field that is readonly or disabled is focusable in some
+   engines and must never raise a keyboard the human cannot commit.
+
+   Zero-size and hidden fields are excluded for a specific reason rather
+   than tidiness: a great many login pages carry a hidden honeypot input,
+   and several carry an off-screen 1x1 field that real browsers focus
+   during autofill. Raising the keyboard for one of those would be a
+   keyboard the human cannot see a field for. */
+
+var OSK_TYPES = { text:1, password:1, email:1, url:1, search:1, tel:1, number:1, "":1 };
+
+/* input type -> the keyboard's own mode vocabulary. Anything not named here
+   is text, which is the safe default: the wrong layout is recoverable, a
+   missing keyboard is not. */
+var OSK_MODE = {
+  password: "password",
+  url: "url",
+  number: "number",
+  email: "text",
+  search: "text",
+  text: "text",
+  tel: "text",
+  "": "text"
+};
+
+function typeOf(el) {
+  return String((el && el.type) || "text").toLowerCase();
+}
+
+function isTextField(el) {
+  if (!el || el.nodeType !== 1) return false;
+  var tag = String(el.tagName || "").toLowerCase();
+  if (tag === "textarea") return true;
+  if (tag === "input") return !!OSK_TYPES[typeOf(el)];
+  try { if (el.isContentEditable) return true; } catch (e) {}
+  return false;
+}
+
+/* Focusable, typeable, and actually on the screen. */
+function isEditable(el) {
+  if (!isTextField(el)) return false;
+  try {
+    if (el.disabled) return false;
+    if (el.readOnly) return false;
+    if (el.getAttribute && el.getAttribute("aria-readonly") === "true") return false;
+    if (el.getAttribute && el.getAttribute("aria-hidden") === "true") return false;
+    var r = el.getBoundingClientRect();
+    if (!r || r.width < 2 || r.height < 2) return false;
+    var cs = getComputedStyle(el);
+    if (!cs || cs.visibility === "hidden" || cs.display === "none") return false;
+    if (cs.opacity !== "" && parseFloat(cs.opacity) < 0.05) return false;
+    if (clippedAway(el)) return false;
+  } catch (e) { return false; }
+  return true;
+}
+
+/* The field itself measures normally and is still invisible, because an
+   ancestor collapsed to nothing and clips it:
+
+       <div style="width:0;height:0;overflow:hidden"><input ...></div>
+
+   getBoundingClientRect on the INPUT reports its own layout box and knows
+   nothing about the clip, so the size test above passes it. This is not an
+   edge case to be thorough about — it is how hidden fields are actually
+   built. Login pages carry honeypots in this shape to catch form-filling
+   bots, and a keyboard raised for a field the human cannot see is a keyboard
+   over a page with no visible field, which is indistinguishable from a bug.
+
+   Deliberately narrow: ONLY a clipping ancestor with no area at all counts.
+   A field merely scrolled out of its scroll container is left alone, because
+   focus() scrolls it into view before focusin fires, and rejecting that case
+   would break the one thing this whole path exists for. */
+function clippedAway(el) {
+  var node = el.parentElement, hops = 0;
+  while (node && hops++ < 12) {
+    var cs;
+    try { cs = getComputedStyle(node); } catch (e) { return false; }
+    if (cs.overflowX !== "visible" || cs.overflowY !== "visible") {
+      var pr;
+      try { pr = node.getBoundingClientRect(); } catch (e2) { return false; }
+      if (pr && (pr.width < 2 || pr.height < 2)) return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+/* A name for the field, for the keyboard's title bar. In the order a human
+   would read the page: the accessible name first, then the visible label,
+   then the placeholder, and "Text" rather than nothing. Never the value —
+   see describe(). */
+function fieldTitle(el) {
+  var t = "";
+  try {
+    t = (el.getAttribute && el.getAttribute("aria-label")) || "";
+
+    if (!t) {
+      var by = el.getAttribute && el.getAttribute("aria-labelledby");
+      if (by) {
+        var parts = by.split(/\s+/), acc = [];
+        for (var i = 0; i < parts.length; i++) {
+          var n = document.getElementById(parts[i]);
+          if (n) acc.push(n.innerText || n.textContent || "");
+        }
+        t = acc.join(" ");
+      }
+    }
+
+    /* el.labels is the engine's own answer to "which <label> is this?" and
+       handles both wrapping and for= without us reimplementing it. */
+    if (!t) {
+      try {
+        if (el.labels && el.labels.length) {
+          var ls = [];
+          for (var j = 0; j < el.labels.length && j < 3; j++)
+            ls.push(el.labels[j].innerText || el.labels[j].textContent || "");
+          t = ls.join(" ");
+        }
+      } catch (e2) {}
+    }
+    if (!t && el.closest) {
+      var lab = el.closest("label");
+      if (lab) t = lab.innerText || lab.textContent || "";
+    }
+    if (!t && el.id) {
+      var forLab = document.querySelector('label[for="' + String(el.id).replace(/"/g, '\\"') + '"]');
+      if (forLab) t = forLab.innerText || forLab.textContent || "";
+    }
+
+    if (!t) t = (el.placeholder || "");
+    if (!t) t = (el.getAttribute && el.getAttribute("title")) || "";
+    if (!t) t = (el.name || "");
+  } catch (e) {}
+
+  t = String(t).replace(/\s+/g, " ").trim();
+  if (!t) {
+    var ty = typeOf(el);
+    t = ty === "password" ? "Password"
+      : ty === "email"    ? "Email"
+      : ty === "search"   ? "Search"
+      : ty === "url"      ? "Address"
+      : ty === "tel"      ? "Telephone"
+      : ty === "number"   ? "Number"
+      : "Text";
+  }
+  return t.length > 60 ? t.slice(0, 58) + "…" : t;
+}
+
+function currentValue(el) {
+  try {
+    if (el.value !== undefined && el.value !== null) return String(el.value);
+    return String(el.innerText || el.textContent || "");
+  } catch (e) { return ""; }
+}
+
+/* A declared maxlength only. The DOM reports 524288 (and some engines -1)
+   for "no limit", and passing that to the keyboard as a real cap would put
+   a meaningless counter under it. */
+function maxLenOf(el) {
+  var n = -1;
+  try { n = el.maxLength; } catch (e) { return 0; }
+  if (typeof n !== "number" || n <= 0 || n >= 524288) return 0;
+  return n;
+}
+
+/* ═══ Asking the shell for the keyboard ════════════════════════════════
+   One place, whichever way the field was reached: the human pressed Cross
+   on it, the page moved focus into it (the second half of a login form),
+   or the page autofocused it on load.
+
+   st.pending is the element the answer belongs to. It is held rather than
+   an index because the page is free to rebuild its DOM while the keyboard
+   is up, and writing the answer into whatever now occupies that position
+   would be worse than dropping it. */
+
+function requestEdit(el, why) {
+  if (!isEditable(el)) return "not an editable field";
+  st.pending = el;
+  st.lastField = el;
+
+  /* Put the field where it will be visible when the page comes back. The
+     shell hides the content view entirely while the keyboard is up (it is a
+     child window; nothing can be drawn over it), so this is not about
+     clearing the panel - it is so that the field, and what was just typed
+     into it, is on screen the moment the view is shown again. */
+  ensureVisible(el, 0.34);
+
+  var ty = typeOf(el);
+  var multiline = false;
+  try { multiline = el.tagName === "TEXTAREA" || !!el.isContentEditable; } catch (e) {}
+
+  post({
+    type: "arcnav", ev: "edit",
+    /* The one message in this protocol that carries what the human typed.
+       It goes to the keyboard and nowhere else; the shell does not log it,
+       and nothing downstream of the shell ever sees it. */
+    value: currentValue(el),
+    inputType: multiline && el.tagName === "TEXTAREA" ? "textarea" : ty,
+    mode: multiline ? "text" : (OSK_MODE[ty] || "text"),
+    maxLength: maxLenOf(el),
+    label: fieldTitle(el),
+    secure: ty === "password",
+    multiline: multiline,
+    why: why || "activate"
+  });
+  return "editing";
+}
 
 function kindOf(el) {
   var tag = String(el.tagName || "").toLowerCase();
@@ -499,15 +739,12 @@ function activate() {
   var x = r ? r.left + r.width / 2 : 0, y = r ? r.top + r.height / 2 : 0;
 
   if (kind === "text") {
-    st.pending = st.el;
-    post({
-      type: "arcnav", ev: "edit",
-      value: (st.el.value !== undefined ? st.el.value : (st.el.innerText || "")),
-      inputType: String(st.el.type || (st.el.tagName === "TEXTAREA" ? "textarea" : "text")).toLowerCase(),
-      label: describe(st.el),
-      multiline: st.el.tagName === "TEXTAREA" || !!st.el.isContentEditable
-    });
-    return "editing";
+    /* Focus it for real first. A page that styles :focus, and a page whose
+       own script watches focus to decide what the field means, both need
+       this to have happened before the keyboard goes up - and it is what
+       makes the field the one a later Triangle reopens. */
+    try { st.el.focus({ preventScroll: true }); } catch (e) {}
+    return requestEdit(st.el, "activate");
   }
 
   if (kind === "select") {
@@ -540,24 +777,89 @@ function activate() {
    through the native setter so the framework's own property descriptor sees
    it, then fire input and change. */
 
+/* Why the native setter, spelled out, because it looks like superstition
+   and is not:
+ *
+ * React does not read the DOM. It keeps its own copy of the value and, on
+ * every render, compares it to what it last wrote to the node. Assigning
+ * el.value = x updates the node but ALSO updates React's private "last
+ * written" tracker (React installs its own value setter on the instance to
+ * do exactly that), so React concludes nothing changed, never runs the
+ * onChange handler, and overwrites the field on the next render. The field
+ * visibly reverts a moment after the keyboard closes.
+ *
+ * Calling the PROTOTYPE's setter writes the node without touching React's
+ * per-instance tracker. The tracker now disagrees with the DOM, so when the
+ * input event arrives React sees a real change and runs onChange. The same
+ * reasoning covers Vue, Angular and Svelte, which all bind on input.
+ *
+ * Then the events. input first (that is what every framework binds), change
+ * second (that is what plain HTML forms and validation libraries bind), both
+ * bubbling and composed so a field inside a shadow root still reports to a
+ * listener on the host. input is a real InputEvent rather than a bare Event:
+ * a handful of editors read inputType to decide whether to accept the edit,
+ * and one built with `new Event("input")` has no inputType at all.
+ */
 function writeText(value) {
   var el = st.pending;
   st.pending = null;
   if (!el) return "no field waiting";
+
+  /* The write moves focus back onto the field, which would immediately ask
+     for the keyboard again. Hold that off for this element. */
+  suppress(el);
+
+  var secure = false;
+  try { secure = typeOf(el) === "password"; } catch (e) {}
+
   try {
+    var cap = maxLenOf(el);
+    if (cap && value.length > cap) value = value.slice(0, cap);
+
     if (el.isContentEditable) {
-      el.innerText = value;
+      el.textContent = value;
     } else {
       var proto = (el.tagName === "TEXTAREA") ? window.HTMLTextAreaElement : window.HTMLInputElement;
       var desc = proto && Object.getOwnPropertyDescriptor(proto.prototype, "value");
       if (desc && desc.set) desc.set.call(el, value);
       else el.value = value;
+      try { el.setSelectionRange(value.length, value.length); } catch (e0) {}
     }
-    el.dispatchEvent(new Event("input", { bubbles: true }));
+
+    var ev;
+    try {
+      ev = new InputEvent("input", {
+        bubbles: true, composed: true, cancelable: false,
+        inputType: "insertReplacementText", data: value
+      });
+    } catch (e1) {
+      ev = new Event("input", { bubbles: true });
+    }
+    el.dispatchEvent(ev);
     el.dispatchEvent(new Event("change", { bubbles: true }));
-  } catch (e) { say("writeText: " + e); }
+  } catch (e) { say("writeText failed: " + (e && e.message ? e.message : e)); }
+
+  try { el.focus({ preventScroll: true }); } catch (e) {}
+  ensureVisible(el, 0.34);
   reFocus();
-  return "wrote " + value.length + " characters";
+
+  /* NOT the value, and not its length either. A length is not a secret for a
+     search box and is a real one for a password, and a log line whose safety
+     depends on which field it happened to be is a log line waiting to be
+     wrong. The field's name is enough to read a run back. */
+  return secure ? "filled the password field" : "filled " + fieldTitle(el);
+}
+
+/* An element we have just written to or restored focus to, which must not
+   raise the keyboard again on the focus event our own write causes. Short
+   and element-scoped: a genuine second visit to the same field a moment
+   later still opens, which is what makes a mistyped password recoverable. */
+function suppress(el) {
+  st.suppressEl = el;
+  st.suppressUntil = Date.now() + 700;
+}
+function suppressed(el) {
+  return st.suppressEl === el && Date.now() < st.suppressUntil;
 }
 
 function chooseOption(index) {
@@ -818,7 +1120,19 @@ function action(name, phase) {
       return st.mode === "cursor" ? cursorClick() : activate();
 
     case "square":        return fullscreen(v);
-    case "triangle":      return v ? togglePlay(v) : (st.el ? activate() : "nothing focused");
+
+    /* Triangle is the way back to a keyboard that was dismissed. The field
+       is still focused and still holds what it held; this reopens the
+       keyboard on it rather than making the human find the field again.
+       Documented in the shell's hint bar as "Keyboard" whenever the focused
+       thing is typeable. Falls through to its old meanings otherwise. */
+    case "triangle":
+      if (v) return togglePlay(v);
+      {
+        var f = editableFocus();
+        if (f) { try { f.focus({ preventScroll: true }); } catch (e) {} return requestEdit(f, "reopen"); }
+      }
+      return st.el ? activate() : "nothing focused";
     case "l1": case "tabPlay":  return scrollBy(0, -1, Math.round(window.innerHeight * 0.85)) ? "page up" : "top";
     case "r1": case "tabMedia": return scrollBy(0,  1, Math.round(window.innerHeight * 0.85)) ? "page down" : "bottom";
     case "l3":            return st.mode === "cursor" ? toSpatial() : toCursor();
@@ -866,7 +1180,22 @@ var onHost = guard("host message", function (ev) {
       return;
     case "text":   say(writeText(String(m.value === undefined ? "" : m.value))); return;
     case "option": say(chooseOption(m.index | 0)); return;
-    case "cancel": st.pending = null; reFocus(); return;
+    case "cancel": {
+      /* The field keeps exactly what it had - nothing is written on a
+         cancel, not even an empty string - and the focus goes back to it so
+         Triangle reopens the keyboard on the same field. Suppressed, or
+         restoring the focus would reopen it immediately and the keyboard
+         could not be dismissed at all. */
+      var was = st.pending;
+      st.pending = null;
+      if (was) {
+        suppress(was);
+        try { was.focus({ preventScroll: true }); } catch (e) {}
+        ensureVisible(was, 0.34);
+      }
+      reFocus();
+      return;
+    }
     case "zoom":   scan(); reFocus(); return;
     case "scan":   scan(); reFocus(); say("rescanned: " + st.items.length + " targets"); return;
   }
@@ -918,6 +1247,57 @@ document.addEventListener("play", guard("play", function (e) {
 }), true);
 document.addEventListener("pause", guard("pause", function (e) {
   if (e.target && e.target.tagName === "VIDEO") reportMedia(e.target);
+}), true);
+
+/* ═══ The keyboard follows the page's own focus ════════════════════════
+   The half of the keyboard story the human does not drive.
+
+   A login form is the case that matters and it cannot be done with Cross
+   alone: the human presses Cross on the username field, types, commits -
+   and then the PAGE moves focus to the password field, because that is what
+   a login form does when you press Enter or Next. Nobody pressed anything
+   on the password field, so nothing would ask for a keyboard, and the human
+   would be left looking at a focused password box with no way to type into
+   it. Same for the very common case of a page autofocusing its first field
+   on load.
+
+   So: focus arriving in a typeable field raises the keyboard, EXCEPT when
+   we put it there ourselves. focusItem() suppresses around its own focus()
+   call and writeText() around its write-back, which is what stops the ring
+   passing over a search box from being a trap and stops a commit from
+   reopening the keyboard it just closed.
+
+   focusin, not focus: focus does not bubble, and the listener has to be one
+   listener on the document rather than one per field on a page that creates
+   fields as you go. */
+
+function editableFocus() {
+  var a = null;
+  try { a = document.activeElement; } catch (e) {}
+  /* activeElement stops at a shadow host, exactly as elementFromPoint does. */
+  var hops = 0;
+  while (a && a.shadowRoot && a.shadowRoot.activeElement && hops++ < 20) a = a.shadowRoot.activeElement;
+  if (isEditable(a)) return a;
+  if (isEditable(st.el)) return st.el;
+  try {
+    if (st.lastField && st.lastField.isConnected && isEditable(st.lastField)) return st.lastField;
+  } catch (e) {}
+  return null;
+}
+
+document.addEventListener("focusin", guard("focusin", function (e) {
+  var el = e && e.target;
+  if (!isEditable(el)) return;
+  if (suppressed(el)) return;
+  /* Already collecting an answer for this very field; a second ask would
+     race the first one's reply. */
+  if (st.pending === el) return;
+
+  /* Keep the ring with the keyboard, so that dismissing it leaves the
+     focus where the human expects and Triangle reopens the right field. */
+  st.el = el;
+  reFocus();
+  say(requestEdit(el, "page focus"));
 }), true);
 
 window.__arcnav = {

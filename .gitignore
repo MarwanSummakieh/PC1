@@ -27,3 +27,6 @@ id_*
 arcbench
 arcbench.pub
 *password*.txt
+
+# Flat staging copy for previewing the shell as the host deploys it
+.stage/

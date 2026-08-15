@@ -1,0 +1,94 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   ARC OS — library.css
+   The face a cover wears.
+
+   Every tile on the rail is one of three faces, and ui/library.js picks
+   which by putting a class on the tile — never an inline background.
+   That is not a style preference. index.html used to write
+   `background:` inline onto .tile-art, and an inline `background`
+   shorthand also resets background-size, -position and -repeat to their
+   initial values; inline beats every rule in this file, so
+   `background-size:cover` never applied to a single cover and
+   `background-repeat:no-repeat` never applied to a single icon. Real
+   Steam covers were drawn as unscaled crops of their own top-left
+   corners, and extracted executable icons were TILED four-up across the
+   box. Nothing here works unless .tile-art carries no inline style, so
+   it does not.
+
+     .face-art     a real portrait cover from the source, or a portrait
+                   ui/homeart.js generated from the executable's icon.
+                   Filled to the box; a sliver off the top and bottom is
+                   what a console does, and what the title treatment
+                   printed on that art expects.
+     .face-made    the generated case, marked separately only so the
+                   sheen over it can be lighter — a generated portrait
+                   already has its own darkened floor baked in.
+     .face-field   no artwork of any kind: the shell's own two tiles,
+                   and the honest "nothing is installed here" tile. A
+                   two-stop field in the tile's own colour, the arc
+                   mark, and the source glyph. This is the bench's case
+                   and it has to look like a decision.
+
+   --k-accent / --k-deep / --k-ink are set per tile by ui/library.js from
+   ui/homeart.js's reading of the artwork, so even a tile with no picture
+   on it is coloured by something real rather than by a palette.
+   ══════════════════════════════════════════════════════════════════════ */
+
+.tile-art{
+  position:absolute;inset:0;
+  background-repeat:no-repeat;
+  background-position:center;
+  background-size:cover;
+  background-color:var(--k-ink,#0d0d11);
+}
+
+/* ── Real and generated portraits ───────────────────────────────────── */
+.tile.face-art .tile-glyph,
+.tile.face-art .tile-arc,
+.tile.face-art .tile-mark{opacity:0}
+
+/* A generated portrait already carries its own bottom scrim, so the
+   rail's one is halved over it rather than doubled up into mud. */
+.tile.face-made .tile-sheen{
+  background:linear-gradient(0deg,rgba(0,0,0,.52) 0%,rgba(0,0,0,.16) 22%,rgba(0,0,0,0) 46%);
+}
+
+/* ── The field face ─────────────────────────────────────────────────── */
+.tile.face-field .tile-art{
+  background-image:
+    linear-gradient(158deg,rgba(255,255,255,.10),rgba(0,0,0,.34) 62%),
+    radial-gradient(128% 96% at 26% 0%,var(--k-accent,#4d7fb8) 0%,transparent 60%),
+    linear-gradient(158deg,var(--k-deep,#161a21) 0%,var(--k-ink,#08080a) 88%);
+}
+
+/* The arc, at cover scale — the same mark that sweeps behind the whole
+   screen and the same one ui/homeart.js draws into a generated portrait,
+   so all three read as one idea at three sizes. Clipped by the tile. */
+.tile-arc{
+  position:absolute;left:50%;bottom:-78%;
+  width:168%;aspect-ratio:1/1;translate:-50% 0;
+  border-radius:50%;
+  border:.0625rem solid rgba(255,255,255,.22);
+  opacity:0;transition:opacity .3s var(--e-out);
+}
+.tile.face-field .tile-arc{opacity:1}
+
+/* The executable's own icon, shown for the moment between the scan
+   landing and the generated portrait being drawn. Centred at a size it
+   can be read at — a 32px icon stretched over a 300px box is three
+   blurry pixels, and tiled it is the defect this file exists to stop. */
+.tile-mark{
+  position:absolute;inset:20% 24% 30%;
+  background-repeat:no-repeat;background-position:center;background-size:contain;
+  opacity:0;transition:opacity .3s var(--e-out);
+  filter:drop-shadow(0 .125rem .5rem rgba(0,0,0,.45));
+}
+.tile.has-mark .tile-mark{opacity:1}
+.tile.has-mark .tile-glyph{opacity:0}
+
+/* Cross-fade rather than snap when a face is replaced. Reduced-motion
+   users get the swap with no animation, same as the rest of the shell. */
+.tile-art{transition:background-image .3s linear}
+@media (prefers-reduced-motion:reduce){
+  .tile-art,.tile-arc,.tile-mark{transition:none}
+}

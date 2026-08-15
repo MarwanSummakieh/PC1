@@ -3,9 +3,10 @@
 Scripts that put a custom console shell in front of **one throwaway local account**, and
 the matching scripts that take it all back off.
 
-> **Nothing in this folder has been run.** Every script here changes machine state and is
-> written to be reviewed first. They print what they are going to do, guard against the
-> dangerous cases, and stop rather than guess.
+> **Check `MACHINE-CHANGES.md` for what has actually been applied** — as of 2026-08-14
+> that is steps 01 and 02 only. Every script here changes machine state and is written to
+> be reviewed first. They print what they are going to do, guard against the dangerous
+> cases, and stop rather than guess.
 
 ---
 
@@ -55,6 +56,7 @@ cd C:\Users\brain\Documents\repos\PC1\provisioning
 | 3 | *(build `spike\ShellHost.exe`)* | Step 3 refuses to configure a shell path that does not exist, unless you pass `-AllowMissingShell`. | — |
 | 4 | `03-apply-shell-launcher.ps1` | **The consequential one.** Sets the default shell to `explorer.exe`, sets `ShellHost.exe` as `arcshell`'s shell, enables enforcement. Takes effect at the next sign-in. | **Yes — and read `RECOVERY.md` first** |
 | 5 | `Ctrl`+`Alt`+`Del` → **Switch user** → sign into `arcshell` | Keep the `brain` session alive. Do **not** sign out. | — |
+| 6 | `04-install-broker.ps1` | Registers the SYSTEM scheduled task `\ARC\arc-install-broker` and creates `C:\ProgramData\ARC`. **Independent of steps 1–5** — apply or remove it on its own, in either order. | **Yes** |
 
 Every script accepts `-WhatIfOnly`. Use it on the first pass — it runs all the
 pre-checks and guards and prints the exact calls it would make, without writing anything:
@@ -66,10 +68,14 @@ pre-checks and guards and prints the exact calls it would make, without writing 
 ### Undo, in reverse order
 
 ```powershell
+.\94-remove-install-broker.ps1          # any time — independent of the rest
 .\93-remove-shell-launcher-config.ps1   # first — while the WMI provider still exists
 .\92-remove-test-account.ps1            # then the account
 .\91-disable-shell-launcher.ps1         # last — removes the feature
 ```
+
+Run `94` **before** `92` if you are tearing the whole thing down: `92` deletes `arcshell`,
+and the broker's ACLs and task DACL reference that SID.
 
 `91` refuses to run while enforcement is still on, unless you pass `-Force`. That
 ordering matters: removing the optional feature first would take away the WMI provider
@@ -84,16 +90,17 @@ you need in order to clear the configuration.
 | `01-enable-shell-launcher.ps1` | `91-disable-shell-launcher.ps1` | `Enable-WindowsOptionalFeature` → `Disable-WindowsOptionalFeature -FeatureName Client-EmbeddedShellLauncher -NoRestart`. Leaves `Client-DeviceLockdown` alone unless `-AlsoDisableDeviceLockdown`. |
 | `02-create-test-account.ps1` | `92-remove-test-account.ps1` | `New-LocalUser` + `Add-LocalGroupMember` → `Remove-CimInstance` on `Win32_UserProfile` (deletes `C:\Users\arcshell`) then `Remove-LocalUser`. **Destructive.** Prompts for typed confirmation. |
 | `03-apply-shell-launcher.ps1` | `93-remove-shell-launcher-config.ps1` | `SetDefaultShell` + `SetCustomShell` + `SetEnabled($true)` → `SetDefaultShell("explorer.exe",0)` + `RemoveCustomShell(<sid>)` + `SetEnabled($false)`. Use `-All` to clear every per-SID entry when the state is unknown. |
+| `04-install-broker.ps1` | `94-remove-install-broker.ps1` | `RegisterTaskDefinition` + directory ACLs → `DeleteTask` + delete the `\ARC` task folder. `C:\ProgramData\ARC` is kept (it holds the install log) unless `-RemoveData`. |
 
-All six scripts are **idempotent**: re-running one converges on the same state rather
+All eight scripts are **idempotent**: re-running one converges on the same state rather
 than erroring or double-applying.
 
 ---
 
 ## What requires confirmation
 
-Scripts 01, 02, 03, 91, 92 and 93 all change machine state. **None of them should be run
-without the user explicitly saying yes to that specific script.** The scripts themselves
+Scripts 01, 02, 03, 04, 91, 92, 93 and 94 all change machine state. **None of them should
+be run without the user explicitly saying yes to that specific script.** The scripts themselves
 do not ask for a general go-ahead — that conversation happens outside them — with one
 exception: `92-remove-test-account.ps1` requires you to type the account name, because it
 permanently deletes a profile directory.
@@ -160,6 +167,102 @@ with a different undo, which would need new scripts here.
 
 ---
 
+## The install broker: why a controller can't answer UAC
+
+Installing a machine-scope application needs an administrator token. Windows asks for it
+with a UAC consent dialog, and that dialog runs on the **secure desktop**, which discards
+synthetic input as a matter of design. That is the whole point of it: it is what stops a
+background process from clicking "Yes" on your behalf.
+
+The consequence for this project is absolute, and worth stating plainly so nobody spends
+an evening on it:
+
+> **No gamepad remapper can ever answer a UAC prompt.** Steam Input, JoyToKey, reWASD,
+> Controller Companion and everything like them work through `SendInput`. The secure
+> desktop drops it. There is no button layout, mapping profile or accessibility setting
+> that changes this.
+
+There are only three real ways out, and the broker is the third:
+
+1. **Turn off the secure desktop** (`PromptOnSecureDesktop=0`). The prompt then appears on
+   the normal desktop where injected input reaches it — and so does input from anything
+   else running on the machine. This trades away the exact protection the prompt exists to
+   provide. **Not done here.**
+2. **A hardware HID bridge** — e.g. a Pi Pico in USB gadget mode presenting as a real
+   keyboard, driven by the controller. Real HID input does reach the secure desktop, and
+   nothing is weakened. Viable, but it is a second device to build and keep alive.
+3. **Pre-authorise the elevation, so no prompt is ever raised.** A scheduled task
+   registered by an administrator with `RunLevel Highest` already holds an elevated token.
+   A standard user triggering it sees no consent dialog, because consent was given once,
+   at registration, with a keyboard present.
+
+`04-install-broker.ps1` does (3). **UAC is left completely alone** — `EnableLUA=1` and
+`PromptOnSecureDesktop=1` stay as Windows shipped them. Every other application on the
+machine still prompts exactly as before.
+
+### The shape of it
+
+```
+arcshell (no elevation)          SYSTEM (elevated, pre-authorised)
+─────────────────────────        ─────────────────────────────────
+arc-install.ps1
+  writes queue\<id>.req    ──►
+  schtasks /run \ARC\...   ──►   arc-install-worker.ps1
+                                   reads the id
+                                   looks it up in packages.json
+                                   downloads the pinned https url
+                                   checks the Authenticode signer
+                                   runs it with the pinned args
+                                   confirms verifyPath exists
+  polls processed\…result  ◄──    writes the result
+```
+
+### The boundary, and how to not destroy it
+
+The request file carries **an id and nothing else** — no URL, no path, no arguments, no
+hash. All of those come from `packages.json`, which lives in a directory standard users
+cannot write to, and the worker **refuses to run** if it detects that has stopped being
+true.
+
+That constraint is the entire security model. A broker that accepted a caller-supplied URL
+or path — or a "skip verification" flag, or a "just this once" escape hatch — would be a
+permanent SYSTEM backdoor for every process running as `arcshell`. Adding an entry to
+`packages.json` is a deliberate decision to let the shell install that software with nobody
+at the machine. Adding a general-purpose escape is a decision to hand `arcshell` the box.
+
+### Provenance is pinned by publisher, not by hash
+
+Each entry with a `url` must also name a `publisher`. After download, the file's
+Authenticode signature must be **Valid** and its signer subject must contain that string,
+or the file is deleted unused.
+
+A SHA-256 pin was the obvious alternative and is the wrong default: it breaks the moment a
+vendor ships a new build, and a check that breaks on every update is a check that gets
+switched off. A publisher pin survives version bumps while still proving the bytes came
+from who the manifest says they did. `sha256` remains available per entry, enforced *in
+addition* to the publisher check, for installers that genuinely never change.
+
+### No winget dependency
+
+The bench image (Windows 11 IoT Enterprise LTSC Evaluation) ships **neither winget nor the
+Microsoft Store** — confirmed on `DESKTOP-6BCSJ3P`, where `Microsoft.DesktopAppInstaller`
+is not installed at all. Direct download is therefore the primary path. An entry may also
+carry `wingetId`, which is preferred *only* when winget actually resolves, so one manifest
+serves both the bench and the laptop.
+
+### Known limits
+
+* The worker runs as SYSTEM, which has no interactive user profile. **Machine-scope
+  installs work; per-user installs do not** reliably, and when they do they land outside
+  `arcshell`'s profile. Install user-scope-only software from an interactive session.
+* Unsigned installers cannot be brokered. That is deliberate: there is no provenance to
+  pin, so there is nothing separating "the vendor's installer" from "whatever answered
+  that hostname today".
+* The installer's exit code is treated as a claim, not evidence. Where an entry names a
+  `verifyPath`, that file existing is what decides OK versus FAILED.
+
+---
+
 ## Known unknowns
 
 Things these scripts assume but which have **not** been verified on this machine. Check
@@ -192,9 +295,15 @@ provisioning/
 ├── 01-enable-shell-launcher.ps1         apply:  optional feature
 ├── 02-create-test-account.ps1           apply:  arcshell local account
 ├── 03-apply-shell-launcher.ps1          apply:  custom shell for arcshell only
+├── 04-install-broker.ps1                apply:  SYSTEM install broker (no-UAC installs)
 ├── 91-disable-shell-launcher.ps1        undo 01
 ├── 92-remove-test-account.ps1           undo 02
-└── 93-remove-shell-launcher-config.ps1  undo 03  ← the recovery script
+├── 93-remove-shell-launcher-config.ps1  undo 03  ← the recovery script
+├── 94-remove-install-broker.ps1         undo 04
+└── install-broker/
+    ├── arc-install-worker.ps1           privileged half — runs as SYSTEM
+    ├── arc-install.ps1                  unprivileged half — what ShellHost calls
+    └── packages.json                    the only thing the broker will install
 ```
 
 ## Reference

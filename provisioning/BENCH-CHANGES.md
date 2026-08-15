@@ -84,7 +84,98 @@ and is the correct pattern for the shipped device: **one hidden admin, one shell
 account genuinely must go later, the safe order is: create a replacement hidden admin, verify SSH and
 elevation on it, and only then remove the old one.
 
+### B12 — NVIDIA container service disabled (2026-08-14 11:26)
+
+Removing the NVIDIA Control Panel app in B11 left the driver's container process showing a permanent
+toast in the bottom-left of the screen:
+
+> **NVIDIA Control Panel is not found** — Click here to install NVIDIA Control Panel from Microsoft store.
+
+Confirmed by enumerating windows **inside session 1** (an SSH session in session 0 cannot see them —
+window enumeration is desktop-bound). It was a `#32770` dialog at `(41,1330) 414x83` owned by
+`NVDisplay.Container`, present in every sample.
+
+It could not be resolved on its own terms: **this LTSC image has no Microsoft Store**, there is no NVIDIA
+package payload left in the driver store, and NVIDIA exposes no registry switch to suppress the prompt.
+
+    Set-Service -Name NVDisplay.ContainerLocalSystem -StartupType Disabled
+    Stop-Service -Name NVDisplay.ContainerLocalSystem -Force
+
+**Undo:** `Set-Service -Name NVDisplay.ContainerLocalSystem -StartupType Automatic; Start-Service ...`
+
+Verified afterwards: no visible dialog, zero `NVDisplay.Container` processes, shell alive at
+3440×1440. **Games are unaffected** — 3D rendering goes through the kernel driver (`nvlddmkm`), not this
+user-mode container, which exists mainly to back the control panel we no longer have. What is lost is the
+ability to change NVIDIA-specific settings; HDR and display modes are driven through Windows APIs in
+Settings, not NVIDIA's.
+
+The alternative, if NVIDIA features are ever wanted back: re-enable the service and reinstall the control
+panel by re-running NVIDIA's full driver installer (the Store route is unavailable on this SKU).
+
 ### Verified behaviour after round 2
 
 Power on → no Windows boot logo → no logon screen → `arcshell` signed in automatically → ARC OS boot
 sequence → home screen. No Logitech or NVIDIA UI processes in the session.
+
+---
+
+## Round 3 — install broker (2026-08-14 ~22:00)
+
+| # | Change | Command | Undo |
+|---|---|---|---|
+| B13 | **Install broker applied.** Created `C:\ProgramData\ARC` (inheritance off: SYSTEM/Administrators full, `arcshell` RX, `arcshell` W on `queue\` only), deployed `arc-install-worker.ps1` + `packages.json`, registered on-demand task `\ARC\arc-install-broker` as **SYSTEM / RunLevel Highest**, task DACL granting `arcshell` read+execute. | `04-install-broker.ps1` | `94-remove-install-broker.ps1` (add `-RemoveData` to also delete `C:\ProgramData\ARC`) |
+
+**Why:** the UAC consent dialog runs on the secure desktop, which discards synthetic input — so no
+gamepad remapper can ever answer it. The broker pre-authorises elevation once, at provisioning time,
+so the shell never faces a prompt. **UAC itself is untouched** on this machine.
+
+### No winget on this image
+
+`Microsoft.DesktopAppInstaller` is **not installed** and there is no Microsoft Store to get it from
+(same SKU limitation as B12). The broker therefore does direct HTTPS download as its primary path and
+pins provenance by **Authenticode publisher**, not by SHA-256 — a hash pin breaks on every vendor
+version bump, and a check that breaks constantly is a check that gets switched off. Manifest entries
+still carry `wingetId`, used only where winget actually resolves, so the same file works on the laptop.
+
+### Two bugs found and fixed during bring-up
+
+1. `04` passed a **SID string** to `FileSystemAccessRule`, whose string overload expects an account
+   *name* — `IdentityNotMappedException`. Fixed by passing the `SecurityIdentifier` object.
+2. The worker's "is the manifest writable by non-admins?" guard tested against a mask containing
+   `FullControl` and `Modify`. Those are **composite** values that include the read bits, so
+   `ReadAndExecute -band FullControl` is non-zero and *every* read-only ACE was flagged as a writer.
+   `arcshell`'s legitimate RX tripped it and the worker refused to run. Fixed to test atomic write
+   bits only (`WriteData`, `AppendData`, `Delete`, `DeleteSubdirectoriesAndFiles`, `ChangePermissions`,
+   `TakeOwnership`) — `Modify`/`FullControl` are still caught, because both contain `WriteData`.
+   Note it failed **closed**, which is the correct direction for that guard to fail.
+
+### Verified (2026-08-14 22:02–22:04)
+
+| Test | Result |
+|---|---|
+| ACLs on `C:\ProgramData\ARC` | `SYSTEM:(OI)(CI)(F)`, `Administrators:(OI)(CI)(F)`, `arcshell:(OI)(CI)(RX)` |
+| ACLs on `queue\` | adds `arcshell:(OI)(CI)(W)` — create only, no modify or delete |
+| Task DACL | `arcshell` granted `0x1200a9` (read + execute), not modify |
+| Request for an id not in the manifest | `REJECTED — not in manifest` |
+| Request containing `C:\Windows\System32\cmd.exe /c whoami` | `REJECTED — malformed id`, not executed |
+| **Full loop as `arcshell`**, non-elevated (S4U task, `RunLevel=0`, no password used) | queue write → task trigger → SYSTEM worker → result read back. Exit 2 (rejected). **No UAC prompt.** |
+
+### B14 — positive path verified: Steam installed through the broker (2026-08-14 22:06)
+
+Requested by **`arcshell`, non-elevated** (S4U task, `RunLevel=0`). `steam.exe` absent before, present
+after. **No UAC prompt, nobody at the machine.**
+
+    22:06:34  installing 'Steam' (steam)
+    22:06:34  downloading https://cdn.akamai.steamstatic.com/client/installer/SteamSetup.exe
+    22:06:36  downloaded 2.3 MB -> C:\ProgramData\ARC\cache\steam_SteamSetup.exe
+    22:06:36  provenance OK (publisher pin 'Valve')
+    22:06:36  C:\ProgramData\ARC\cache\steam_SteamSetup.exe /S
+    22:06:37  verified C:\Program Files (x86)\Steam\steam.exe exists
+    client exit 0
+
+Every stage of the chain is now exercised: queue write as a standard user, task trigger, SYSTEM worker,
+manifest lookup, HTTPS download, Authenticode publisher check, silent install, `verifyPath` confirmation,
+result read back by the caller.
+
+**Undo for the Steam install itself** (separate from removing the broker):
+`C:\Program Files (x86)\Steam\uninstall.exe /S`

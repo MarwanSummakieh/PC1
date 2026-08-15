@@ -1,35 +1,51 @@
-# ARC OS — a console shell for PC1
+# PC1 — a console shell for this machine
 
-A living-room operating-system shell in the spirit of the PS5 dashboard: one
-dark, lit, atmospheric surface; a single row of large tiles; a hero that
-answers "what is this?" before you press anything; and a boot sequence that
-resolves into the home screen instead of cutting to it.
+A living-room operating system for one machine, called PC1. The layout is the
+PS5 dashboard's: a status bar, two view tabs, a hero that answers "what is
+this?" before you press anything, and a single row of large box art anchored to
+the bottom of the screen. The *material* is the Mythos Playnite theme's: flat
+near-black, one saturated blue, hairline rules, dense label/value tables and a
+white selection border.
 
-Nothing here imitates Sony's marks or artwork. The identity is its own — the
-loading arc **is** the logo, which is why the boot screen and the shell feel
-like the same object.
+Neither is imitated as trade dress. There is no Sony mark or artwork here, and
+nothing is copied out of Mythos — it is the same design language rebuilt at
+ten-foot scale for a controller.
+
+The identity is a single typographic lockup: **PC1** sitting on a rule that
+fills with the machine's progress while it boots and then stays put as the
+wordmark's underline. The loading bar *is* the logo, which is why the boot
+screen and the shell read as the same object.
 
 ## Files
 
 | File | What it is |
 |---|---|
 | `index.html` | The full shell — boot sequence resolving into the home screen. |
-| `boot.html` | The boot splash on its own, for actually running at startup. Self-contained. |
+| `boot.html` | The boot splash on its own, for actually running at startup. |
+| `ui/*.woff2`, `ui/OFL-Inter.txt` | Inter and Inter Tight, vendored. Deployed flat beside `index.html`. |
 | `ui/osk.js`, `ui/osk.css` | The on-screen keyboard (`ArcOSK`). Deployed flat beside `index.html`. |
 | `ui/files.js`, `ui/files.css` | The file explorer (`ArcFiles`). Same deal. |
-| `ui/browser.js`, `ui/browser.css` | The browser's **chrome** (`ArcBrowser`) — tabs, address bar, start page, history. Not the web pages. |
+| `ui/browser.js`, `ui/browser.css` | The browser's **chrome** (`ArcBrowser`) — tabs, address bar, start page, history, downloads. Not the web pages. |
 | `ui/arcnav.js` | The navigation layer injected into **every web page** the browser loads. Never loaded by `index.html`; the host reads it off disk and injects it. |
 | `spike/ShellHostWeb/ShellHostWeb.cs` | The WebView2 host. Owns the pad, the launch cycle, the bridges into `SystemApi` and `FileApi`, and the browser's content WebViews. |
 | `spike/ShellHostWeb/SystemApi.cs` | The native system-control layer everything in Settings reads and writes through. |
 | `spike/ShellHostWeb/FileApi.cs` | The native file-operations layer behind the explorer. |
 | `README.md` | This spec. |
 
-No build step, no fonts to fetch, no CDN, no external images — the CSP on the
-hosted page blocks all of it. `boot.html` is entirely standalone;
-`index.html` additionally loads `osk.*`, `files.*` and `browser.*` from its
-own origin (they must be siblings of it, as they are in `C:\ArcOS\web\`).
-Browsed web pages are obviously exempt from all of that: they are not the
-shell and they are not on the shell's origin. See below.
+No build step, no CDN, no external images, no network of any kind — the fonts
+ship in the same folder and are loaded same-origin. `index.html` loads
+`osk.*`, `files.*`, `browser.*` and the woff2 files **by bare filename**,
+because the host deploys everything flat into `C:\ArcOS\web\`; opening the
+repo's `index.html` directly will not find them. `boot.html` will use Inter
+Tight if it is a sibling and falls back to Segoe UI Variable Display if not,
+so it still stands alone. Browsed web pages are exempt from all of this: they
+are not the shell and not on the shell's origin. See below.
+
+**The code still says `arc`.** `arcos.local`, `ArcOSK`, `ArcFiles`,
+`ArcBrowser`, `.arcbw-*`, `__arcAdjust`, `arcnav.js` and the `arc.deviceName`
+key are identifiers, not branding, and they are wired through the C# host and
+the provisioning scripts. Renaming them is a separate job with real blast
+radius; only user-visible text was rebranded.
 
 ## The browser: two WebViews, not one
 
@@ -68,6 +84,43 @@ keyboard, the start page, history, the menu — asks the host to hide the
 content view first. `browser.js` calls this `stage(false)`; forget it and your
 new panel will be invisible behind a web page.
 
+**Why downloads are taken off Chromium.** WebView2 has its own download
+experience and it cannot be used here: it is painted by the renderer *inside*
+the content window, so the shell cannot restyle it, move it, or put a focus
+ring on it; its buttons are mouse targets that `arcnav.js` cannot reach,
+because they are not in the document; and it fades away after a few seconds
+with no toolbar button to bring it back. So `DownloadStarting` sets
+`e.Handled = true` — the documented way to suppress the flyout — and the host
+reports the whole life of the download (name, destination, bytes, state, and
+the reason it stopped) to the shell page as `{ev:"downloads", list:[…]}`. The
+page draws a chip in the chrome row while anything is in flight and a
+`Downloads` sheet with ordinary focusable rows: Cross pauses, resumes, shows a
+finished file in the explorer or asks a failed one again; Square cancels or
+forgets the row. Commands go back as `{cmd:"download", do:…, id:…}`.
+
+The path Chromium chose is kept rather than overridden: it is already the
+user's Downloads folder and already made unique against what is on disk, and
+the SDK is explicit that supplying a path pointing at an existing file
+*overwrites* it. Nothing is blocked and nothing is scanned — a download is
+saved, listed, and left for the human to deal with in the file explorer; the
+shell never launches it.
+
+**How an extension gets onto a machine with no mouse.** Extensions are a
+runtime call on the content profile, not a config file:
+`AddBrowserExtensionAsync(folder)` loads one into every open document
+immediately and the profile remembers it, and `EnableAsync` / `RemoveAsync`
+are the same shape. So the browser's Extensions sheet is a real manager. The
+host offers the two sources a television actually has — a `.zip` or `.crx`
+this browser has **downloaded**, and anything on a plugged-in **USB stick** —
+unpacks the chosen one into `C:\ArcOS\extensions\<name>` (a `.crx` is a zip
+with a signature header; the header is parsed and skipped) and adds it. Cross
+turns one on or off, Square removes it after a confirmation, and a folder that
+is on disk but did not load is listed with its reason rather than being
+silently absent. There is no Chrome Web Store install: the store serves `.crx`
+to Chrome-branded browsers behind a signed request this host cannot honestly
+fake, and a button that fails for reasons nobody in a living room can act on
+is worse than no button.
+
 **Why discrete pad actions go through `ExecuteScriptAsync`.** A click
 synthesised inside a `chrome.webview` message handler carries no user
 activation, and Chromium withholds three things without one:
@@ -80,43 +133,71 @@ cheap message channel, where activation does not matter.
 
 ## Design tokens
 
-### Colour
+The look is a flat, near-black interface with one saturated blue and a white
+selection ring — the visual language of the Mythos Playnite theme, expressed in
+a ten-foot console layout. Three rules hold it together:
 
-The neutrals are blue-biased rather than grey — on a dark screen a true grey
-reads as dead pixels next to a blue accent.
+* **The ground is neutral.** Not navy. The cover art is the only real chroma on
+  screen and it needs a ground that competes with nothing.
+* **Nothing is lit from within.** Depth comes from surface steps and hairlines.
+  There is no glow, no bloom and no gradient fill anywhere in the shell.
+* **Blue is the action, white is the cursor.** The accent fills the primary
+  button and nothing else. Focus is always a hard white ring.
+
+### Colour
 
 | Token | Value | Role |
 |---|---|---|
-| `--void` | `#04060b` | Ground. The darkest thing on screen. |
-| `--deep` | `#0c1422` | Panels, chips, control-centre buttons. |
-| `--haze` | `#17253c` | Atmospheric mid-tone in the ambient field. |
-| `--line` | `#24344f` | Hairline borders and key caps. |
-| `--ice` | `#e6f0ff` | Primary text. |
-| `--steel` | `#7f96b8` | Secondary text, status bar, icons. |
-| `--dim` | `#4e6183` | Tertiary — inactive tabs, hint bar, build strings. |
-| `--beam` | `#4c8dff` | The accent. Focus, progress, glow. |
-| `--beam-hot` | `#a6d4ff` | The hot core of the accent — highlights and eyebrows. |
-| `--beam-deep` | `#1b3f8a` | The accent's dark end, for gradient tails. |
-| `--good` | `#56d6a0` | Semantic only — connected, playing, on. |
-| `--warn` | `#ffb457` | Semantic only — attention. |
+| `--void` | `#0b0b0d` | Ground. Lifted off pure black so hairlines survive. |
+| `--deep` | `#141417` | Cards, panels, chips, the fact table. |
+| `--haze` | `#1c1c21` | Raised surface — rows, hovered controls. |
+| `--line` | `#2b2b32` | Hairline borders. |
+| `--line-soft` | `#202027` | The rule *between* rows inside one card. |
+| `--ice` | `#f4f5f7` | Primary text. |
+| `--steel` | `#9c9da5` | Secondary — descriptions, status bar, icons. |
+| `--dim` | `#6a6b73` | Tertiary — labels, inactive tabs, build strings. |
+| `--beam` | `#1a86ff` | The action. Primary button, progress, active state. |
+| `--beam-hot` | `#57a6ff` | Lighter blue, for small marks on dark. |
+| `--beam-deep` | `#0b4fa8` | The dark end, for spinner tracks. |
+| `--sel` | `#ffffff` | **Selection.** Every focus ring in the shell. |
+| `--good` | `#3fd18b` | Semantic only — connected, playing, on. |
+| `--warn` | `#ffb457` | Semantic only — attention, revert, danger. |
+| `--bad` | `#ff5c68` | Semantic only — destructive. |
 
-Semantic colour is deliberately separate from the accent. A green chip means
-*live*; it never means *selected*.
+Semantic colour is deliberately separate from the accent. A green value means
+*live*; it never means *selected*. The one exception is the power confirmation,
+where the ring itself carries meaning — amber round the destructive button,
+white round the safe one — because there the difference is the whole point.
+
+**Why the ring is white.** It used to be a blue halo, which had two problems on
+a television: it washed out against bright artwork, and its blur made the exact
+boundary of the focused thing ambiguous from across a room. White at full
+opacity survives every cover in the catalogue. On covers it is drawn *inset*, so
+selection never changes the box's size and the rail's arithmetic stays exact.
 
 ### Type
 
-No webfonts — the CSP on a hosted page blocks font CDNs, and a silent fallback
-would wreck the identity. Character comes from weight and tracking instead.
+Inter and Inter Tight, vendored as woff2 beside the shell — same origin, no
+network, no CDN. Variable across 100–900, so one file per subset covers every
+weight. Licence in `ui/OFL-Inter.txt`.
 
-| Role | Stack | Treatment |
+| Role | Family | Treatment |
 |---|---|---|
-| Display | `Segoe UI Variable Display` → `system-ui` | 200–300 weight. Hero titles, wordmark, clock. |
-| UI | `Segoe UI Variable Text` → `system-ui` | 400. Body, chips, hints. |
-| Data | same, `tabular-nums` | Clock, percentages — digits must not jitter. |
+| Display | Inter Tight | 600–700, `-.03em`. Wordmark, hero and panel titles, tabs. |
+| UI | Inter | 400–500. Body, chips, rows, hints. |
+| Data | Inter, `tabular-nums` | Clock, percentages, every value in a fact table. |
 
-Tracking carries the console feel: `.42em` on the boot sub-line, `.30em` on the
-wordmark, `.34em` on hero eyebrows, `.26em` on tab labels. Running text stays
-near 52ch.
+`font-display:block`, not `swap`: a console shell that flashes a fallback face
+on the way up looks broken, and the file is on local disk so the block is
+milliseconds. Each family declares a latin and a latin-ext subset; latin-ext
+stays unloaded until something on screen needs it.
+
+**Weight replaced tracking.** The old shell built its voice from hairline
+weights and very wide letter-spacing — `.42em` on the boot sub-line, `.34em` on
+eyebrows, `.26em` on tab labels. That vocabulary is gone. Titles are now heavy
+and tight, labels are sentence case in the tertiary grey, and the only
+uppercase left in the shell is on keyboard modifier caps, which really are
+uppercase. Running text stays near 56ch.
 
 ### Scale
 
@@ -124,21 +205,19 @@ The shell is resolution-independent: one root scale factor drives everything,
 and every other length is `rem`.
 
 ```css
-:root{ font-size: clamp(11px, min(1.4815vh, 2.3vw), 34px); }
+:root{ font-size: clamp(12px, min(1.62vh, 2.05vw), 40px); }
 ```
 
 Height-led, because a console is read from a fixed distance and it is the
-panel's height that changes. `1.4815vh` is 16px at 1080p, so the design's
-original pixel values are exactly what 1080p still gets; 1440p (including the
-3440×1440 bench) gets 21.33px and 2160p gets 32px. The `vw` term only bites on
-absurdly wide-and-short viewports, where it shrinks rather than overflows.
+panel's height that changes. The `vw` term only bites on absurdly
+wide-and-short viewports, where it shrinks rather than overflows.
 
-| Viewport | Root | Tile | Active tile | Hero title |
+| Viewport | Root | Cover | Focused cover | Hero title |
 |---|---|---|---|---|
-| 1920×1080 | 16.00px | 118px | 176px | 64px |
-| 2560×1440 | 21.33px | 157px | 235px | 85px |
-| 3440×1440 | 21.33px | 157px | 235px | 85px |
-| 3840×2160 | 32.00px | 236px | 352px | 128px |
+| 1920×1080 | 17.50px | 149 × 198px | 219 × 292px | 56px |
+| 2560×1440 | 23.33px | 198 × 264px | 292 × 389px | 76px |
+| 3440×1440 | 23.33px | 198 × 264px | 292 × 389px | 76px |
+| 3840×2160 | 35.00px | 298 × 397px | 438 × 583px | 114px |
 
 **TV overscan** is handled by a safe-area inset rather than a fixed edge:
 `--edge: max(2.5rem, 2.6vw)` and `--safe-y: max(1.6rem, 2.2vh)`. Nothing
@@ -146,22 +225,27 @@ critical reaches the physical edge of the panel.
 
 ### Rail geometry
 
+Covers are 3:4 portrait — box art, not icons.
+
 | Token | Value | In px at 1080p |
 |---|---|---|
-| `--tile-u` | `7.375` | `118px` |
-| `--tile-active-u` | `11` | `176px` |
-| `--gap-u` | `1` | `16px` |
+| `--cover-u` | `8.5` | `149px` wide |
+| `--cover-active-u` | `12.5` | `219px` wide |
+| `--gap-u` | `.875` | `15px` |
 | `--edge` | `max(2.5rem, 2.6vw)` | `50px` |
 
+Only the **widths** are tokens. Every height is `width × 4/3` computed at the
+point of use, so the aspect ratio cannot drift out of sync with itself.
+
 The rail tokens are **unitless multipliers of 1rem**, and the multiplication
-happens at the point of use (`width: calc(var(--tile-u) * 1rem)`), not in the
+happens at the point of use (`width: calc(var(--cover-u) * 1rem)`), not in the
 token. Both details matter:
 
 * JS can compute the scroll offset exactly at any scale —
-  `idx × (tile-u + gap-u) × rem`, never measured from the DOM. Every tile ahead
-  of the focused one sits at its collapsed width, so the arithmetic is exact;
-  measuring `offsetLeft` mid-transition reads the previous layout and the rail
-  drifts.
+  `idx × (cover-u + gap-u) × rem`, never measured from the DOM. Every cover
+  ahead of the focused one sits at its collapsed width, so the arithmetic is
+  exact; measuring `offsetLeft` mid-transition reads the previous layout and the
+  rail drifts.
 * A custom property declared as `calc(… * 1rem)` on `:root` is resolved once
   against the root font size and is **not** re-resolved when a viewport-driven
   root font size changes. Put the calc in the token and the rail silently keeps
@@ -171,18 +255,28 @@ token. Both details matter:
 
 | Moment | Timing | Curve |
 |---|---|---|
-| Wordmark letters | 0.8s, staggered 0.11s from 0.42s | `(.16,.84,.24,1)` |
-| Arc spin | 1.5s linear, infinite | linear |
-| Arc settle | 0.9s to 486° — 1⅓ turns into rest | `(.16,.84,.24,1)` |
+| Wordmark letters | 0.55s, staggered 0.09s from 0.18s | `(.16,.84,.24,1)` |
 | Progress step | 0.5s per step, weighted by real cost | `(.16,.84,.24,1)` |
-| Bloom wipe | 0.85s, peak opacity at 22% | `(.16,.84,.24,1)` |
-| Shell entrance | 0.7–0.9s, scale 1.05→1 with 14px blur clearing | `(.16,.84,.24,1)` |
-| Tile focus | 0.42s width/height | `(.16,.84,.24,1)` |
+| Boot hold at 100% | 0.42s before anything leaves | — |
+| Boot exit | 0.45s opacity + scale 1→1.015 | `(.6,0,.9,.4)` |
+| Shell entrance | 0.5–0.6s, scale 1.012→1 | `(.16,.84,.24,1)` |
+| Cover focus | 0.42s width/height | `(.16,.84,.24,1)` |
 | Hero crossfade | 0.7s art, 0.28s text (text leads out, art follows) | `(.16,.84,.24,1)` |
 
 One easing curve throughout, one exit curve (`(.6,0,.9,.4)`) for things
 leaving. Progress steps are weighted, not evenly spaced — a real boot spends
 its time on drivers and services, and a bar that admits that reads as honest.
+
+Three things the shell deliberately does **not** do any more:
+
+* **No bloom wipe out of boot.** The splash fades; it does not flash.
+* **No blur on the shell entrance.** A full-screen `filter: blur()` is a real
+  per-frame compositing cost, and it read as the old lit design's signature.
+* **No ambient canvas.** There used to be a particle field running a
+  `requestAnimationFrame` loop forever, on a machine whose whole job is to give
+  its frames to something else. The background is now the focused cover thrown
+  out of focus (`artCSS()`), so it moves with the cursor rather than on a timer
+  and costs nothing when nobody is touching the pad.
 
 `prefers-reduced-motion` collapses every animation to ~0 and shortens
 transitions to 120ms; the boot sequence still runs, at quarter length.
@@ -408,7 +502,7 @@ triggered "At log on", and the machine comes up into the shell.
 
 **One honest limitation:** anything a browser draws appears *after* Windows has
 booted and logged in — it cannot cover firmware POST or the Windows boot
-animation. If you want the arc mark during the actual boot phase, that's the
+animation. If you want the PC1 wordmark during the actual boot phase, that's the
 BGRT logo slot in firmware, which takes a static BMP and is set by the OEM or
 by a signed firmware update; it is not something this page can reach. What this
 splash covers well is the gap between logon and the shell being ready, which on
@@ -416,18 +510,37 @@ a machine like this is most of the visible wait anyway.
 
 ## Extending it
 
-Apps live in the `APPS` object in `index.html` — one entry per tile:
+Apps live in the `APPS` object in `index.html` — one entry per cover:
 
 ```js
 { id:"steam", name:"Steam", icon:"steam", art:"play",
   eyebrow:"Big Picture", title:"Steam",
-  desc:"…", meta:["342 titles","1.2 TB installed"],
-  live:2,            // index into meta[] to render as a green "live" chip
-  badge:"2",         // corner count, e.g. pending downloads
-  action:"Launch" }  // primary button label
+  desc:"…",
+  tags:["Controller", "Big Picture", "Cloud saves"],   // chips, left column
+  facts:[["Titles","342"], ["Installed","1.2 TB"]],    // table, right column
+  live:"Friends online",  // the fact whose value is a running state
+  badge:"2",              // corner count, e.g. pending downloads
+  action:"Launch" }       // primary button label
 ```
 
-`art` keys into the `G` gradient table (two stops per key, used for both the
-tile face and the hero wash), and `icon` keys into `ICON`, a table of inline
+**`tags` and `facts` are two different vocabularies and the split is the
+point.** A tag is what the app *can do* — short, static, no numbers. A fact is
+what is *true about it right now* — a label and a value. Tags become chips
+under the description; facts become the table on the right. Putting a number in
+a tag, or a capability in a fact, is how that column stops being scannable.
+
+`live` names a fact **by label, not by index**, so inserting a fact above it
+cannot silently move the green highlight onto the wrong row.
+
+`art` keys into the `G` gradient table (two stops per key, used for the cover
+face and the backdrop wash), and `icon` keys into `ICON`, a table of inline
 24×24 stroke paths. Adding an app means adding a gradient pair, an icon path,
 and the entry — no other code changes.
+
+### Where the cascade will bite you
+
+The panels own `.facts` / `.fact` for their read-only lists; the home screen's
+version is `.hero-facts` / `.hero-fact`. They are deliberately identical to
+look at and deliberately different in name. Sharing the names once gave panel
+rows the hero card's border **and** their own zebra striping at the same time —
+the rules did not conflict loudly, they both just applied.

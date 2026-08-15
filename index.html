@@ -1,10 +1,11 @@
 <meta charset="utf-8">
-<title>ARC OS — PC1</title>
+<title>PC1</title>
 
 <!-- The on-screen keyboard ships as a real same-origin stylesheet and script:
      the page is served over https://arcos.local/ from the host's virtual host
      mapping, and the CSP there rejects injected style elements. -->
 <link rel="stylesheet" href="osk.css">
+<script src="sfx.js"></script>
 <script src="osk.js"></script>
 
 <!-- The file explorer, on the same terms: a real stylesheet and a real script,
@@ -21,50 +22,135 @@
 <link rel="stylesheet" href="browser.css">
 <script src="browser.js"></script>
 
+<!-- The home rail's contents. library.js replaces the old hardcoded APPS
+     fixture with a real scan of what is installed, performed by the host
+     (ArcOs.Library.LibraryApi). It defines one global, ArcLibrary.
+     library.css only styles cover art painted into the existing .tile-art;
+     with no covers it does nothing, which is the empty machine's case. -->
+<link rel="stylesheet" href="library.css">
+<!-- homeart.js turns one cover into the three things the home screen is
+     made of: the stretched downsample behind everything, the colour the
+     shell takes its accent from, and a generated portrait for a title
+     that has no cover at all. It defines one global, ArcArt, and must
+     load BEFORE library.js, which is its only caller. -->
+<script src="homeart.js"></script>
+<script src="library.js"></script>
+
 <style>
 /* ─────────────────────────────────────────────────────────────
-   ARC OS — console shell for PC1
-   Single committed visual world: every color painted explicitly.
+   PC1 — the console shell for this machine
 
    SIZING RULE: nothing outside :root is expressed in px. The root
    font-size is derived from the viewport, everything else is rem,
    so 1080p / 1440p / ultrawide / 4K are the same layout at
    different scales rather than four separate designs.
+
+   MATERIAL: neutral black, one flat blue that never glows, and a
+   white selection ring. Nothing here is lit from within — depth
+   comes from surface steps and hairlines, not from bloom. Colour
+   appears in exactly three places: the primary action, semantic
+   state, and the cover art itself.
    ───────────────────────────────────────────────────────────── */
 
+/* Inter ships beside the shell — same origin, no network, no CDN.
+   Variable across 100–900, so one file per subset covers every
+   weight the shell uses. Licence in OFL-Inter.txt.
+   font-display:block, not swap: a console shell that flashes a
+   fallback face on the way up looks broken, and the face is on
+   local disk so the block is measured in milliseconds. */
+@font-face{
+  font-family:"Inter";font-style:normal;font-weight:100 900;font-display:block;
+  src:url("Inter-latin.woff2") format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,
+                U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,
+                U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face{
+  font-family:"Inter";font-style:normal;font-weight:100 900;font-display:block;
+  src:url("Inter-latin-ext.woff2") format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,
+                U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,
+                U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face{
+  font-family:"Inter Tight";font-style:normal;font-weight:100 900;font-display:block;
+  src:url("InterTight-latin.woff2") format("woff2");
+  unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,
+                U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,
+                U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face{
+  font-family:"Inter Tight";font-style:normal;font-weight:100 900;font-display:block;
+  src:url("InterTight-latin-ext.woff2") format("woff2");
+  unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,
+                U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,
+                U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+
 :root{
-  --void:      #04060b;
-  --deep:      #0c1422;
-  --haze:      #17253c;
-  --line:      #24344f;
+  /* Neutral, not navy. A blue-biased dark reads as "space console";
+     this shell wants the art on the covers to be the only chroma on
+     screen, which needs a ground that competes with nothing. The
+     faint lift off pure #000 is deliberate — true black crushes the
+     hairlines that carry the whole structure. */
+  --void:      #0b0b0d;
+  --deep:      #141417;
+  --haze:      #1c1c21;
+  --line:      #2b2b32;
+  --line-soft: #202027;
 
-  --ice:       #e6f0ff;
-  --steel:     #7f96b8;
-  --dim:       #4e6183;
+  --ice:       #f4f5f7;
+  --steel:     #9c9da5;
+  --dim:       #6a6b73;
 
-  --beam:      #4c8dff;
-  --beam-hot:  #a6d4ff;
-  --beam-deep: #1b3f8a;
+  /* One flat blue. It fills the primary action and nothing else —
+     it is never a glow, never a border, never a focus ring. */
+  --beam:      #1a86ff;
+  --beam-hot:  #57a6ff;
+  --beam-deep: #0b4fa8;
 
-  --good:      #56d6a0;
+  /* Selection is white. On a television a white ring survives any
+     cover art behind it; a blue one disappears into a blue box. */
+  --sel:       #ffffff;
+
+  --good:      #3fd18b;
   --warn:      #ffb457;
+  --bad:       #ff5c68;   /* destructive only — delete, disconnect, fail */
 
-  --sans: "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
-  --display: "Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif;
+  --sans: "Inter","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif;
+  --display: "Inter Tight","Inter","Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;
+
+  /* Tight radii. The old shell was built from pills; this one is
+     built from cards and hairlines, which want corners you can
+     still read as corners. */
+  --r-s: .25rem;
+  --r-m: .375rem;
+  --r-l: .5rem;
 
   --e-out: cubic-bezier(.16,.84,.24,1);
   --e-in:  cubic-bezier(.6,0,.9,.4);
 
   /* ── Root scale ───────────────────────────────────────────
-     16px at 1920×1080, 21.3px at 1440p (incl. 3440×1440),
-     32px at 2160p. Height-led because a console UI is read at a
+     17.5px at 1920×1080, 23.3px at 1440p (incl. 3440×1440),
+     35px at 2160p. Height-led because a console UI is read at a
      fixed distance and height is what changes with the panel;
-     the vw term only bites on absurdly wide-and-short viewports
-     so an odd aspect ratio shrinks instead of overflowing. */
-  font-size: clamp(11px, min(1.4815vh, 2.3vw), 34px);
+     the vw term only bites on wide-and-short or portrait
+     viewports, so an odd aspect ratio shrinks instead of
+     overflowing.
 
-  /* TV overscan safe area. Percent-of-viewport floors keep content
-     off the extreme edge on a set that overscans ~3–5%. */
+     The height term was 1.4815vh until a human looked at a
+     3440×1440 panel and reported the whole design reading as a
+     small cluster in the left third. Reading distance did not
+     change, so the type scale is only lifted ~9%; the rest of
+     the answer is the ultrawide block at the bottom of this
+     sheet, which spends the extra WIDTH rather than inflating
+     everything uniformly. */
+  font-size: clamp(12px, min(1.62vh, 2.05vw), 40px);
+
+  /* Overscan / bezel safe area. Percent-of-viewport floors keep
+     content off the extreme edge. Both sides, always: the right
+     inset is the one that gets forgotten, and a control cut in
+     half by the panel edge is indistinguishable from a bug. */
   --edge:   max(2.5rem, 2.6vw);
   --safe-y: max(1.6rem, 2.2vh);
 
@@ -74,10 +160,38 @@
      is resolved once against the root font-size and is NOT re-resolved
      when a viewport-driven root font-size changes — the multiplication
      has to happen at the point of use, below, or the rail keeps the
-     scale it had at first layout. */
-  --tile-u: 7.375;
-  --tile-active-u: 11;
+     scale it had at first layout.
+
+     Covers are 3:4 portrait — box art, not icons. Only the WIDTHS are
+     tokens; every height is width × 4/3 at the point of use, so the
+     aspect ratio cannot drift out of sync with itself. The rail's
+     scroll step reads --cover-u alone, because every cover ahead of
+     the focused one sits at its collapsed width. */
+  --cover-u: 9.25;
+  --cover-active-u: 13.5;
   --gap-u: 1;
+
+  /* The reading column. Everything to the right of it is artwork, so
+     this number is the one that decides how much of the screen the UI
+     is allowed to take. Capped in rem rather than left at a percentage
+     because a 3440-wide panel does not want a 1200px paragraph — it
+     wants the same column and more picture. */
+  --col: clamp(22rem, 34vw, 38rem);
+
+  /* Set by paintHero from the focused cover's dominant chroma. The
+     default is the shell's own blue, which is what an empty machine
+     and the boot screen get. Everything that reads this is a hairline
+     or a rule — never text, never a fill behind text — so a title
+     with an unhelpful palette can change the mood of the screen
+     without ever being able to break its contrast. */
+  --accent: #4d7fb8;
+
+  /* How far the rail is allowed to sit in from the left edge. The rail
+     scrolls by translating, so covers BEFORE the focused one pass under
+     the screen edge; --rail-lead is the strip they are allowed to occupy
+     and .rail-wrap masks it, so a partial cover reads as "there is more
+     that way" instead of as a cover drawn wrong. */
+  --rail-lead: calc(var(--edge) * .62);
 }
 
 *{box-sizing:border-box}
@@ -96,298 +210,566 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
 :focus-visible{outline:none}
 
 /* ── Focus treatment ──────────────────────────────────────────
-   One rule, one accent, one curve. data-focus="on" is the live
+   One rule, one ring, one curve. data-focus="on" is the live
    cursor; "stale" is a scope further down the stack — still shown,
    because on a TV a user must always be able to see where they
-   will land when they back out. */
+   will land when they back out.
+
+   The ring is white and hard-edged. It used to be a blue halo,
+   which had two problems on a television: it washed out against
+   any bright artwork behind it, and its blur made the exact
+   boundary of the focused thing ambiguous from across a room.
+   White at full opacity survives every cover in the catalogue. */
 [data-focus]{outline:none}
 [data-focus="on"]{
-  box-shadow:0 0 0 .125rem var(--beam), 0 0 1.5rem rgba(76,141,255,.42);
+  box-shadow:0 0 0 .125rem var(--sel);
   transition:box-shadow .28s var(--e-out),background .28s var(--e-out),
              color .28s var(--e-out),transform .28s var(--e-out);
 }
-[data-focus="stale"]{box-shadow:0 0 0 .0938rem rgba(76,141,255,.3)}
+[data-focus="stale"]{box-shadow:0 0 0 .0938rem rgba(255,255,255,.3)}
 
-/* ── Ambient field ─────────────────────────────────────────── */
-#amb{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:0}
+/* ── Ground ────────────────────────────────────────────────────
+   What is left of the shell's own background once the artwork is
+   doing the work: a single soft lift under the status bar so the
+   screen is never a flat rectangle of #0b0b0d when there is no art
+   to put on it. Everything else on this layer is the title. */
 .vignette{
   position:fixed;inset:0;z-index:1;pointer-events:none;
-  background:radial-gradient(120% 90% at 50% 40%, rgba(4,6,11,0) 40%, rgba(4,6,11,.72) 100%);
+  background:radial-gradient(140% 88% at 50% -8%, #16161c 0%, var(--void) 62%);
 }
 
 /* ── Stage ─────────────────────────────────────────────────── */
 .stage{position:fixed;inset:0;z-index:2}
 
-/* ═══ BOOT ═════════════════════════════════════════════════ */
+/* ═══ BOOT ═════════════════════════════════════════════════
+   The identity is one typographic lockup, and the loading bar is
+   part of it: PC1 sits on a rule that fills with the boot's
+   progress and then simply stays there as the underline of the
+   wordmark. There is no spinner, no orbiting node and no bloom —
+   the whole screen is flat, which is the point. The only colour
+   on it is the blue in the rule, and the rule is the only thing
+   that moves.
+
+   The block is centred on the screen but left-aligned inside
+   itself: a splash that centres every line reads as a logo screen,
+   and this one is meant to read as a machine reporting in. */
 #boot{
-  position:fixed;inset:0;z-index:20;
+  position:fixed;inset:0;z-index:20;overflow:hidden;
   display:grid;place-items:center;
-  background:radial-gradient(90% 70% at 50% 50%, #0a1220 0%, #04060b 62%, #020306 100%);
-  transition:opacity .5s var(--e-in);
+  background:
+    radial-gradient(64% 50% at 50% 44%, #131318 0%, rgba(11,11,13,0) 72%),
+    var(--void);
+  transition:opacity .45s var(--e-in),scale .45s var(--e-in);
 }
-#boot.gone{opacity:0;pointer-events:none}
+#boot.gone{opacity:0;scale:1.015;pointer-events:none}
 
-.boot-core{display:grid;justify-items:center;gap:2.125rem;translate:0 -.75rem}
-
-/* the mark: a broken ring whose gap carries an orbiting node */
-.mark{width:8.25rem;height:8.25rem;position:relative}
-.mark svg{width:100%;height:100%;overflow:visible}
-.ring-track{fill:none;stroke:#12203a;stroke-width:1.5}
-.ring-arc{
-  fill:none;stroke:url(#arcgrad);stroke-width:2.5;stroke-linecap:round;
-  filter:drop-shadow(0 0 10px rgba(76,141,255,.55));
+.boot-core{
+  display:grid;justify-items:start;gap:0;
+  width:24rem;max-width:74vw;translate:0 -1rem;
 }
-.ring-spin{transform-origin:50% 50%;animation:spin 1.5s linear infinite}
-.node{fill:var(--beam-hot);filter:drop-shadow(0 0 8px rgba(166,212,255,.9))}
-.mark.settled .ring-spin{animation:settle .9s var(--e-out) forwards}
-@keyframes spin{to{transform:rotate(360deg)}}
-@keyframes settle{to{transform:rotate(486deg)}}
 
 .wordmark{
-  display:flex;gap:.34em;
-  font-family:var(--display);font-size:2.75rem;font-weight:200;
-  letter-spacing:.30em;text-indent:.30em;color:var(--ice);
+  display:flex;
+  font-family:var(--display);font-size:4.25rem;font-weight:700;
+  letter-spacing:-.045em;line-height:1;color:var(--ice);
 }
 .wordmark span{
-  opacity:0;translate:0 .875rem;filter:blur(6px);
-  animation:letter .8s var(--e-out) forwards;
+  opacity:0;translate:0 .5rem;
+  animation:letter .55s var(--e-out) forwards;
 }
-@keyframes letter{to{opacity:1;translate:0 0;filter:blur(0)}}
-
-.boot-sub{
-  font-size:.6875rem;letter-spacing:.42em;text-transform:uppercase;
-  color:var(--dim);margin-top:-1.125rem;opacity:0;
-  animation:fade .9s var(--e-out) .9s forwards;
-}
+@keyframes letter{to{opacity:1;translate:0 0}}
 @keyframes fade{to{opacity:1}}
 
+/* The rule under the wordmark IS the progress bar. */
 .boot-progress{
-  width:21.25rem;max-width:78vw;display:grid;gap:.875rem;justify-items:center;
-  opacity:0;animation:fade .7s var(--e-out) 1.1s forwards;
+  width:100%;display:grid;gap:.75rem;
+  margin-top:1.25rem;
+  opacity:0;animation:fade .5s var(--e-out) .75s forwards;
 }
-.track{width:100%;height:.0938rem;background:#132038;position:relative;overflow:hidden;border-radius:.125rem}
+.track{width:100%;height:.125rem;background:var(--line);position:relative;overflow:hidden}
 .fill{
   position:absolute;inset:0 auto 0 0;width:0%;
-  background:linear-gradient(90deg,var(--beam-deep),var(--beam) 60%,var(--beam-hot));
-  box-shadow:0 0 .875rem rgba(76,141,255,.7);
+  background:var(--beam);
   transition:width .5s var(--e-out);
 }
 .boot-status{
-  display:flex;justify-content:space-between;width:100%;
-  font-size:.72rem;letter-spacing:.13em;text-transform:uppercase;color:var(--steel);
+  display:flex;justify-content:space-between;gap:1rem;width:100%;
+  font-size:.8125rem;letter-spacing:0;color:var(--steel);
 }
-.boot-status b{font-weight:400;color:var(--dim);font-variant-numeric:tabular-nums}
+.boot-status b{font-weight:500;color:var(--dim);font-variant-numeric:tabular-nums}
 
 .boot-meta{
   position:fixed;bottom:var(--safe-y);left:0;right:0;z-index:21;
   display:flex;justify-content:space-between;padding:0 var(--edge);
-  font-size:.6875rem;letter-spacing:.18em;text-transform:uppercase;
-  color:#33455f;opacity:0;animation:fade 1s var(--e-out) 1.4s forwards;
+  font-size:.75rem;letter-spacing:0;
+  color:var(--dim);opacity:0;animation:fade .6s var(--e-out) 1.1s forwards;
 }
 #boot.gone .boot-meta{opacity:0}
-
-/* bloom wipe out of boot */
-#bloom{
-  position:fixed;left:50%;top:50%;z-index:30;
-  width:40vmax;height:40vmax;margin:-20vmax 0 0 -20vmax;border-radius:50%;
-  background:radial-gradient(circle,#ffffff 0%,#cfe4ff 24%,rgba(76,141,255,.55) 46%,rgba(76,141,255,0) 72%);
-  opacity:0;scale:.1;pointer-events:none;
-}
-#bloom.go{animation:bloom .85s var(--e-out) forwards}
-@keyframes bloom{
-  0%{opacity:0;scale:.1}
-  22%{opacity:.95}
-  100%{opacity:0;scale:5.2}
-}
 
 /* ═══ SHELL ════════════════════════════════════════════════ */
 #shell{
   position:fixed;inset:0;z-index:10;
   display:grid;grid-template-rows:auto auto 1fr auto;
-  opacity:0;scale:1.05;filter:blur(14px);pointer-events:none;
+  /* No blur on the way in. A full-screen filter:blur() is a real
+     compositing cost on every frame of the transition, and it read as
+     the old lit design's signature — the shell now simply arrives. */
+  opacity:0;scale:1.012;pointer-events:none;
 }
 #shell.live{
-  opacity:1;scale:1;filter:blur(0);pointer-events:auto;
-  transition:opacity .7s var(--e-out),scale .9s var(--e-out),filter .7s var(--e-out);
+  opacity:1;scale:1;pointer-events:auto;
+  transition:opacity .5s var(--e-out),scale .6s var(--e-out);
 }
 
 /* ── Status bar ───────────────────────────────────────────── */
+/* Every band that runs the full width of the screen is a flex row of
+   things that would rather not shrink, and a flex row that cannot
+   shrink runs off the right edge instead — which is what "the zoom
+   control and the Menu button are cut in half" is, in every screen it
+   happens on. So the rule for all of them, here and in browser.css and
+   files.css, is the same: the row may shrink, its groups may shrink,
+   the text inside ellipses, and the least important chip leaves first.
+   min-width:0 is not optional on a flex child that contains text — the
+   default min-width:auto is exactly what pushes the row wider than its
+   container. */
 .statusbar{
-  display:flex;align-items:center;gap:1.625rem;
+  display:flex;align-items:center;gap:1.625rem;min-width:0;
   padding:var(--safe-y) var(--edge) 0;
 }
-.user{display:flex;align-items:center;gap:.75rem}
+.user{display:flex;align-items:center;gap:.625rem;min-width:0;flex:0 1 auto}
+.user-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status-right{min-width:0;flex:0 1 auto}
+.status-chip{min-width:0}
+.status-chip > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.status-chip svg,.avatar,.icon-btn{flex:0 0 auto}
+/* Narrow viewports drop the least load-bearing chip rather than push
+   the clock and the two buttons off the panel. */
+@media (max-width:900px){ .statusbar .status-chip[title="Storage"]{display:none} }
+@media (max-width:640px){ .statusbar .status-chip{display:none} }
+/* The avatar is the one round thing left in the shell, and the only
+   place the accent appears as a fill outside the primary action —
+   a person is not a card. */
 .avatar{
-  width:2.125rem;height:2.125rem;border-radius:50%;
-  background:conic-gradient(from 210deg,#2b5fd0,#4c8dff,#a6d4ff,#2b5fd0);
+  width:1.875rem;height:1.875rem;border-radius:50%;
+  background:var(--beam);
   display:grid;place-items:center;
-  font-size:.8125rem;font-weight:600;color:#04060b;
-  box-shadow:0 0 0 .0625rem rgba(166,212,255,.35),0 .25rem .875rem rgba(0,0,0,.5);
+  font-size:.8125rem;font-weight:600;color:#fff;
 }
-.user-name{font-size:.875rem;letter-spacing:.02em}
+.user-name{font-size:.875rem;font-weight:500;letter-spacing:0}
 .status-spacer{flex:1}
-.status-right{display:flex;align-items:center;gap:1.25rem;color:var(--steel)}
-.status-chip{display:flex;align-items:center;gap:.44rem;font-size:.8125rem;letter-spacing:.04em}
+.status-right{display:flex;align-items:center;gap:1.125rem;color:var(--steel)}
+.status-chip{display:flex;align-items:center;gap:.44rem;font-size:.8125rem;letter-spacing:0}
 .status-chip svg{width:.94rem;height:.94rem;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .clock{
-  font-family:var(--display);font-size:1.1875rem;font-weight:300;
-  letter-spacing:.04em;color:var(--ice);font-variant-numeric:tabular-nums;
+  font-size:.875rem;font-weight:500;
+  letter-spacing:0;color:var(--ice);font-variant-numeric:tabular-nums;
 }
 .icon-btn{
-  width:2.125rem;height:2.125rem;border-radius:50%;display:grid;place-items:center;
+  width:1.875rem;height:1.875rem;border-radius:var(--r-s);display:grid;place-items:center;
   color:var(--steel);transition:background .2s,color .2s,box-shadow .28s var(--e-out);
 }
-.icon-btn:hover{background:rgba(166,212,255,.12);color:var(--ice)}
-.icon-btn[data-focus="on"]{background:rgba(28,46,76,.9);color:var(--ice)}
+.icon-btn:hover{background:var(--haze);color:var(--ice)}
+.icon-btn[data-focus="on"]{background:var(--haze);color:var(--ice)}
 .icon-btn svg{width:1.06rem;height:1.06rem;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 
-/* ── Tabs ─────────────────────────────────────────────────── */
-.tabs{display:flex;gap:2.125rem;padding:1.375rem var(--edge) 0}
+/* ── Tabs ─────────────────────────────────────────────────────
+   Wide-tracked thin caps became compact semibold sentence case:
+   Mythos sets navigation at UI size and lets weight, not spacing,
+   carry the emphasis. The underline is a solid 2px white rule
+   with no glow — it either marks the tab or it doesn't. */
+.tabs{display:flex;gap:1.75rem;padding:1.25rem var(--edge) 0}
 .tab{
-  position:relative;padding:0 .25rem .56rem;
-  font-family:var(--display);font-size:.94rem;font-weight:300;
-  letter-spacing:.26em;text-transform:uppercase;color:var(--dim);
-  transition:color .25s,box-shadow .28s var(--e-out);
-  border-radius:.25rem;
+  position:relative;padding:.125rem .4375rem .5rem;
+  font-family:var(--display);font-size:1.125rem;font-weight:600;
+  letter-spacing:-.01em;color:var(--dim);
+  transition:color .25s,background .25s;
+  border-radius:var(--r-s) var(--r-s) 0 0;
 }
 .tab::after{
-  content:"";position:absolute;left:0;right:100%;bottom:0;height:.0938rem;
-  background:linear-gradient(90deg,var(--beam),var(--beam-hot));
-  box-shadow:0 0 .625rem rgba(76,141,255,.8);
+  content:"";position:absolute;left:0;right:100%;bottom:0;height:.125rem;
+  background:var(--sel);
   transition:right .35s var(--e-out);
 }
 .tab[aria-selected="true"]{color:var(--ice)}
 .tab[aria-selected="true"]::after{right:0}
 .tab:hover{color:var(--steel)}
 .tab[aria-selected="true"]:hover{color:var(--ice)}
-.tab[data-focus="on"]{color:var(--ice)}
-
-/* ── Hero ─────────────────────────────────────────────────── */
-.main{position:relative;overflow:hidden}
-
-/* art sits on its own fixed layer above the ambient field and below the
-   shell, so it bleeds behind the status bar instead of seaming at the tabs */
-.hero-art{position:fixed;inset:0;z-index:3;pointer-events:none}
-.hero-layer{
-  position:absolute;inset:0;opacity:0;
-  transition:opacity .7s var(--e-out);
-  mask-image:linear-gradient(to bottom,#000 0%,#000 52%,transparent 88%);
-  -webkit-mask-image:linear-gradient(to bottom,#000 0%,#000 52%,transparent 88%);
+/* Tabs opt OUT of the global white ring. Focusing a tab already switches to
+   it, so the underline is the selection; a second hard rectangle drawn round
+   the word said the same thing twice and boxed in a piece of running text.
+   What the cursor still has to show is which ROW it is on, and a filled
+   ground does that without outlining letterforms. */
+.tab[data-focus="on"]{
+  color:var(--ice);
+  background:var(--haze);
+  box-shadow:none;
 }
-.hero-layer.on{opacity:1}
+.tab[data-focus="stale"]{box-shadow:none;background:rgba(28,28,33,.5)}
 
+/* ── Hero ─────────────────────────────────────────────────────
+   The hero block is centred in the band between the tabs and the
+   rail rather than pinned under the tabs. The band is tall by
+   design — it is where the focused cover's colour lives — and a
+   short block pinned to its top reads as a layout that ran out of
+   content rather than one that left room on purpose. */
+/* The hero band is centred in what is left between the tabs and the
+   rail, with a floor under the padding so the eyebrow never ends up
+   sitting on the tab underline on a short panel. */
+.main{
+  position:relative;overflow:hidden;display:grid;align-content:center;
+  padding-block:clamp(1rem,3.5vh,3rem);
+}
+
+/* ── The backdrop ─────────────────────────────────────────────
+   The screen's ground IS the focused title. Four layers, every one
+   of them driven by ui/homeart.js out of a single image:
+
+     .art-wash   the cover downsampled to 32×48 and stretched over
+                 the whole panel. Blowing a 32×48 texture across
+                 3440 pixels IS a blur, performed by the bilinear
+                 filter the compositor was going to run on that
+                 layer anyway. No filter pass, no canvas per frame,
+                 and nothing running at all while nobody is
+                 touching the pad — which matters on a machine
+                 whose entire job is to hand its frames to a game.
+
+     .art-key    the same cover at full resolution, tall, anchored
+                 past the top and right edges so it is CROPPED by
+                 the screen rather than framed by it. Its mask is
+                 one radial gradient, so it dissolves into the wash
+                 on the left and the floor instead of ending at a
+                 border. This is the layer that makes the right two
+                 thirds of an ultrawide panel worth having.
+
+     .art-veil   the contrast guarantee, and the reason none of the
+                 above can make the type unreadable: near-solid
+                 down the left where the words are, open across the
+                 right where the art is, solid again at the floor
+                 so the rail always sits on clean ground.
+
+     .arc-mark   the identity. Two hairline arcs on a radius far
+                 larger than the screen, so what you see is a
+                 shallow sweep rather than a circle — the same mark
+                 the boot screen resolves into, at architectural
+                 scale, taking its colour from the focused title.
+
+   art sits on its own fixed layer above the ground and below the
+   shell, so it bleeds behind the status bar instead of seaming at
+   the tabs. */
+.hero-art{position:fixed;inset:0;z-index:3;pointer-events:none;overflow:hidden}
+
+.art-wash{
+  position:absolute;inset:-12%;
+  background-position:50% 32%;background-size:cover;background-repeat:no-repeat;
+  opacity:0;scale:1.08;
+  transition:opacity .9s var(--e-out),scale 1.5s var(--e-out);
+}
+.art-wash.on{opacity:.9;scale:1}
+
+.art-veil{
+  position:absolute;inset:0;
+  background:
+    linear-gradient(90deg,
+      var(--void) 0%, rgba(11,11,13,.9) 17%, rgba(11,11,13,.52) 36%,
+      rgba(11,11,13,.2) 58%, rgba(11,11,13,.12) 80%, rgba(11,11,13,.36) 100%),
+    linear-gradient(0deg, var(--void) 1%, rgba(11,11,13,.62) 20%, rgba(11,11,13,0) 50%);
+}
+
+/* The panel is cut to the COVER'S OWN 2:3, not to a share of the
+   screen. A panel shaped by the viewport and filled with `cover` crops
+   a portrait to whatever aspect the machine happens to be, which on an
+   ultrawide meant a random 40% of the middle of the picture blown up
+   past 1:1 — the artwork was on screen and its composition was not.
+   Sized off vh it is the same crop at every resolution: the top and
+   bottom run off the screen, the sides are whole. */
+/* Anchored high and run well past the bottom of the screen on purpose.
+   Portrait key art puts its cast along the bottom edge, and with the
+   panel ending near the floor those figures landed at full brightness
+   directly behind the rail and the hint bar — two busy things fighting
+   over the same corner. Hiding the lower quarter below the screen keeps
+   the part of the composition that reads at three metres, and gives the
+   rail a clean corner to sit in. */
+.art-key{
+  position:absolute;top:-10vh;right:-1.5vw;
+  height:148vh;width:calc(148vh * 2 / 3);
+  background-position:50% 50%;background-size:cover;background-repeat:no-repeat;
+  /* A horizontal fade, not a radial. The radial version left a hard
+     vertical seam down the artwork's left edge: an ellipse sized as a
+     percentage of the element is still 55% opaque where the element
+     stops, so the mask faded the picture without ever reaching zero,
+     and what you saw was a dimmed panel with a straight edge. The top,
+     bottom and right edges do not need masking at all — they are
+     cropped by the screen, which is the point of the layer — so the
+     only edge that has to dissolve is the one facing the type. */
+  --key-mask:linear-gradient(90deg,
+      rgba(0,0,0,0) 0%, rgba(0,0,0,.22) 15%, rgba(0,0,0,.72) 36%, #000 62%);
+  mask-image:var(--key-mask);
+  -webkit-mask-image:var(--key-mask);
+  opacity:0;translate:1.6rem 0;scale:1.03;
+  transition:opacity .55s var(--e-out),translate .85s var(--e-out),scale .85s var(--e-out);
+}
+.art-key.on{opacity:.88;translate:0 0;scale:1}
+
+/* Crown and floor are drawn ABOVE the artwork rather than under it, so
+   the picture dissolves into the shell's chrome instead of running
+   underneath it. The crown is not decoration: the status bar is white
+   text with no plate behind it, and a bright sky arriving under the
+   clock is the difference between a legible strip and an unreadable
+   one. Both are soft over a long distance, so neither reads as a bar. */
+.art-crown{
+  position:absolute;inset:0 0 auto 0;height:19%;
+  background:linear-gradient(180deg,rgba(11,11,13,.94) 0%,rgba(11,11,13,.62) 30%,
+             rgba(11,11,13,.22) 66%,rgba(11,11,13,0) 100%);
+}
+.art-floor{
+  position:absolute;inset:auto 0 0 0;height:58%;
+  background:linear-gradient(0deg,var(--void) 6%,rgba(11,11,13,.95) 26%,
+             rgba(11,11,13,.62) 48%,rgba(11,11,13,0) 100%);
+}
+
+.arc-mark{
+  position:absolute;left:50%;bottom:-118vh;
+  width:212vh;height:212vh;translate:-50% 0;
+  border-radius:50%;
+  border:.0625rem solid var(--accent);
+  opacity:.26;
+  transition:border-color .9s var(--e-out);
+}
+.arc-mark.two{width:252vh;height:252vh;bottom:-140vh;opacity:.13}
+/* When there is no cover to fill the screen — a title whose only
+   artwork is an executable icon, and every title on a machine with
+   nothing installed — the mark comes forward and carries the ground on
+   its own. That is the whole reason to have one: an empty library
+   should look like a screen somebody designed, not like a screen that
+   failed to load. */
+.art-none .arc-mark{opacity:.5}
+.art-none .arc-mark.two{opacity:.26}
+
+/* ── Hero ─────────────────────────────────────────────────────
+   One reading column, hard left, vertically centred in the band
+   between the tabs and the rail. The facts that used to sit in a
+   bordered card on the right are now a spec strip under the
+   actions: the same information, but the right-hand two thirds of
+   the screen is given to the artwork instead of to a widget. That
+   is the whole answer to "the layout does not use the screen" —
+   the extra width is not for more UI, it is for the cover. */
 .hero{
   position:relative;z-index:1;
-  padding:clamp(.75rem,5vh,3.4rem) var(--edge) 0;max-width:47.5rem;
-  display:grid;gap:0;align-content:start;
+  padding:0 var(--edge);
+  display:grid;grid-template-columns:minmax(0,var(--col)) minmax(0,1fr);
 }
+.hero-main{grid-column:1;min-width:0}
+.hero-side{grid-column:1;min-width:0}
+
+/* The eyebrow carries the accent rule — the one place the focused
+   title's own colour touches the type column. */
 .eyebrow{
-  font-size:.6875rem;letter-spacing:.34em;text-transform:uppercase;
-  color:var(--beam-hot);margin-bottom:1rem;
+  display:flex;align-items:center;gap:.7rem;
+  font-size:.75rem;font-weight:600;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--steel);margin-bottom:.85rem;
+}
+.eyebrow::before{
+  content:"";flex:0 0 auto;width:1.75rem;height:.125rem;
+  background:var(--accent);
+  transition:background .6s var(--e-out);
 }
 .hero-title{
-  font-family:var(--display);font-weight:200;
-  font-size:min(4rem,8vw);line-height:1.02;
-  letter-spacing:-.015em;margin:0;text-wrap:balance;
-  text-shadow:0 .375rem 2.5rem rgba(4,6,11,.9);
+  font-family:var(--display);font-weight:700;
+  font-size:min(4.4rem,9vw);line-height:1.0;
+  letter-spacing:-.035em;margin:0;text-wrap:balance;color:var(--ice);
+  text-shadow:0 .125rem 1.5rem rgba(0,0,0,.55);
 }
+/* Three lines, then it stops. The full sentence is still there for
+   the details panel; a television is not where you read a paragraph. */
 .hero-desc{
-  margin:clamp(.5rem,1.7vh,1.1rem) 0 0;max-width:52ch;
-  font-size:.97rem;line-height:1.62;color:#b9c8e0;
+  margin:clamp(.55rem,1.7vh,1.1rem) 0 0;max-width:44ch;
+  font-size:.9375rem;line-height:1.62;color:var(--steel);
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;overflow:hidden;
 }
-.hero-meta{display:flex;flex-wrap:wrap;gap:.625rem;margin-top:clamp(.7rem,2.2vh,1.5rem)}
+.hero-meta{display:flex;flex-wrap:wrap;gap:.375rem;margin-top:clamp(.7rem,2vh,1.25rem)}
 .chip{
-  padding:.375rem .8rem;border-radius:99px;
-  border:.0625rem solid var(--line);background:rgba(12,20,34,.6);
-  font-size:.75rem;letter-spacing:.06em;color:var(--steel);
-  backdrop-filter:blur(8px);
+  padding:.3125rem .625rem;border-radius:var(--r-s);
+  border:.0625rem solid var(--line);background:rgba(20,20,23,.6);
+  font-size:.75rem;font-weight:500;letter-spacing:0;color:var(--steel);
 }
-.chip.live{border-color:rgba(86,214,160,.4);color:var(--good)}
-.hero-actions{display:flex;gap:.75rem;margin-top:clamp(.9rem,2.8vh,1.9rem)}
+.chip.live{border-color:rgba(63,209,139,.42);color:var(--good)}
+
+/* ── The spec strip ──────────────────────────────────────────
+   Was a bordered card of label/value rows pinned to the right of
+   the screen. It is now a row of small stacked pairs under the
+   buttons, separated by hairlines: the same four facts, reading as
+   a caption rather than as a dashboard, and taking no width away
+   from the artwork.
+
+   Named hero-fact*, NOT fact*: the panels already own a .facts /
+   .fact read-only list further down this sheet. */
+/* One line, never two. A fact here costs horizontal space, and a strip
+   that wraps puts its hairline separators in the wrong places and drops
+   a stray value under the rest — so the row does not wrap, the items
+   may shrink, and a value that runs out of room ellipses. */
+.hero-facts{
+  display:flex;flex-wrap:nowrap;align-items:flex-start;
+  margin-top:clamp(1rem,2.6vh,1.9rem);padding-top:.9rem;
+  border-top:.0625rem solid var(--line-soft);
+  max-width:100%;
+}
+.hero-fact{
+  display:grid;gap:.2rem;min-width:0;flex:0 1 auto;
+  padding-right:1.4rem;margin-right:1.4rem;
+  border-right:.0625rem solid var(--line-soft);
+}
+.hero-fact:last-child{border-right:0;margin-right:0;padding-right:0}
+.hero-fact-k{
+  font-size:.6875rem;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--dim);white-space:nowrap;
+}
+.hero-fact-v{
+  font-size:.875rem;font-weight:600;color:var(--ice);
+  font-variant-numeric:tabular-nums;
+  max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.hero-fact.live .hero-fact-v{color:var(--good)}
+
+.hero-actions{display:flex;gap:.625rem;margin-top:clamp(1rem,2.8vh,2rem);max-width:26rem}
 .btn{
-  display:inline-flex;align-items:center;gap:.625rem;
-  padding:.75rem 1.625rem;border-radius:99px;
-  font-size:.875rem;letter-spacing:.05em;
-  transition:transform .2s var(--e-out),box-shadow .28s var(--e-out),background .25s;
+  display:inline-flex;align-items:center;justify-content:center;gap:.5rem;
+  padding:.8125rem 1.375rem;border-radius:var(--r-m);
+  font-size:.9375rem;font-weight:600;letter-spacing:0;
+  transition:box-shadow .28s var(--e-out),background .2s,color .2s;
 }
-.btn svg{width:.94rem;height:.94rem;fill:currentColor}
-.btn-primary{
-  background:linear-gradient(180deg,#f2f7ff,#cfe0fb);color:#06101f;font-weight:600;
-  box-shadow:0 .5rem 1.6rem rgba(120,170,255,.28);
-}
-.btn-primary:hover{transform:translateY(-.0625rem);box-shadow:0 .75rem 2.1rem rgba(120,170,255,.4)}
-.btn-ghost{border:.0625rem solid var(--line);color:var(--ice);background:rgba(12,20,34,.5)}
-.btn-ghost:hover{background:rgba(36,52,79,.6)}
-.btn[data-focus="on"]{transform:translateY(-.125rem)}
-.btn-primary[data-focus="on"]{box-shadow:0 0 0 .125rem var(--beam-hot),0 .75rem 2.4rem rgba(120,170,255,.55)}
+.btn svg{width:.9375rem;height:.9375rem;fill:currentColor}
+/* The one saturated fill in the shell. */
+.btn-primary{flex:1.5 1 0;background:var(--beam);color:#fff}
+.btn-primary:hover{background:#3695ff}
+.btn-ghost{flex:1 1 0;border:.0625rem solid var(--line);color:var(--ice);background:rgba(20,20,23,.72)}
+.btn-ghost:hover{background:var(--haze)}
 
 /* fade group when focus changes */
 .swap{transition:opacity .28s var(--e-out),translate .38s var(--e-out)}
 .swap.out{opacity:0;translate:0 .625rem}
 
 /* ── Rail ─────────────────────────────────────────────────── */
-.rail-wrap{position:relative;z-index:1;padding:clamp(.7rem,3.2vh,2.4rem) 0 clamp(.7rem,2.6vh,1.9rem);overflow:hidden}
+/* The rail scrolls by translating, so covers before the focused one
+   pass under the left screen edge. Cut off dead straight by the viewport
+   they read as covers drawn wrong; faded out over the safe-area strip
+   they read as a row that continues off-screen — which is what they are.
+   The same fade is applied on the right, because the rail continues that
+   way too and a hard edge there tells the same lie. The focused cover
+   sits at --edge, outside the fade, so its selection ring is never
+   touched. */
+.rail-wrap{
+  position:relative;z-index:1;
+  padding:clamp(.7rem,3.2vh,2.4rem) 0 clamp(.7rem,2.6vh,1.9rem);
+  overflow:hidden;
+  --rail-fade:linear-gradient(to right,
+      rgba(0,0,0,0) 0,
+      #000 var(--rail-lead),
+      #000 calc(100% - var(--rail-lead)),
+      rgba(0,0,0,0) 100%);
+  mask-image:var(--rail-fade);
+  -webkit-mask-image:var(--rail-fade);
+}
 .rail{
   display:flex;align-items:flex-end;gap:calc(var(--gap-u) * 1rem);
   padding-left:var(--edge);
   transition:transform .45s var(--e-out);
   will-change:transform;
 }
+/* Covers are 3:4 portrait. Height is always width × 4/3 computed at
+   the point of use — never a second token — so the two can never
+   disagree about what the aspect ratio is. */
 .tile{
   position:relative;flex:0 0 auto;
-  width:calc(var(--tile-u) * 1rem);height:calc(var(--tile-u) * 1rem);border-radius:.875rem;
+  width:calc(var(--cover-u) * 1rem);
+  height:calc(var(--cover-u) * 1rem * 4 / 3);
+  border-radius:var(--r-m);
   overflow:hidden;cursor:pointer;padding:0;
-  border:.0625rem solid rgba(255,255,255,.07);
+  border:.0625rem solid rgba(255,255,255,.06);
   transition:width .42s var(--e-out),height .42s var(--e-out),
-             border-radius .42s var(--e-out),box-shadow .42s var(--e-out),border-color .3s;
-  box-shadow:0 .5rem 1.4rem rgba(2,4,9,.6);
+             box-shadow .42s var(--e-out),border-color .3s;
+  box-shadow:0 .5rem 1.25rem rgba(0,0,0,.55);
 }
-.tile-art{position:absolute;inset:0}
+/* Unfocused covers are dimmed by a layer of their own rather than by
+   the tile's opacity. Opacity on the tile fades its drop shadow and
+   its selection ring with it, which is how a rail ends up looking
+   washed out; a flat scrim over the art dims the picture and leaves
+   the structure at full strength. */
+.tile-dim{
+  position:absolute;inset:0;background:rgba(5,5,8,.52);
+  opacity:1;transition:opacity .42s var(--e-out);
+}
+.tile[aria-current="true"] .tile-dim{opacity:0}
+.tile:hover .tile-dim{opacity:.55}
+/* A cover is art plus a legible name. The scrim exists so the name
+   is readable over whatever the art does at the bottom edge. */
 .tile-sheen{
   position:absolute;inset:0;
-  background:linear-gradient(150deg,rgba(255,255,255,.18),rgba(255,255,255,0) 42%),
-             linear-gradient(0deg,rgba(4,6,11,.55),rgba(4,6,11,0) 55%);
+  background:linear-gradient(0deg,rgba(0,0,0,.88) 0%,rgba(0,0,0,.34) 24%,rgba(0,0,0,0) 50%);
 }
 .tile-glyph{
-  position:absolute;inset:0;display:grid;place-items:center;
-  color:rgba(255,255,255,.94);
+  position:absolute;left:0;right:0;top:0;bottom:2.6rem;
+  display:grid;place-items:center;color:rgba(255,255,255,.92);
 }
 .tile-glyph svg{
-  width:2.125rem;height:2.125rem;fill:none;stroke:currentColor;
-  stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;
-  filter:drop-shadow(0 .125rem .5rem rgba(0,0,0,.55));
+  width:2.25rem;height:2.25rem;fill:none;stroke:currentColor;
+  stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;
+  filter:drop-shadow(0 .125rem .5rem rgba(0,0,0,.5));
   transition:width .42s var(--e-out),height .42s var(--e-out);
 }
+/* The name is part of the cover, always visible — box art has its
+   title printed on it. It no longer fades in on selection. */
 .tile-name{
-  position:absolute;left:0;right:0;bottom:.7rem;
-  text-align:center;font-size:.6875rem;letter-spacing:.05em;
-  color:rgba(255,255,255,.9);opacity:0;transition:opacity .3s;
-  text-shadow:0 .0625rem .375rem rgba(0,0,0,.8);
+  position:absolute;left:.75rem;right:.75rem;bottom:.7rem;
+  font-family:var(--display);font-weight:600;
+  font-size:.8125rem;line-height:1.2;letter-spacing:-.01em;
+  color:#fff;opacity:1;
+  transition:font-size .42s var(--e-out);
 }
-.tile:hover{border-color:rgba(166,212,255,.35)}
+.tile:hover{border-color:rgba(255,255,255,.18)}
 .tile[aria-current="true"]{
-  width:calc(var(--tile-active-u) * 1rem);height:calc(var(--tile-active-u) * 1rem);border-radius:1.125rem;
-  border-color:rgba(166,212,255,.5);
-  box-shadow:0 1.1rem 2.9rem rgba(2,4,9,.75),0 0 0 .0625rem rgba(166,212,255,.22),
-             0 0 2.5rem rgba(76,141,255,.24);
+  width:calc(var(--cover-active-u) * 1rem);
+  height:calc(var(--cover-active-u) * 1rem * 4 / 3);
+  border-color:rgba(255,255,255,.22);
+  box-shadow:0 1.25rem 3rem rgba(0,0,0,.78);
 }
-.tile[aria-current="true"] .tile-glyph svg{width:2.875rem;height:2.875rem}
-.tile[aria-current="true"] .tile-name{opacity:1}
-/* the rail's own focus ring is the accent border, not a generic halo —
-   the tile is already 176px of signal, it only needs to say "live" */
+.tile[aria-current="true"] .tile-glyph svg{width:3.25rem;height:3.25rem}
+.tile[aria-current="true"] .tile-name{font-size:1.0625rem}
+/* Selection is a white rule drawn INSIDE the cover, so it never
+   inflates the box and never has to be reconciled with the layout —
+   the rail's arithmetic stays exact. */
 .tile[data-focus="on"]{
-  border-color:var(--beam-hot);
-  box-shadow:0 1.1rem 2.9rem rgba(2,4,9,.75),0 0 0 .1875rem var(--beam),
-             0 0 3.4rem rgba(76,141,255,.55);
+  border-color:transparent;
+  box-shadow:0 1rem 2.5rem rgba(0,0,0,.7),inset 0 0 0 .1875rem var(--sel);
 }
-.tile[data-focus="stale"]{box-shadow:0 1.1rem 2.9rem rgba(2,4,9,.75),0 0 0 .125rem rgba(76,141,255,.35)}
+.tile[data-focus="stale"]{
+  box-shadow:0 1rem 2.5rem rgba(0,0,0,.7),inset 0 0 0 .125rem rgba(255,255,255,.32);
+}
 .tile-badge{
-  position:absolute;top:.56rem;right:.56rem;
-  min-width:1.125rem;height:1.125rem;padding:0 .3rem;border-radius:99px;
-  background:var(--beam);color:#04060b;
+  position:absolute;top:.5rem;right:.5rem;
+  min-width:1.125rem;height:1.125rem;padding:0 .3rem;border-radius:var(--r-s);
+  background:var(--beam);color:#fff;
   font-size:.66rem;font-weight:700;line-height:1.125rem;text-align:center;
-  box-shadow:0 0 .75rem rgba(76,141,255,.7);
 }
+/* "This is open right now." Bottom-left so it never collides with the
+   count badge top-right, and a live dot rather than a colour alone so
+   it survives a colour-blind reading and a photograph of the screen. */
+.tile-live{
+  position:absolute;left:.5rem;bottom:.5rem;
+  display:inline-flex;align-items:center;gap:.3rem;
+  padding:.1rem .4rem .1rem .3rem;border-radius:var(--r-s);
+  background:rgba(0,0,0,.62);color:#fff;
+  font-size:.62rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  box-shadow:inset 0 0 0 .0625rem rgba(255,255,255,.22);
+}
+.tile-live::before{
+  content:"";width:.4rem;height:.4rem;border-radius:50%;
+  background:var(--good,#54d18c);
+  box-shadow:0 0 .35rem var(--good,#54d18c);
+}
+@media (prefers-reduced-motion:no-preference){
+  .tile-live::before{animation:tileLivePulse 2.4s ease-in-out infinite}
+}
+@keyframes tileLivePulse{0%,100%{opacity:1}50%{opacity:.45}}
+.tile.running .tile-dim{opacity:.15}
 
 /* ── Hint bar ─────────────────────────────────────────────── */
 .hints{
@@ -399,31 +781,40 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
 .hint-set{display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap}
 .hint{display:flex;align-items:center;gap:.5rem;white-space:nowrap}
 .hint-glyphs{display:inline-flex;align-items:center;gap:.25rem}
-/* pad glyphs: same 24×24 stroke language as every other icon here */
+/* pad glyphs: same 24×24 stroke language as every other icon here.
+   The face symbols opt out of the shell's default weight and caps:
+   Sony's shapes are outlined at a heavier absolute stroke than a UI
+   icon, with square-cut ends and sharp corners, and rounding them
+   off to match the rest of the sheet is what turned the cross into
+   a soft letter X. Everything else keeps the shell's language. */
 .glyph{
   width:1.4rem;height:1.4rem;display:block;
   fill:none;stroke:currentColor;stroke-width:1.4;
   stroke-linecap:round;stroke-linejoin:round;
-  color:var(--beam-hot);
+  color:var(--ice);
 }
+.glyph .face{stroke-width:1.9;stroke-linecap:butt;stroke-linejoin:miter}
+.glyph .tri{stroke-linejoin:miter}
+.glyph .ray{stroke-width:1.44;stroke-linecap:butt}
 .glyph .solid{fill:currentColor;stroke:none}
-.glyph .lbl{fill:currentColor;stroke:none;font-size:8.2px;font-family:var(--sans);letter-spacing:.02em}
+.glyph .lbl{fill:currentColor;stroke:none;font-size:8.2px;font-family:var(--sans);font-weight:600;letter-spacing:.02em}
+.glyph .lbl.sm{font-size:7.2px}
 .key{
   display:inline-grid;place-items:center;min-width:1.375rem;height:1.375rem;padding:0 .375rem;
-  border:.0625rem solid var(--line);border-radius:.3rem;
-  background:rgba(12,20,34,.7);
-  font-size:.69rem;color:var(--beam-hot);
+  border:.0625rem solid var(--line);border-radius:var(--r-s);
+  background:var(--deep);
+  font-size:.69rem;font-weight:500;color:var(--ice);
 }
 .hints-spacer{flex:1}
-.replay{color:var(--dim);font-size:.75rem;letter-spacing:.05em;transition:color .2s;border-radius:.3rem;padding:.2rem .4rem}
-.replay:hover{color:var(--beam-hot)}
-.replay[data-focus="on"]{color:var(--beam-hot)}
+.replay{color:var(--dim);font-size:.75rem;letter-spacing:0;transition:color .2s;border-radius:var(--r-s);padding:.2rem .4rem}
+.replay:hover{color:var(--ice)}
+.replay[data-focus="on"]{color:var(--ice)}
 
 /* ── Overlay: control centre + panels ─────────────────────── */
 #cc{
   position:fixed;inset:0;z-index:40;
   display:flex;align-items:flex-end;justify-content:center;
-  background:rgba(2,4,9,.55);backdrop-filter:blur(18px);
+  background:rgba(6,6,8,.72);backdrop-filter:blur(16px);
   opacity:0;pointer-events:none;transition:opacity .3s var(--e-out);
 }
 #cc.open{opacity:1;pointer-events:auto}
@@ -437,111 +828,121 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
 }
 #cc.open .cc-panel{translate:0 0}
 .cc-label{
-  text-align:center;font-family:var(--display);font-weight:300;
-  font-size:1.375rem;letter-spacing:.02em;color:var(--ice);
-  min-height:2rem;margin-bottom:1.625rem;
+  text-align:center;font-family:var(--display);font-weight:600;
+  font-size:1.25rem;letter-spacing:-.015em;color:var(--ice);
+  min-height:2rem;margin-bottom:1.5rem;
 }
-.cc-label small{display:block;font-family:var(--sans);font-size:.78rem;letter-spacing:.06em;color:var(--steel);margin-top:.125rem}
-.cc-row{display:flex;justify-content:center;gap:.875rem;flex-wrap:wrap}
+.cc-label small{display:block;font-family:var(--sans);font-weight:400;font-size:.8125rem;letter-spacing:0;color:var(--steel);margin-top:.25rem}
+.cc-row{display:flex;justify-content:center;gap:.75rem;flex-wrap:wrap}
+/* Squares, not circles. The rest of the shell is built from cards and
+   hairlines now, and a row of discs was the last thing on screen still
+   speaking the old language. */
 .cc-item{
-  width:4.625rem;height:4.625rem;border-radius:50%;
+  width:4.5rem;height:4.5rem;border-radius:var(--r-m);
   display:grid;place-items:center;
-  border:.0625rem solid var(--line);background:rgba(12,20,34,.72);
+  border:.0625rem solid var(--line);background:var(--deep);
   color:var(--steel);
   transition:transform .25s var(--e-out),border-color .25s,color .25s,background .25s,box-shadow .28s var(--e-out);
 }
 .cc-item svg{width:1.625rem;height:1.625rem;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .cc-item:hover,.cc-item[aria-current="true"]{
-  transform:translateY(-.375rem);color:var(--ice);
-  border-color:rgba(166,212,255,.55);background:rgba(28,46,76,.8);
-  box-shadow:0 .75rem 1.9rem rgba(2,4,9,.7),0 0 1.6rem rgba(76,141,255,.25);
+  transform:translateY(-.25rem);color:var(--ice);
+  border-color:#3a3a42;background:var(--haze);
 }
 .cc-item[data-focus="on"]{
-  transform:translateY(-.375rem);color:var(--ice);background:rgba(28,46,76,.9);
-  border-color:var(--beam-hot);
-  box-shadow:0 0 0 .1875rem var(--beam),0 .75rem 2.2rem rgba(2,4,9,.8),0 0 2.2rem rgba(76,141,255,.5);
+  transform:translateY(-.25rem);color:var(--ice);background:var(--haze);
+  border-color:transparent;
+  box-shadow:0 0 0 .125rem var(--sel);
 }
-.cc-item.on{color:var(--good);border-color:rgba(86,214,160,.45)}
+.cc-item.on{color:var(--good)}
 
 /* ── Panels ───────────────────────────────────────────────── */
 .panel-stack{width:100%;display:flex;justify-content:center;padding:0 var(--edge)}
 .panel{
   width:min(64rem,100%);
-  background:linear-gradient(180deg,rgba(14,23,39,.95),rgba(8,13,23,.97));
-  border:.0625rem solid var(--line);border-radius:1.25rem;
-  box-shadow:0 2rem 5rem rgba(2,4,9,.8),0 0 0 .0625rem rgba(166,212,255,.06);
+  background:var(--deep);
+  border:.0625rem solid var(--line);border-radius:var(--r-l);
+  box-shadow:0 1.5rem 4rem rgba(0,0,0,.75);
   overflow:hidden;
   translate:0 1.25rem;opacity:0;
   transition:translate .38s var(--e-out),opacity .3s var(--e-out);
 }
 .panel.in{translate:0 0;opacity:1}
 .panel.behind{display:none}
-.panel-head{padding:1.75rem 2rem 1.1rem;border-bottom:.0625rem solid rgba(36,52,79,.7)}
-.panel-eyebrow{font-size:.66rem;letter-spacing:.34em;text-transform:uppercase;color:var(--beam-hot);margin-bottom:.5rem}
-.panel-title{font-family:var(--display);font-weight:200;font-size:2rem;line-height:1.1;margin:0;letter-spacing:-.01em}
-.panel-sub{margin:.4rem 0 0;font-size:.85rem;color:var(--steel);max-width:52ch}
+.panel-head{padding:1.5rem 1.75rem 1rem;border-bottom:.0625rem solid var(--line)}
+.panel-eyebrow{font-size:.75rem;font-weight:500;letter-spacing:.02em;color:var(--dim);margin-bottom:.35rem}
+.panel-title{font-family:var(--display);font-weight:700;font-size:1.75rem;line-height:1.1;margin:0;letter-spacing:-.03em}
+.panel-sub{margin:.4rem 0 0;font-size:.875rem;color:var(--steel);max-width:56ch}
 .panel-body{padding:1.1rem 1.25rem 1.5rem;max-height:52vh;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 .panel-body::-webkit-scrollbar{width:.4rem}
 .panel-body::-webkit-scrollbar-thumb{background:var(--line);border-radius:99px}
 
 .row{
-  display:flex;align-items:center;gap:1rem;width:100%;
-  padding:.85rem 1rem;border-radius:.75rem;
-  border:.0625rem solid transparent;background:rgba(12,20,34,.4);
-  margin-bottom:.5rem;color:var(--ice);
-  transition:background .25s,border-color .25s,transform .28s var(--e-out),box-shadow .28s var(--e-out);
+  display:flex;align-items:center;gap:.875rem;width:100%;
+  padding:.75rem .875rem;border-radius:var(--r-m);
+  border:.0625rem solid transparent;background:var(--haze);
+  margin-bottom:.375rem;color:var(--ice);
+  transition:background .25s,border-color .25s,box-shadow .28s var(--e-out);
 }
-.row:hover{background:rgba(28,46,76,.55)}
-.row[data-focus="on"]{background:rgba(28,46,76,.9);border-color:var(--beam-hot);transform:translateX(.25rem)}
-.row[data-focus="stale"]{border-color:rgba(76,141,255,.3)}
-.row[aria-disabled="true"]{opacity:.55}
+.row:hover{background:#22222a}
+/* No translateX on focus. A row that slides when it is selected makes the
+   left edge of the list ragged as the cursor moves down it. */
+.row[data-focus="on"]{background:#22222a;border-color:transparent;box-shadow:0 0 0 .125rem var(--sel)}
+.row[data-focus="stale"]{box-shadow:0 0 0 .0938rem rgba(255,255,255,.3)}
+.row[aria-disabled="true"]{opacity:.5}
 .row-ico{
-  flex:0 0 auto;width:2.4rem;height:2.4rem;border-radius:.6rem;display:grid;place-items:center;
-  background:rgba(36,52,79,.5);color:var(--steel);
+  flex:0 0 auto;width:2.25rem;height:2.25rem;border-radius:var(--r-s);display:grid;place-items:center;
+  background:#26262e;color:var(--steel);
 }
-.row[data-focus="on"] .row-ico{color:var(--beam-hot)}
+.row[data-focus="on"] .row-ico{color:var(--ice)}
 .row-ico svg{width:1.25rem;height:1.25rem;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .row-text{flex:1;min-width:0}
-.row-text b{display:block;font-weight:400;font-size:1rem;letter-spacing:.01em}
-.row-text small{display:block;font-size:.78rem;color:var(--steel);margin-top:.125rem}
-.row-tail{flex:0 0 auto;font-size:.8rem;color:var(--steel);font-variant-numeric:tabular-nums}
-.row.danger[data-focus="on"]{border-color:var(--warn);box-shadow:0 0 0 .125rem var(--warn),0 0 1.5rem rgba(255,180,87,.3)}
+.row-text b{display:block;font-weight:500;font-size:.9375rem;letter-spacing:0}
+.row-text small{display:block;font-size:.8125rem;color:var(--steel);margin-top:.0625rem}
+.row-tail{flex:0 0 auto;font-size:.8125rem;color:var(--steel);font-variant-numeric:tabular-nums}
+/* Danger keeps a colour of its own — this is the one place where the ring
+   carrying meaning beats the ring being uniformly white. */
+.row.danger[data-focus="on"]{box-shadow:0 0 0 .125rem var(--warn)}
 .row.danger .row-ico{color:var(--warn)}
 
-/* fact list — read-only values, never focusable */
-.facts{display:grid;gap:.1rem;padding:.3rem .3rem .8rem}
-.fact{display:flex;justify-content:space-between;gap:1rem;padding:.5rem .7rem;border-radius:.4rem}
-.fact:nth-child(odd){background:rgba(12,20,34,.45)}
-.fact span{font-size:.82rem;color:var(--steel)}
-.fact b{font-size:.82rem;font-weight:400;color:var(--ice);font-variant-numeric:tabular-nums;text-align:right}
+/* fact list — read-only values, never focusable. Same table as the
+   home screen's hero-facts, minus the card: a panel is already one.
+   Hairlines rather than zebra striping — the stripes were doing the
+   work of separating rows that a single rule does more quietly. */
+.facts{display:grid;padding:.2rem .3rem .8rem}
+.fact{display:flex;justify-content:space-between;gap:1rem;padding:.5rem .45rem}
+.fact + .fact{border-top:.0625rem solid var(--line-soft)}
+.fact span{font-size:.8125rem;color:var(--dim)}
+.fact b{font-size:.8125rem;font-weight:500;color:var(--ice);font-variant-numeric:tabular-nums;text-align:right}
 .note{
-  margin:.4rem .3rem 0;padding:.6rem .8rem;border-radius:.5rem;
-  border:.0625rem dashed rgba(126,150,184,.45);
-  font-size:.76rem;color:var(--steel);letter-spacing:.02em;
+  margin:.5rem .3rem 0;padding:.6rem .8rem;border-radius:var(--r-s);
+  border:.0625rem solid var(--line);border-left:.1875rem solid var(--warn);
+  background:var(--haze);
+  font-size:.8125rem;color:var(--steel);letter-spacing:0;
 }
-.note b{color:var(--warn);font-weight:400}
+.note b{color:var(--warn);font-weight:500}
 
 /* profile header inside its panel */
 .profile{display:flex;align-items:center;gap:1.25rem;padding:.4rem .6rem 1.1rem}
 .profile .avatar{width:4.4rem;height:4.4rem;font-size:1.6rem}
-.profile-id b{display:block;font-family:var(--display);font-weight:300;font-size:1.5rem}
-.profile-id small{display:block;font-size:.82rem;color:var(--steel);margin-top:.2rem}
+.profile-id b{display:block;font-family:var(--display);font-weight:700;font-size:1.5rem;letter-spacing:-.02em}
+.profile-id small{display:block;font-size:.8125rem;color:var(--steel);margin-top:.2rem}
 
 /* settings: category rail + content pane, both pad-navigable */
 .settings{display:grid;grid-template-columns:minmax(12rem,17rem) 1fr;gap:1rem;min-height:20rem}
-.set-cats{border-right:.0625rem solid rgba(36,52,79,.7);padding-right:.75rem;overflow-y:auto;max-height:46vh;scrollbar-width:thin}
-.set-cats .row{margin-bottom:.3rem;padding:.7rem .85rem}
-.set-cats .row[aria-current="true"]{background:rgba(28,46,76,.7)}
+.set-cats{border-right:.0625rem solid var(--line);padding-right:.75rem;overflow-y:auto;max-height:46vh;scrollbar-width:thin}
+.set-cats .row{margin-bottom:.25rem;padding:.625rem .75rem}
+.set-cats .row[aria-current="true"]{background:#26262e}
 .set-pane{padding:.2rem .4rem;overflow-y:auto;max-height:46vh;scrollbar-width:thin}
-.set-pane h3{font-family:var(--display);font-weight:300;font-size:1.25rem;margin:.2rem 0 .2rem}
-.set-pane p{font-size:.85rem;color:var(--steel);margin:.2rem 0 .9rem;max-width:52ch}
+.set-pane h3{font-family:var(--display);font-weight:700;font-size:1.25rem;letter-spacing:-.02em;margin:.2rem 0 .2rem}
+.set-pane p{font-size:.875rem;color:var(--steel);margin:.2rem 0 .9rem;max-width:56ch}
 
 /* ── Settings content: real state, and the vocabulary for showing it ──
    Every atom here exists to make the difference between "read from the
    OS", "still reading" and "could not read" visible at TV distance. */
 .panel-body h4{
-  font-size:.66rem;letter-spacing:.28em;text-transform:uppercase;color:var(--beam-hot);
-  margin:1rem .3rem .45rem;font-weight:400;
+  font-size:.75rem;letter-spacing:.02em;color:var(--dim);
+  margin:1.1rem .3rem .45rem;font-weight:500;
 }
 .panel-body h4:first-child,.set-pane h4:first-of-type{margin-top:.2rem}
 .set-pane .facts{padding-bottom:.4rem}
@@ -557,88 +958,115 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
 /* the spinner. One ring, the accent, the same curve as everything else. */
 .spin{
   width:.85rem;height:.85rem;flex:0 0 auto;border-radius:50%;
-  border:.11rem solid rgba(126,150,184,.35);border-top-color:var(--beam-hot);
+  border:.11rem solid var(--line);border-top-color:var(--beam);
   animation:spin .8s linear infinite;
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* an error the human can act on: what failed, what the OS said, what to do */
+/* an error the human can act on: what failed, what the OS said, what to do.
+   Same shape as .note — a hairline card with a coloured left edge — so
+   "here is a caveat" and "here is a failure" are the same object in two
+   severities rather than two unrelated inventions. */
 .err{
-  margin:.4rem .3rem;padding:.7rem .9rem;border-radius:.55rem;
-  border:.0625rem solid rgba(255,180,87,.5);background:rgba(40,22,6,.55);
-  font-size:.8rem;color:#ffdcae;letter-spacing:.02em;
+  margin:.5rem .3rem;padding:.7rem .9rem;border-radius:var(--r-s);
+  border:.0625rem solid var(--line);border-left:.1875rem solid var(--warn);
+  background:var(--haze);
+  font-size:.8125rem;color:#f0d7b4;letter-spacing:0;
 }
-.err b{display:block;font-weight:400;color:var(--warn);margin-bottom:.15rem}
-.err code{font-family:var(--sans);font-size:.72rem;color:#e2b98a;opacity:.85}
+.err b{display:block;font-weight:600;color:var(--warn);margin-bottom:.15rem}
+.err code{font-family:var(--sans);font-size:.75rem;color:var(--steel)}
 
-/* right-hand column of a row: chips that carry state, not decoration */
+/* right-hand column of a row: chips that carry state, not decoration.
+   Same object as the hero's .chip — small rect, hairline, sentence case. */
 .tag{
-  display:inline-block;padding:.12rem .45rem;border-radius:99px;
-  border:.0625rem solid var(--line);background:rgba(12,20,34,.6);
-  font-size:.66rem;letter-spacing:.09em;text-transform:uppercase;color:var(--steel);
+  display:inline-block;padding:.125rem .4rem;border-radius:var(--r-s);
+  border:.0625rem solid var(--line);background:var(--deep);
+  font-size:.75rem;font-weight:500;letter-spacing:0;color:var(--steel);
   margin-left:.35rem;vertical-align:middle;
 }
-.tag.on{color:var(--good);border-color:rgba(86,214,160,.5)}
-.tag.warn{color:var(--warn);border-color:rgba(255,180,87,.5)}
+.tag.on{color:var(--good);border-color:rgba(63,209,139,.42)}
+.tag.warn{color:var(--warn);border-color:rgba(255,180,87,.42)}
 
 /* signal strength — five bars, filled to the measured level */
 .sig{display:inline-flex;align-items:flex-end;gap:.09rem;height:.8rem;vertical-align:middle}
-.sig i{width:.16rem;background:rgba(126,150,184,.3);border-radius:.04rem}
+.sig i{width:.16rem;background:#3a3a42}
 .sig i:nth-child(1){height:26%}
 .sig i:nth-child(2){height:45%}
 .sig i:nth-child(3){height:64%}
 .sig i:nth-child(4){height:82%}
 .sig i:nth-child(5){height:100%}
-.sig i.lit{background:var(--beam-hot)}
+.sig i.lit{background:var(--ice)}
 
 /* used/free bar for a drive */
-.bar{height:.42rem;border-radius:99px;background:rgba(36,52,79,.7);overflow:hidden;margin:.35rem 0 .2rem}
-.bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--beam-deep),var(--beam))}
-.bar.hot i{background:linear-gradient(90deg,#8a5a1b,var(--warn))}
-.drive{padding:.7rem 1rem;border-radius:.75rem;background:rgba(12,20,34,.4);margin-bottom:.5rem}
+.bar{height:.375rem;border-radius:var(--r-s);background:#26262e;overflow:hidden;margin:.35rem 0 .2rem}
+.bar i{display:block;height:100%;background:var(--beam)}
+.bar.hot i{background:var(--warn)}
+.drive{padding:.7rem .875rem;border-radius:var(--r-m);background:var(--haze);margin-bottom:.375rem}
 .drive-top{display:flex;justify-content:space-between;gap:1rem;align-items:baseline}
-.drive-top b{font-weight:400;font-size:.95rem}
-.drive-top span{font-size:.76rem;color:var(--steel);font-variant-numeric:tabular-nums}
-.drive-sub{font-size:.72rem;color:var(--dim);letter-spacing:.02em}
+.drive-top b{font-weight:500;font-size:.9375rem}
+.drive-top span{font-size:.8125rem;color:var(--steel);font-variant-numeric:tabular-nums}
+.drive-sub{font-size:.75rem;color:var(--dim);letter-spacing:0}
 
-/* a slider that is a focusable row: left/right adjust, and the track is
-   drawn under the label rather than beside it so it survives narrow panes */
+/* A slider that is a focusable row: left/right adjust, and the track is
+   drawn under the label rather than beside it so it survives narrow panes.
+
+   sliderRow() builds the track and the hint as <span>s, so every one of
+   them needs an explicit display. Without it the track is an INLINE box:
+   `height` and `overflow` do not apply to inline non-replaced elements,
+   so the .5rem track was ignored and .slider-fill — a block inside an
+   inline, with height:100% resolved against the row — grew into a
+   ~1300×600 slab. That is what "the microphone and speaker sliders are
+   too big" was: not a taste call, a layout bug that only shows up once
+   somebody looks at the screen. The height is now stated on the fill as
+   well as the track so a percentage can never be the thing that decides
+   it. */
 .row.slider{display:block;padding:.75rem 1rem}
 .slider-head{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}
-.slider-head b{font-weight:400;font-size:1rem}
-.slider-head span{font-size:.9rem;color:var(--steel);font-variant-numeric:tabular-nums}
-.row.slider[data-focus="on"] .slider-head span{color:var(--beam-hot)}
-.slider-track{height:.5rem;border-radius:99px;background:rgba(36,52,79,.8);overflow:hidden;margin:.5rem 0 .25rem}
-.slider-fill{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,var(--beam-deep),var(--beam-hot));transition:width .12s linear}
-.row.slider.muted .slider-fill{background:rgba(126,150,184,.45)}
-.slider-hint{font-size:.7rem;color:var(--dim);letter-spacing:.03em}
+.slider-head b{font-weight:500;font-size:.9375rem}
+.slider-head span{font-size:.875rem;color:var(--steel);font-variant-numeric:tabular-nums}
+.row.slider[data-focus="on"] .slider-head span{color:var(--ice)}
+.slider-track{
+  display:block;height:.375rem;width:100%;max-width:34rem;
+  border-radius:var(--r-s);background:#26262e;
+  overflow:hidden;margin:.5rem 0 .3125rem;
+}
+.slider-fill{
+  display:block;height:.375rem;border-radius:var(--r-s);background:var(--beam);
+  transition:width .12s linear;
+}
+.row.slider.muted .slider-fill{background:var(--dim)}
+.slider-hint{display:block;font-size:.75rem;color:var(--dim);letter-spacing:0}
 
 /* the display-mode countdown. Amber, because the default answer is revert. */
 .countdown{
-  font-family:var(--display);font-weight:200;font-size:3.2rem;line-height:1;
+  font-family:var(--display);font-weight:700;font-size:3.2rem;line-height:1;
+  letter-spacing:-.04em;
   color:var(--warn);font-variant-numeric:tabular-nums;margin:.6rem 0 .2rem;
 }
-.countdown-sub{font-size:.8rem;color:var(--steel);margin-bottom:.2rem}
+.countdown-sub{font-size:.8125rem;color:var(--steel);margin-bottom:.2rem}
 
-/* confirmation — never one press away from powering off a console */
+/* confirmation — never one press away from powering off a console.
+   The two buttons are the only place a focus ring is allowed to carry
+   meaning: amber round the destructive one, white round the safe one,
+   because here the difference between them is the whole point. */
 .confirm{width:min(34rem,100%);text-align:center}
 .confirm .panel-head{border-bottom:0;padding-bottom:.4rem}
-.confirm-actions{display:flex;gap:.75rem;justify-content:center;padding:.6rem 1.5rem 1.9rem}
+.confirm-actions{display:flex;gap:.5rem;justify-content:center;padding:.6rem 1.5rem 1.75rem}
 .cbtn{
-  padding:.8rem 1.9rem;border-radius:99px;font-size:.92rem;letter-spacing:.04em;
-  border:.0625rem solid var(--line);background:rgba(12,20,34,.7);color:var(--ice);
-  transition:background .25s,border-color .25s,box-shadow .28s var(--e-out),transform .28s var(--e-out);
+  padding:.6875rem 1.5rem;border-radius:var(--r-m);font-size:.9375rem;font-weight:600;letter-spacing:0;
+  border:.0625rem solid var(--line);background:var(--haze);color:var(--ice);
+  transition:background .25s,border-color .25s,box-shadow .28s var(--e-out);
 }
-.cbtn[data-focus="on"]{transform:translateY(-.125rem)}
-.cbtn.go[data-focus="on"]{background:rgba(255,180,87,.16);border-color:var(--warn);box-shadow:0 0 0 .125rem var(--warn),0 0 1.8rem rgba(255,180,87,.35)}
-.cbtn.no[data-focus="on"]{background:rgba(28,46,76,.9);border-color:var(--beam-hot);box-shadow:0 0 0 .125rem var(--beam),0 0 1.8rem rgba(76,141,255,.4)}
+.cbtn.go[data-focus="on"]{background:rgba(255,180,87,.12);border-color:transparent;box-shadow:0 0 0 .125rem var(--warn)}
+.cbtn.no[data-focus="on"]{background:#26262e;border-color:transparent;box-shadow:0 0 0 .125rem var(--sel)}
 
 /* toast — a panel failing must never be silent, and must never be fatal */
 #toast{
   position:fixed;left:50%;bottom:calc(var(--safe-y) + 3.6rem);translate:-50% 1rem;z-index:60;
-  max-width:44rem;padding:.7rem 1.1rem;border-radius:.6rem;
-  background:rgba(20,10,4,.94);border:.0625rem solid var(--warn);color:#ffdcae;
-  font-size:.8rem;letter-spacing:.02em;opacity:0;pointer-events:none;
+  max-width:44rem;padding:.7rem 1.1rem;border-radius:var(--r-m);
+  background:var(--deep);border:.0625rem solid var(--line);border-left:.1875rem solid var(--warn);
+  color:#f0d7b4;
+  font-size:.8125rem;letter-spacing:0;opacity:0;pointer-events:none;
   transition:opacity .25s var(--e-out),translate .25s var(--e-out);
 }
 #toast.show{opacity:1;translate:-50% 0}
@@ -652,8 +1080,28 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
 }
 /* Portrait / very narrow: the rail and hints wrap rather than clip. */
 @media (max-aspect-ratio:1/1){
-  .hero{max-width:none}
+  .hero{grid-template-columns:minmax(0,1fr)}
   .hints{gap:1rem}
+  .art-key{width:96vw;right:-12vw;opacity:.55}
+  .art-key.on{opacity:.55}
+}
+
+/* ── 21:9 ──────────────────────────────────────────────────────
+   What the extra width is FOR, stated once. Not "the same layout
+   with more black either side": the reading column stays the width
+   a column should be, the artwork gets wider, and the rail gets
+   bigger covers — so an ultrawide panel shows more art at a larger
+   size rather than the same UI further apart. 3440×1440 is 2.39:1
+   and lands here; 2560×1440 is 1.78:1 and does not. */
+@media (min-aspect-ratio:2/1){
+  :root{
+    --cover-u: 10.25;
+    --cover-active-u: 15;
+    --col: 36rem;
+  }
+  /* More room across, so the cover is shown larger rather than merely
+     further from the text. */
+  .art-key{height:156vh;width:calc(156vh * 2 / 3);top:-13vh}
 }
 
 @media (prefers-reduced-motion:reduce){
@@ -664,39 +1112,40 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
 }
 </style>
 
-<canvas id="amb"></canvas>
 <div class="vignette"></div>
 
+<!-- The focused title's artwork, in layer order: the stretched
+     downsample, the veil that guarantees the type stays readable over
+     it, the arc mark, the sharp cover cropped by the top and right
+     edges of the screen, and the floor the rail sits on. Two of each
+     art layer because they cross-fade. -->
 <div class="hero-art">
-  <div class="hero-layer" id="art0"></div>
-  <div class="hero-layer" id="art1"></div>
+  <div class="art-wash" id="wash0"></div>
+  <div class="art-wash" id="wash1"></div>
+  <div class="art-veil"></div>
+  <div class="arc-mark"></div>
+  <div class="arc-mark two"></div>
+  <div class="art-key" id="key0"></div>
+  <div class="art-key" id="key1"></div>
+  <div class="art-crown"></div>
+  <div class="art-floor"></div>
 </div>
 
 <!-- ══════════════ BOOT ══════════════ -->
 <div id="boot">
+  <!-- The same two arcs, at the same radius and the same place on the
+       screen, as the ones the shell draws behind the artwork. The boot
+       layer fades out over a shell whose arcs are already exactly where
+       these are, so the mark does not cut and reappear — it is the one
+       thing on screen that never moves, and the whole sequence reads as
+       one surface resolving rather than two screens swapping. -->
+  <div class="arc-mark"></div>
+  <div class="arc-mark two"></div>
+
   <div class="boot-core">
-    <div class="mark" id="mark">
-      <svg viewBox="0 0 132 132" aria-hidden="true">
-        <defs>
-          <linearGradient id="arcgrad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%"  stop-color="#1b3f8a"/>
-            <stop offset="55%" stop-color="#4c8dff"/>
-            <stop offset="100%" stop-color="#a6d4ff"/>
-          </linearGradient>
-        </defs>
-        <circle class="ring-track" cx="66" cy="66" r="52"/>
-        <g class="ring-spin">
-          <circle class="ring-arc" cx="66" cy="66" r="52"
-                  stroke-dasharray="196 131" stroke-dashoffset="0"/>
-          <circle class="node" cx="66" cy="14" r="3.4"/>
-        </g>
-      </svg>
-    </div>
+    <div class="wordmark" id="wordmark" aria-label="PC1"></div>
 
-    <div class="wordmark" id="wordmark" aria-label="ARC"></div>
-    <div class="boot-sub">Personal Console&nbsp;·&nbsp;PC1</div>
-
-    <div class="boot-progress">
+    <div class="boot-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bootBar">
       <div class="track"><div class="fill" id="fill"></div></div>
       <div class="boot-status">
         <span id="stepText">Power-on self test</span>
@@ -706,12 +1155,10 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
   </div>
 
   <div class="boot-meta">
-    <span>ARC OS 1.0</span>
+    <span>PC1 OS 1.0</span>
     <span>Build 26100.4351</span>
   </div>
 </div>
-
-<div id="bloom"></div>
 
 <!-- ══════════════ SHELL ══════════════ -->
 <div id="shell">
@@ -727,13 +1174,16 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
         <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h8"/></svg>
         <span id="chipStorage">1.9 TB free</span>
       </span>
+      <!-- The glyph follows the connection, because Wi-Fi arcs next to the
+           word "Wired" is an icon that needs explaining, and an icon that
+           needs explaining is a broken icon. setNetIcon() swaps it. -->
       <span class="status-chip" title="Network">
-        <svg viewBox="0 0 24 24"><path d="M2 8.5a15 15 0 0 1 20 0"/><path d="M5.5 12a10 10 0 0 1 13 0"/><path d="M9 15.5a5 5 0 0 1 6 0"/><circle cx="12" cy="19" r="1"/></svg>
+        <svg viewBox="0 0 24 24" id="chipNetIcon"><rect x="3.2" y="13.4" width="17.6" height="7.4" rx="1.6"/><path d="M12 13.4V9.2"/><path d="M7.6 9.2h8.8"/><path d="M7.6 9.2V6.4M16.4 9.2V6.4"/></svg>
         <span id="chipNet">Wired</span>
       </span>
       <span class="clock" id="clock">--:--</span>
       <button class="icon-btn" id="btnSettings" data-nav="0,0" data-act="openSettings" title="Settings" aria-label="Settings">
-        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/></svg>
+        <svg viewBox="0 0 24 24"><path d="M10.16 5.98L10.42 3.04A9.1 9.1 0 0 1 13.58 3.04L13.84 5.98A6.3 6.3 0 0 1 14.96 6.44L17.22 4.55A9.1 9.1 0 0 1 19.45 6.78L17.56 9.04A6.3 6.3 0 0 1 18.02 10.16L20.96 10.42A9.1 9.1 0 0 1 20.96 13.58L18.02 13.84A6.3 6.3 0 0 1 17.56 14.96L19.45 17.22A9.1 9.1 0 0 1 17.22 19.45L14.96 17.56A6.3 6.3 0 0 1 13.84 18.02L13.58 20.96A9.1 9.1 0 0 1 10.42 20.96L10.16 18.02A6.3 6.3 0 0 1 9.04 17.56L6.78 19.45A9.1 9.1 0 0 1 4.55 17.22L6.44 14.96A6.3 6.3 0 0 1 5.98 13.84L3.04 13.58A9.1 9.1 0 0 1 3.04 10.42L5.98 10.16A6.3 6.3 0 0 1 6.44 9.04L4.55 6.78A9.1 9.1 0 0 1 6.78 4.55L9.04 6.44A6.3 6.3 0 0 1 10.16 5.98Z"/><circle cx="12" cy="12" r="3.1"/></svg>
       </button>
       <button class="icon-btn" id="btnPower" data-nav="0,1" data-act="openPower" title="Power" aria-label="Power">
         <svg viewBox="0 0 24 24"><path d="M12 3.5v8"/><path d="M18.4 7a8.5 8.5 0 1 1-12.8 0"/></svg>
@@ -748,18 +1198,27 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;text-a
 
   <main class="main">
     <section class="hero">
-      <div class="swap" id="heroSwap">
+      <div class="hero-main swap" id="heroSwap">
         <div class="eyebrow" id="heroEyebrow">Library</div>
         <h1 class="hero-title" id="heroTitle">Steam</h1>
         <p class="hero-desc" id="heroDesc">Description</p>
-        <div class="hero-meta" id="heroMeta"></div>
+        <div class="hero-meta" id="heroTags"></div>
       </div>
-      <div class="hero-actions">
-        <button class="btn btn-primary" id="btnLaunch" data-nav="2,0" data-act="launch">
-          <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>
-          <span id="launchLabel">Launch</span>
-        </button>
-        <button class="btn btn-ghost" id="btnOptions" data-nav="2,1" data-act="appOptions">Options</button>
+
+      <!-- The actions, then the spec strip, both under the reading
+           column rather than in a card on the right. The two buttons
+           stay on ONE row on purpose: the focus model navigates row 2
+           with left/right, so stacking them would make "left" visibly
+           move up. -->
+      <div class="hero-side">
+        <div class="hero-actions">
+          <button class="btn btn-primary" id="btnLaunch" data-nav="2,0" data-act="launch">
+            <svg viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></svg>
+            <span id="launchLabel">Launch</span>
+          </button>
+          <button class="btn btn-ghost" id="btnOptions" data-nav="2,1" data-act="appOptions">Options</button>
+        </div>
+        <div class="hero-facts swap" id="heroMeta"></div>
       </div>
     </section>
   </main>
@@ -829,81 +1288,25 @@ function safe(where, fn){
 addEventListener("error", (e) => hostLog("window error: " + (e.message || "?")));
 
 /* ═══ Ambient field ══════════════════════════════════════════
-   Slow drifting motes over two wandering light blooms — the
-   "living background" a console shell needs so a static screen
-   never feels frozen. */
-(function ambient(){
-  const c = $("#amb"), ctx = c.getContext("2d");
-  let w, h, dpr, motes = [];
+   Deliberately gone. The shell used to run a particle canvas —
+   drifting motes over two wandering light blooms — to keep a
+   static screen from reading as frozen. It ran a requestAnimation-
+   Frame loop forever, on a machine whose entire job is to give its
+   frames to something else.
 
-  function resize(){
-    dpr = Math.min(devicePixelRatio || 1, 2);
-    w = c.width  = innerWidth  * dpr;
-    h = c.height = innerHeight * dpr;
-    c.style.width = innerWidth + "px";
-    c.style.height = innerHeight + "px";
-    const count = Math.round((innerWidth * innerHeight) / 26000);
-    motes = Array.from({length: count}, () => ({
-      x: Math.random() * w,
-      y: Math.random() * h,
-      r: (Math.random() * 1.5 + .35) * dpr,
-      v: (Math.random() * .16 + .04) * dpr,
-      d: Math.random() * .5 - .25,
-      a: Math.random() * .45 + .12,
-      p: Math.random() * Math.PI * 2
-    }));
-  }
-  resize();
-  addEventListener("resize", resize);
+   The background is now the focused cover itself — see paintHero →
+   applyArt, and ui/homeart.js for how one 600×900 JPEG becomes a
+   full-bleed ground that costs nothing to composite. It moves with
+   the cursor rather than on a timer, which is the only motion this
+   screen actually needs, and it costs nothing when nobody is
+   touching the pad.
 
-  let t = 0;
-  function blob(x, y, r, hue, alpha){
-    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, `rgba(${hue},${alpha})`);
-    g.addColorStop(1, `rgba(${hue},0)`);
-    ctx.fillStyle = g;
-    ctx.fillRect(x - r, y - r, r * 2, r * 2);
-  }
-
-  function frame(){
-    t += RM ? 0 : .0032;
-    ctx.clearRect(0, 0, w, h);
-
-    const R = Math.max(w, h);
-    blob(w * (.24 + Math.sin(t) * .07),        h * (.30 + Math.cos(t * .8) * .07),  R * .55, "27,63,138",  ".40");
-    blob(w * (.80 + Math.cos(t * .7) * .06),   h * (.72 + Math.sin(t * .9) * .06),  R * .48, "12,32,70",   ".55");
-    blob(w * (.55 + Math.sin(t * 1.3) * .10),  h * (.12 + Math.cos(t * 1.1) * .05), R * .34, "76,141,255", ".13");
-
-    for (const m of motes){
-      if (!RM){
-        m.y -= m.v;
-        m.x += Math.sin(t * 3 + m.p) * .22 * dpr + m.d * .05;
-        if (m.y < -8) { m.y = h + 8; m.x = Math.random() * w; }
-      }
-      ctx.beginPath();
-      ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
-      ctx.fillStyle = `rgba(190,220,255,${m.a})`;
-      ctx.fill();
-    }
-    requestAnimationFrame(frame);
-  }
-  frame();
-})();
+   The ten-entry gradient catalogue that used to live here is gone
+   with it. It was the tell: a shell that ships its own palette of
+   pretty rectangles is a shell that has decided what it looks like
+   before it knows what is installed on the machine. */
 
 /* ═══ Catalogue ═══════════════════════════════════════════ */
-const G = {
-  play:  ["#2b5fd0", "#0a1730"],
-  arcade:["#7a3bd6", "#180d33"],
-  disc:  ["#1f8f7a", "#06201c"],
-  stream:["#d0425f", "#2a0a13"],
-  dl:    ["#3f7ad0", "#0a1526"],
-  video: ["#c23b6a", "#25081a"],
-  music: ["#2fa36a", "#062018"],
-  photo: ["#d98436", "#2a1406"],
-  web:   ["#3d7fd6", "#07182e"],
-  files: ["#5a6f96", "#0b1220"]
-};
-
 const ICON = {
   steam:  '<circle cx="9" cy="9" r="4.2"/><circle cx="9" cy="9" r="1.4"/><path d="M12.6 11.4 20 18.4"/><circle cx="18.6" cy="17.2" r="2.6"/>',
   library:'<rect x="3.5" y="4" width="4" height="16" rx="1.2"/><rect x="9.5" y="4" width="4" height="16" rx="1.2"/><path d="M16.6 5.4l3.6 1.1-3.4 13.1-3.6-1.1z"/>',
@@ -916,12 +1319,16 @@ const ICON = {
   web:    '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.4 2.4 3.6 5.4 3.6 8.5s-1.2 6.1-3.6 8.5c-2.4-2.4-3.6-5.4-3.6-8.5S9.6 5.9 12 3.5z"/>',
 
   /* panel + row icons */
+  /* the guide menu's three: go back into it, come back out of it, end it */
+  play:   '<path d="M8.2 5.4v13.2L19 12z"/>',
+  shell:  '<path d="M3.6 11.2 12 4.2l8.4 7"/><path d="M6 10.4v8.2a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-8.2"/>',
+  stop:   '<rect x="6.4" y="6.4" width="11.2" height="11.2" rx="1.6"/>',
   rest:   '<path d="M20 14.5A8.2 8.2 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z"/>',
   restart:'<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20.2 4.2v4.4h-4.4"/>',
   shut:   '<path d="M12 3.5v8"/><path d="M18.4 7a8.5 8.5 0 1 1-12.8 0"/>',
   signout:'<path d="M14.5 4.5h3.2a1.8 1.8 0 0 1 1.8 1.8v11.4a1.8 1.8 0 0 1-1.8 1.8h-3.2"/><path d="M10 8.4 13.6 12 10 15.6"/><path d="M13.2 12H4.4"/>',
   swap:   '<path d="M4.5 8.5h13.2"/><path d="m14.6 5.4 3.1 3.1-3.1 3.1"/><path d="M19.5 15.5H6.3"/><path d="m9.4 12.4-3.1 3.1 3.1 3.1"/>',
-  gear:   '<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/>',
+  gear:   '<path d="M10.16 5.98L10.42 3.04A9.1 9.1 0 0 1 13.58 3.04L13.84 5.98A6.3 6.3 0 0 1 14.96 6.44L17.22 4.55A9.1 9.1 0 0 1 19.45 6.78L17.56 9.04A6.3 6.3 0 0 1 18.02 10.16L20.96 10.42A9.1 9.1 0 0 1 20.96 13.58L18.02 13.84A6.3 6.3 0 0 1 17.56 14.96L19.45 17.22A9.1 9.1 0 0 1 17.22 19.45L14.96 17.56A6.3 6.3 0 0 1 13.84 18.02L13.58 20.96A9.1 9.1 0 0 1 10.42 20.96L10.16 18.02A6.3 6.3 0 0 1 9.04 17.56L6.78 19.45A9.1 9.1 0 0 1 4.55 17.22L6.44 14.96A6.3 6.3 0 0 1 5.98 13.84L3.04 13.58A9.1 9.1 0 0 1 3.04 10.42L5.98 10.16A6.3 6.3 0 0 1 6.44 9.04L4.55 6.78A9.1 9.1 0 0 1 6.78 4.55L9.04 6.44A6.3 6.3 0 0 1 10.16 5.98Z"/><circle cx="12" cy="12" r="3.1"/>',
   info:   '<circle cx="12" cy="12" r="8.6"/><path d="M12 11v5.2"/><circle cx="12" cy="7.9" r="1"/>',
   disk:   '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h8"/>',
   folder: '<path d="M3.4 7.2a1.8 1.8 0 0 1 1.8-1.8h3.7l2.1 2.4h7.8a1.8 1.8 0 0 1 1.8 1.8v7.6a1.8 1.8 0 0 1-1.8 1.8H5.2a1.8 1.8 0 0 1-1.8-1.8z"/>',
@@ -931,30 +1338,146 @@ const ICON = {
 };
 
 /* ── DualSense glyphs ─────────────────────────────────────────
-   Generic geometric shapes in the same 24×24 stroke language as
-   every other icon in the shell. Nothing here is a Sony mark: a
-   cross, a circle, a square and a triangle inside a round button
-   outline is the neutral vocabulary every multiplatform game
-   ships, and the shoulder caps are labelled text, not logos. */
+   Redrawn from reference rather than from description. The set
+   they replace was drawn from a written brief and read, correctly,
+   as "a generic gamepad": four face symbols all at the same size
+   inside a ring that Sony does not draw, a d-pad that was one
+   connected plus, an Options button that was a rounded rectangle
+   with three tapering lines on it, and a Create button that was
+   the DualShock 4's Share icon — which the DualShock 4 never had,
+   because Share was the WORD "SHARE" printed on the button.
+
+   What the references say, and what is drawn here:
+
+   FACE SYMBOLS are bare. The registered PlayStation Shapes Logo is
+   the four naked shapes; the button cap is the ring, and Sony does
+   not draw a ring around the symbol. The enclosing circle in most
+   icon packs is a third-party container. They are also NOT the
+   same size as each other — measured across two independent vector
+   reproductions the ordering is consistently triangle > circle >
+   cross > square, spanning about 23%, which is ordinary optical
+   compensation: a square reads heaviest at a given bounding box
+   and a triangle lightest. Drawing all four at one size is the
+   single commonest mistake and it is what made the old set look
+   mechanical. All four are outlined at one absolute stroke weight,
+   with sharp corners and butt-cut ends.
+
+   THE CROSS is two straight strokes of equal length crossing at
+   the centre at exactly 45° — a rotated plus, not a letter X, and
+   its ends are cut square rather than rounded.
+
+   THE D-PAD is four separate segments with gaps, not a connected
+   plus: the DualSense uses the segmented four-button geometry over
+   a centre pivot, which is precisely what stops opposing pairs
+   firing together.
+
+   L1/R1 AND L2/R2 ARE DIFFERENT SHAPES. The bumper is a wide
+   landscape pill at about 2.6:1. The trigger is taller than it is
+   wide, with a squared-off rounded top, straight parallel sides,
+   and a bottom that bulges outward into the paddle the finger
+   actually pulls. Drawing both as the same rounded rectangle with
+   a different label — which is what this shell did — throws away
+   the one difference that tells them apart at a glance.
+
+   OPTIONS is three equal horizontal bars, printed above the
+   button, at a 9:1 length-to-thickness ratio with gaps twice the
+   bar thickness. Not tapering, not on a button outline. (The word
+   "OPTIONS" was the DualShock 4; the bars are the DualSense.)
+
+   CREATE is a fan of three equal rays converging downward towards
+   the button, at 0° and ±39.6° from vertical, butt-cut. It has
+   nothing in common with any "share" icon.
+
+   THE TOUCHPAD carries the light bar on the DualSense: the strips
+   moved from the top of the controller onto the pad's left and
+   right edges. Drawn with them it reads as a DualSense; drawn as a
+   bare rounded rectangle it reads as a DualShock 4.
+
+   THE STICK is a ring with a centre disc at 0.69 of the ring's
+   diameter. The reference knocks the L/R letter out of a filled
+   disc; this draws the disc outlined with the letter inside it
+   instead, because a knockout needs a mask and a mask at hint-bar
+   size is a grey smudge. `stick` is the click form, which the
+   reference draws as the disc with no letter at all.
+
+   THE PS BUTTON IS NOT DRAWN, AND MUST NOT BE. The mark on it is
+   the PlayStation Family Mark, a registered trademark of Sony
+   Interactive Entertainment — and the four face shapes are
+   separately registered as the Shapes Logo, so "draw the four
+   symbols instead" is not a way round it either. `ps` here is the
+   genre-standard neutral guide glyph: a small filled dot inside a
+   large ring. It is deliberately a different silhouette from
+   `stick`, whose disc is far larger relative to its ring. If
+   somebody later "fixes" this back to a P-and-S monogram they
+   will have introduced a trademark infringement, not corrected an
+   inaccuracy.
+
+   Reference: Sony's PS5 button-function and trademark pages,
+   Wikipedia's DualSense article (monochrome buttons, Share→Create,
+   light bar on the touchpad edges), and geometry measured out of
+   Shinmera's PromptFont — which matters because it ships separate
+   -ps and -ps5 files and therefore models the DualShock 4 →
+   DualSense change explicitly — cross-checked against Wikimedia
+   Commons' PlayStation shape SVGs. */
 const PAD_GLYPH = {
-  cross:    '<circle cx="12" cy="12" r="9.2"/><path d="M8.6 8.6 15.4 15.4M15.4 8.6 8.6 15.4"/>',
-  circle:   '<circle cx="12" cy="12" r="9.2"/><circle cx="12" cy="12" r="4"/>',
-  square:   '<circle cx="12" cy="12" r="9.2"/><rect x="8.2" y="8.2" width="7.6" height="7.6" rx="1.1"/>',
-  triangle: '<circle cx="12" cy="12" r="9.2"/><path d="M12 7.3 16.2 15.1H7.8z"/>',
-  dpad:     '<path d="M9.6 3.7h4.8v5.9h5.9v4.8h-5.9v5.9H9.6v-5.9H3.7V9.6h5.9z"/>',
-  dpadLR:   '<path d="M9.6 3.7h4.8v5.9h5.9v4.8h-5.9v5.9H9.6v-5.9H3.7V9.6h5.9z" opacity=".45"/>'
-          + '<path class="solid" d="M8.6 10.4H5.2v3.2h3.4z"/><path class="solid" d="M15.4 10.4h3.4v3.2h-3.4z"/>',
-  dpadUD:   '<path d="M9.6 3.7h4.8v5.9h5.9v4.8h-5.9v5.9H9.6v-5.9H3.7V9.6h5.9z" opacity=".45"/>'
-          + '<path class="solid" d="M10.4 8.6V5.2h3.2v3.4z"/><path class="solid" d="M10.4 15.4v3.4h3.2v-3.4z"/>',
-  l1:       '<rect x="2.4" y="6.4" width="19.2" height="11.2" rx="3.4"/><text class="lbl" x="12" y="15.3" text-anchor="middle">L1</text>',
-  r1:       '<rect x="2.4" y="6.4" width="19.2" height="11.2" rx="3.4"/><text class="lbl" x="12" y="15.3" text-anchor="middle">R1</text>',
-  l2:       '<rect x="2.4" y="6.4" width="19.2" height="11.2" rx="3.4"/><text class="lbl" x="12" y="15.3" text-anchor="middle">L2</text>',
-  r2:       '<rect x="2.4" y="6.4" width="19.2" height="11.2" rx="3.4"/><text class="lbl" x="12" y="15.3" text-anchor="middle">R2</text>',
-  options:  '<rect x="7.2" y="4.4" width="9.6" height="15.2" rx="2.6"/><path d="M9.9 9.2h4.2M9.9 12h4.2M9.9 14.8h2.6"/>',
-  create:   '<rect x="7.2" y="4.4" width="9.6" height="15.2" rx="2.6"/><path d="M10 8.6h4v6.8h-4z" stroke-dasharray="2 1.7"/>',
-  ps:       '<circle cx="12" cy="12" r="9.2"/><path d="M8.3 12.6 12 8.9l3.7 3.7"/><path d="M9.7 12.1v3.6h4.6v-3.6"/>',
-  stick:    '<circle cx="12" cy="12" r="8.4"/><circle cx="12" cy="12" r="3.3"/><path d="M12 3.6v1.5M12 18.9v1.5M3.6 12h1.5M18.9 12h1.5"/>',
-  touchpad: '<rect x="2.6" y="6.2" width="18.8" height="11.6" rx="2.6"/><path d="M12 6.2v11.6" opacity=".45"/>'
+  /* bbox 14.0, stroke 1.9, butt caps, 45° */
+  cross:    '<path class="face" d="M5.7 5.7 18.3 18.3M18.3 5.7 5.7 18.3"/>',
+  /* bbox 14.2 */
+  circle:   '<circle class="face" cx="12" cy="12" r="6.15"/>',
+  /* bbox 13.0, sharp corners */
+  square:   '<rect class="face" x="6.45" y="6.45" width="11.1" height="11.1"/>',
+  /* bbox 16.0 × 14.2, near-equilateral, centroid between the two
+     conventions the references bracket, mitred apex */
+  triangle: '<path class="face tri" d="M12 3.7 20 17.9H4z"/>',
+
+  /* Four segments, arms 40% of the frame wide, each a flat outer
+     edge and a wedge stopping short of the centre. */
+  dpad:     '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z"/>'
+          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z"/>'
+          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z"/>'
+          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z"/>',
+  dpadLR:   '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z" opacity=".3"/>'
+          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z" opacity=".3"/>'
+          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z"/>'
+          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z"/>',
+  dpadUD:   '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z"/>'
+          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z"/>'
+          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z" opacity=".3"/>'
+          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z" opacity=".3"/>',
+
+  /* Bumper: landscape pill. The reference is 2.66:1; this is 2.15:1,
+     and the difference is deliberate. At hint-bar size the label is
+     the ONLY thing that distinguishes L1 from R1 from L2 from R2, so
+     a pill drawn at the exact aspect leaves 6.2 units of interior for
+     a cap height of 5.9 and the letters go to mush on a television.
+     Two units of extra height buys a legible label and keeps the one
+     fact the shape has to carry — landscape bumper against upright
+     trigger — completely intact. */
+  l1:       '<rect x="1.2" y="6.8" width="21.6" height="10.4" rx="2.6"/>'
+          + '<text class="lbl" x="12" y="15.1" text-anchor="middle">L1</text>',
+  r1:       '<rect x="1.2" y="6.8" width="21.6" height="10.4" rx="2.6"/>'
+          + '<text class="lbl" x="12" y="15.1" text-anchor="middle">R1</text>',
+  /* Trigger: upright paddle, squared rounded top, bulged base */
+  l2:       '<path d="M6.9.8h10.2a1.8 1.8 0 0 1 1.8 1.8V20.2c0 2.2-3 3.3-6.9 3.3S5.1 22.4 5.1 20.2V2.6A1.8 1.8 0 0 1 6.9.8Z"/>'
+          + '<text class="lbl" x="12" y="12.6" text-anchor="middle">L2</text>',
+  r2:       '<path d="M6.9.8h10.2a1.8 1.8 0 0 1 1.8 1.8V20.2c0 2.2-3 3.3-6.9 3.3S5.1 22.4 5.1 20.2V2.6A1.8 1.8 0 0 1 6.9.8Z"/>'
+          + '<text class="lbl" x="12" y="12.6" text-anchor="middle">R2</text>',
+
+  /* Three equal bars, 18 × 2, pitch 6.24 */
+  options:  '<path class="solid" d="M3 4.76h18v2H3zM3 11h18v2H3zM3 17.24h18v2H3z"/>',
+  /* Three equal rays at 0° and ±39.6°, converging downward */
+  create:   '<path class="ray" d="M12 7.19V15.51M2.55 9.97 7.86 16.38M21.45 9.97 16.14 16.38"/>',
+  /* NOT the PlayStation Family Mark — see the note above. */
+  ps:       '<circle cx="12" cy="12" r="9"/><circle class="solid" cx="12" cy="12" r="2.2"/>',
+  /* Ring plus centre disc at 0.69 of its diameter; no letter is the
+     reference's click form. */
+  stick:    '<circle cx="12" cy="12" r="6.55"/><circle class="solid" cx="12" cy="12" r="4.7"/>',
+  /* The DualSense light bar sits on the pad's left and right edges.
+     The pad is narrowed to leave a real gap: drawn at the reference
+     width the strips touched the pad's own stroke and the three
+     shapes fused into one lumpy blob. */
+  touchpad: '<rect x="3.4" y="7" width="17.2" height="10" rx="1.5"/>'
+          + '<path class="solid" d="M.4 8.2h1.2v7.6H.4zM22.4 8.2h1.2v7.6h-1.2z"/>'
 };
 
 function glyphSVG(name){
@@ -983,57 +1506,114 @@ const HINTS = {
   boot:    { pad:[],                 key:["B"],             label:"Replay boot" }
 };
 
-const APPS = {
-  play: [
-    { id:"steam",  name:"Steam",        icon:"steam",  art:"play",
-      eyebrow:"Big Picture",  title:"Steam",
-      desc:"Your whole PC library, laid out for a controller and a couch. Big Picture takes over the display the moment it opens.",
-      meta:["342 titles","1.2 TB installed","4 friends online"], live:2, action:"Launch" },
-    { id:"library",name:"Library",      icon:"library",art:"disc",
-      eyebrow:"Local", title:"Library",
-      desc:"Everything installed on this machine in one grid — launchers, standalone builds and shortcuts, sorted by how recently you played them.",
-      meta:["61 installed","Last: Hades II, 2 days ago"], action:"Open" },
-    { id:"arcade", name:"Arcade",       icon:"arcade", art:"arcade",
-      eyebrow:"Emulation", title:"Arcade",
-      desc:"Cores, ROMs and save states across nine systems. Rewind is on, shaders are set per-system, and controllers map themselves.",
-      meta:["9 systems","1,204 titles","Rewind on"], action:"Resume" },
-    { id:"remote", name:"Remote Play",  icon:"remote", art:"stream",
-      eyebrow:"Streaming", title:"Remote Play",
-      desc:"Pull a session off the desktop upstairs, or hand this one to a handheld. Encoding follows whatever the link can carry.",
-      meta:["Host: TOWER","4K · 120 Hz","6 ms"], live:0, action:"Connect" },
-    { id:"dl",     name:"Downloads",    icon:"dl",     art:"dl", badge:"2",
-      eyebrow:"Queue", title:"Downloads",
-      desc:"Two updates are coming down in the background. Installs pause automatically the moment you start something that needs the bandwidth.",
-      meta:["2 in queue","18.4 GB remaining","~7 min"], action:"Manage" }
-  ],
-  media: [
-    { id:"video",  name:"Video",        icon:"video",  art:"video",
-      eyebrow:"Playback", title:"Video",
-      desc:"Local films and series with the streaming apps folded in beside them, so one row covers everything you'd actually sit down to watch.",
-      meta:["HDR10+","7.1 passthrough","412 files"], action:"Open" },
-    { id:"music",  name:"Music",        icon:"music",  art:"music",
-      eyebrow:"Audio", title:"Music",
-      desc:"Plays over whatever else is running and keeps playing when you go back to a game. Album art drives the shell's ambient colour.",
-      meta:["FLAC · 24-bit","2,860 tracks"], live:1, action:"Play" },
-    { id:"photo",  name:"Photos",       icon:"photo",  art:"photo",
-      eyebrow:"Capture", title:"Photos",
-      desc:"Screenshots and clips land here the instant you take them, grouped by the session they came from rather than by date.",
-      meta:["1,940 captures","38 clips"], action:"Browse" },
-    /* The one tile on the rail that is not a stub: `run` makes doLaunch()
-       call into the page instead of posting {type:launch} to the host,
-       which is how anything built in the shell itself gets onto the rail. */
-    { id:"files",  name:"Files",        icon:"folder", art:"files",
-      eyebrow:"This machine", title:"Files",
-      desc:"Every drive Windows has mounted, browsable from the couch. Copy, move, rename and delete run natively in the host; long jobs report progress and can be cancelled.",
-      meta:["Controller navigation","Native file operations"], action:"Open",
-      run: () => ACT.openFiles() },
-    { id:"web",    name:"Browser",      icon:"web",    art:"web",
-      eyebrow:"Internet", title:"Browser",
-      desc:"A full browser sized for a television. Pinned apps open full screen; anything else is one address away. Links are reached with the D-pad, and the left stick becomes a pointer on sites that will not co-operate.",
-      meta:["Spatial + pointer navigation","Four tabs","DuckDuckGo"], action:"Open",
-      run: () => ACT.openBrowser() }
-  ]
-};
+/* ═══ The library's wire ═══════════════════════════════════════
+   Handed to ui/library.js the same way, and for the same reason, the
+   explorer's is handed to ui/files.js — read the long note on Files
+   below for the full argument. In one line: library.js's second probe
+   is `chrome.webview.hostObjects.arcLibrary`, and under WebView2 that
+   probe can never fail, because hostObjects is a Proxy that
+   manufactures a property for any name asked of it. Left to guess, the
+   rail picks a bridge that does not exist and every command dies at
+   call time with a COM error instead of at detection time with a
+   sentence. The first v7 bench run says exactly that:
+   "library: lib.list failed: Element not found. (0x80070490)" — from a
+   host whose LibraryApi worker was up and had served zero requests.
+
+   So the choice is made here instead. window.arcLibraryApi is
+   library.js's FIRST probe, so defining it settles the matter before
+   the Proxy is ever consulted, and it is defined ABOVE the
+   ArcLibrary.initial()/load() calls because load() picks its transport
+   on the first command it sends.
+
+   The transport itself is the host's {type:"lib"} message channel,
+   answered on the host's LibraryApi worker thread — never its UI
+   thread. A cold scan is seconds long; on the UI thread that is a
+   frozen television with a live pad going nowhere. */
+const LibraryWire = (function(){
+  let seq = 0;
+  let wired = false;
+  const pending = new Map();
+  const TIMEOUT = 60000;    // lib.scan hands back a jobId at once; the polls are quick
+
+  function wire(){
+    if (wired) return true;
+    try{
+      if (!(window.chrome && chrome.webview && typeof chrome.webview.postMessage === "function"))
+        return false;
+      chrome.webview.addEventListener("message", ev => {
+        let d = ev ? ev.data : null;
+        if (typeof d === "string"){ try{ d = JSON.parse(d); }catch(e){ return; } }
+        if (!d || d.type !== "lib.reply" || !d.reqId) return;
+        const p = pending.get(d.reqId);
+        if (!p){ hostLog("lib: reply for unknown reqId " + d.reqId + " (timed out already?)"); return; }
+        pending.delete(d.reqId);
+        clearTimeout(p.timer);
+        p.resolve(d);                      /* the envelope as-is; library.js reads it */
+      });
+      wired = true;
+    }catch(err){ report("library wire", err); }
+    return wired;
+  }
+
+  /* library.js calls this with the command already serialised and reads
+     an envelope (object or JSON text) back off the promise. */
+  window.arcLibraryApi = function(json){
+    return new Promise((resolve, reject) => {
+      let cmd;
+      try{ cmd = (typeof json === "string") ? JSON.parse(json) : (json || {}); }
+      catch(e){ reject(new Error("the library command was not JSON: " + e.message)); return; }
+      if (!wire()){
+        reject(new Error("There is no host to ask. The library needs the ShellHostWeb "
+                       + "build that carries LibraryApi."));
+        return;
+      }
+      const id = "lib-" + (++seq);
+      cmd.reqId = id;                      // the host echoes it back inside the envelope
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error("The host did not answer '" + (cmd.cmd || "?") + "' within "
+                         + (TIMEOUT / 1000) + " seconds."));
+      }, TIMEOUT);
+      pending.set(id, { resolve, timer });
+      try{ chrome.webview.postMessage(JSON.stringify({ type:"lib", reqId:id, command:cmd })); }
+      catch(err){ clearTimeout(timer); pending.delete(id); reject(err); }
+    });
+  };
+
+  return { wire };
+})();
+
+/* The rail's contents, scanned rather than invented.
+   ui/library.js asks the host what is actually installed and returns tiles
+   in the shape this file already consumes: {id,name,icon,art,eyebrow,title,
+   desc,tags,facts,action,run}. `icon` and `art` are keys into ICON and G
+   below - nothing new is introduced.
+
+   Every generated tile carries `run`, so doLaunch() never reaches
+   {type:"launch"} for a library entry: launching goes through lib.launch,
+   which returns a real pid and says whether it is the game or a launcher
+   stub that is about to exit.
+
+   APPS is `let`, not `const`: the cached scan paints first and the fresh
+   one replaces it a moment later. On a machine with nothing installed the
+   Play tab is a single tile that says so - an empty array would break
+   APPS[tab][0], centre() and selectTile's modulo, and would tell the
+   viewer less than a sentence does. */
+let APPS = ArcLibrary.initial({
+  files:   () => ACT.openFiles(),
+  browser: () => ACT.openBrowser()
+});
+
+ArcLibrary.onUpdate = safe("library update", function(next){
+  APPS = next;
+  if (!APPS[tab] || !APPS[tab].length) tab = "play";
+  if (!$("#rail")) return;                 /* boot has not built the DOM yet */
+  buildRail();
+  selectTile(Math.min(idx, APPS[tab].length - 1), true);
+  refreshHomeItems();
+});
+
+ArcLibrary.load();
 
 const CC_ITEMS = [
   { id:"mic",   label:"Microphone", sub:"Muted",                     panel:"mic",
@@ -1047,7 +1627,7 @@ const CC_ITEMS = [
   { id:"users", label:"Profile",    sub:"Signed-in account",         panel:"profile",
     icon:'<circle cx="12" cy="8.6" r="3.6"/><path d="M4.8 19.5a7.2 7.2 0 0 1 14.4 0"/>' },
   { id:"settings", label:"Settings", sub:"All settings",             panel:"settings",
-    icon:'<circle cx="12" cy="12" r="3.2"/><path d="M12 3v2.2M12 18.8V21M21 12h-2.2M5.2 12H3M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6M18.4 18.4l-1.6-1.6M7.2 7.2 5.6 5.6"/>' },
+    icon:'<path d="M10.16 5.98L10.42 3.04A9.1 9.1 0 0 1 13.58 3.04L13.84 5.98A6.3 6.3 0 0 1 14.96 6.44L17.22 4.55A9.1 9.1 0 0 1 19.45 6.78L17.56 9.04A6.3 6.3 0 0 1 18.02 10.16L20.96 10.42A9.1 9.1 0 0 1 20.96 13.58L18.02 13.84A6.3 6.3 0 0 1 17.56 14.96L19.45 17.22A9.1 9.1 0 0 1 17.22 19.45L14.96 17.56A6.3 6.3 0 0 1 13.84 18.02L13.58 20.96A9.1 9.1 0 0 1 10.42 20.96L10.16 18.02A6.3 6.3 0 0 1 9.04 17.56L6.78 19.45A9.1 9.1 0 0 1 4.55 17.22L6.44 14.96A6.3 6.3 0 0 1 5.98 13.84L3.04 13.58A9.1 9.1 0 0 1 3.04 10.42L5.98 10.16A6.3 6.3 0 0 1 6.44 9.04L4.55 6.78A9.1 9.1 0 0 1 6.78 4.55L9.04 6.44A6.3 6.3 0 0 1 10.16 5.98Z"/><circle cx="12" cy="12" r="3.1"/>' },
   { id:"power", label:"Power",      sub:"Rest · Restart · Shut down", panel:"power",
     icon:'<path d="M12 3.5v8"/><path d="M18.4 7a8.5 8.5 0 1 1-12.8 0"/>' }
 ];
@@ -1057,18 +1637,22 @@ const STEPS = [
   ["Power-on self test",      12,  520],
   ["Mounting NVMe volumes",   31,  620],
   ["Loading graphics driver", 54,  700],
-  ["Starting ARC shell",      78,  660],
+  ["Starting PC1 shell",      78,  660],
   ["Restoring session",       94,  520],
   ["Ready",                  100,  420]
 ];
 
+/* Per-glyph so the wordmark can be typeset rather than typed in:
+   each character carries its own delay, and the whole lockup is
+   assembled before the first step fires. */
+const BRAND = "PC1";
 function paintWordmark(){
   const el = $("#wordmark");
   el.innerHTML = "";
-  "ARC".split("").forEach((ch, i) => {
+  BRAND.split("").forEach((ch, i) => {
     const s = document.createElement("span");
     s.textContent = ch;
-    s.style.animationDelay = (0.42 + i * 0.11) + "s";
+    s.style.animationDelay = (0.18 + i * 0.09) + "s";
     el.appendChild(s);
   });
 }
@@ -1078,37 +1662,39 @@ const runBoot = safe("runBoot", function(){
   bootTimers.forEach(clearTimeout);
   bootTimers = [];
 
-  const boot = $("#boot"), mark = $("#mark"), fill = $("#fill");
+  const boot = $("#boot"), fill = $("#fill");
   boot.classList.remove("gone");
-  mark.classList.remove("settled");
   fill.style.width = "0%";
   $("#pctText").textContent = "0%";
   $("#stepText").textContent = STEPS[0][0];
+  $("#bootBar").setAttribute("aria-valuenow", "0");
   $("#shell").classList.remove("live");
-  $("#bloom").classList.remove("go");
   Overlay.closeAll();
   paintWordmark();
+  try{ if (window.ArcFeel) ArcFeel.boot(); }catch(e){}
 
   const scale = RM ? 0.25 : 1;
-  let at = 1100 * scale;
+  let at = 900 * scale;
 
   STEPS.forEach(([label, pct, hold]) => {
     bootTimers.push(setTimeout(safe("bootStep", () => {
       $("#stepText").textContent = label;
       fill.style.width = pct + "%";
       $("#pctText").textContent = pct + "%";
+      $("#bootBar").setAttribute("aria-valuenow", String(pct));
     }), at));
     at += hold * scale;
   });
 
-  bootTimers.push(setTimeout(() => mark.classList.add("settled"), at - 380 * scale));
-
+  /* The rule stays on screen a beat after it fills — the lockup is
+     the logo, and cutting the instant it completes never lets you
+     see it as one. */
   bootTimers.push(setTimeout(safe("bootEnd", () => {
-    $("#bloom").classList.add("go");
     boot.classList.add("gone");
     $("#shell").classList.add("live");
+    try{ if (window.ArcFeel) ArcFeel.bootDone(); }catch(e){}
     Focus.repaint();
-  }), at + 120 * scale));
+  }), at + 420 * scale));
 });
 
 /* ═══ Host bridge ═════════════════════════════════════════
@@ -1132,7 +1718,7 @@ const padInfoWaiters = [];
 
 const Host = (function(){
   const caps = { power:false, sysinfo:false, nav:false, sys:false, padinfo:false, fs:false,
-                 browser:false, known:false };
+                 lib:false, browser:false, known:false };
   const hostOwned = new Set(["left","right","launch","back","tabPlay","tabMedia","cc"]);
   let sysinfo = null;
   const sysListeners = [];
@@ -1163,6 +1749,7 @@ const Host = (function(){
       caps.sys     = !!(m.caps && m.caps.indexOf("sys")     >= 0);
       caps.padinfo = !!(m.caps && m.caps.indexOf("padinfo") >= 0);
       caps.fs      = !!(m.caps && m.caps.indexOf("fs")      >= 0);
+      caps.lib     = !!(m.caps && m.caps.indexOf("lib")     >= 0);
       caps.browser = !!(m.caps && m.caps.indexOf("browser") >= 0);
       if (caps.nav) ["up","down","square","triangle","guide"].forEach(a => hostOwned.add(a));
       caps.known = true;
@@ -1192,6 +1779,30 @@ const Host = (function(){
     if (m.type === "browse"){
       hostLog("host asked for the browser at " + m.url);
       ACT.openBrowser(m.url || "");
+      return;
+    }
+    /* ── App lifecycle ─────────────────────────────────────
+       The host owns process state and pushes it here. Three
+       messages, all host->page:
+         apps          what is running, foreground and background
+         guide{ev:menu} a short press of PS with something open
+         shellforward   the shell was pulled in front of an app
+         app{ev:...}    the result of resume / minimise / close */
+    if (m.type === "apps"){ Apps.handle(m); return; }
+    if (m.type === "guide"){
+      if (m.ev === "menu") openGuideMenu(m.app);
+      return;
+    }
+    if (m.type === "shellforward"){
+      hostLog("host brought the shell forward (" + (m.reason || "?") + ")" +
+              (m.app ? " over " + m.app : ""));
+      return;
+    }
+    if (m.type === "app"){
+      if (m.ev === "resume" && m.ok === false) toast("Could not bring " + (m.title || "it") + " back.");
+      if (m.ev === "close"){
+        toast(m.ok ? (m.title || "It") + " was closed." : "Nothing was left to close.");
+      }
       return;
     }
     if (m.type === "browser"){
@@ -1321,7 +1932,7 @@ const Sys = (function(){
     hdr_unsupported:   "This display or its driver does not expose HDR to Windows.",
     no_search_yet:     "No update search has run yet in this session.",
     timeout:           "The host did not answer in time.",
-    no_host:           "This page is not running inside the ARC OS host.",
+    no_host:           "This page is not running inside the PC1 host.",
     sys_unavailable:   "The host could not start its system-control thread.",
     unknown_command:   "This build of the host does not know that command.",
     host_too_old:      "The running host build has no system channel — it cannot read or change Windows.",
@@ -1369,7 +1980,7 @@ const Sys = (function(){
       if (!Host.post(msg)){
         clearTimeout(rec.timer);
         pending.delete(id);
-        reject(err("no_host", "no host bridge on this page — system settings need the ARC OS host"));
+        reject(err("no_host", "no host bridge on this page — system settings need the PC1 host"));
       }
     });
   }
@@ -1687,7 +2298,18 @@ const Browser = {
       osk:       (cfg) => OSK.open(cfg),
       oskIsOpen: () => OSK.isOpen(),
       log:       (t) => hostLog(t),
-      toast:     (t) => toast(t)
+      toast:     (t) => toast(t),
+      /* A finished download, shown where it landed. The browser must close
+         first and not merely be covered: its pages are a child window the
+         explorer cannot be drawn over, so leaving it up would put the file
+         list behind a web page. Returning false hands the problem back —
+         browser.js then names the path instead of pretending. */
+      files:     (folder) => {
+        if (!folder || !window.ArcFiles) return false;
+        hostLog("browser: showing a download in Files -> " + folder);
+        ArcBrowser.close();
+        return Files.open({ path: folder }) !== false;
+      }
     });
     this.ready = true;
     hostLog("ArcBrowser " + (ArcBrowser.version || "?") + " attached");
@@ -1992,14 +2614,53 @@ const Focus = (function(){
   }
 
   let lastKey = "";
+
+  /* Every element THIS manager currently has a ring on, and nothing else.
+
+     It used to clear the attribute document-wide:
+
+         document.querySelectorAll("[data-focus]").forEach(e => e.removeAttribute(...))
+
+     which was a bug the moment a second focus manager moved into the same
+     document. The browser's chrome (ui/browser.js) and the explorer's rows
+     (ui/files.js) paint the same attribute on their own elements, under
+     their own cursors, in this same DOM. A shell repaint — and a dozen
+     ordinary things trigger one, down to a hint re-render — silently took
+     the ring off whatever the human was actually on. On the browser that
+     read as "I cannot reach the address bar": the cursor was there, and
+     nothing on the screen said so. It reproduced as two screenshots of
+     genuinely different focus positions coming out byte-identical.
+
+     The clear is now scoped to what this manager owns: the elements it
+     painted last time. It cannot reach an element it never touched, so a
+     nested manager's ring survives whatever the shell repaints behind it.
+     The stack is swept as well, which costs one attribute check per
+     focusable and closes the one gap references alone would leave — an
+     item whose scope was rebuilt around it between repaints. */
+  let painted = [];
+
+  function clearOwnFocus(){
+    for (const el of painted){
+      try{ el.removeAttribute("data-focus"); }catch(e){}
+    }
+    painted.length = 0;
+    for (const sc of stack){
+      for (const it of (sc.items || [])){
+        const el = it && it.el;
+        if (el && el.hasAttribute && el.hasAttribute("data-focus")) el.removeAttribute("data-focus");
+      }
+    }
+  }
+
   function repaint(silent){
     try{
-      document.querySelectorAll("[data-focus]").forEach(e => e.removeAttribute("data-focus"));
+      clearOwnFocus();
       stack.forEach((sc, i) => {
         const it = current(sc);
         if (!it) return;
         sc.index = indexOfEl(sc, it.el);          // normalise after any DOM churn
         it.el.setAttribute("data-focus", i === stack.length - 1 ? "on" : "stale");
+        painted.push(it.el);
       });
       const sc = top(); if (!sc) return;
       const it = current(sc);
@@ -2059,40 +2720,52 @@ function remPx(){
    The tokens are unitless multipliers of 1rem so this survives scaling. */
 function railStep(){
   const cs = getComputedStyle(document.documentElement);
-  const t = parseFloat(cs.getPropertyValue("--tile-u"));
+  const t = parseFloat(cs.getPropertyValue("--cover-u"));
   const g = parseFloat(cs.getPropertyValue("--gap-u"));
-  return ((isFinite(t) ? t : 7.375) + (isFinite(g) ? g : 1)) * remPx();
+  return ((isFinite(t) ? t : 7) + (isFinite(g) ? g : .875)) * remPx();
 }
 function centre(){
   $("#rail").style.transform = `translateX(${-(idx * railStep())}px)`;
 }
 
-function artCSS(key){
-  const [a, b] = G[key];
-  return `radial-gradient(120% 100% at 18% 8%, ${a}88 0%, ${a}22 38%, transparent 66%),`
-       + `radial-gradient(90% 80% at 78% 0%, ${b}cc 0%, transparent 60%),`
-       + `linear-gradient(180deg, ${a}2e 0%, transparent 55%)`;
-}
-function tileCSS(key){
-  const [a, b] = G[key];
-  return `radial-gradient(120% 120% at 22% 12%, ${a} 0%, ${b} 68%),linear-gradient(160deg,${a},${b})`;
-}
+/* A tile is built with NO inline background at all, and that is a
+   correctness requirement rather than a style one.
 
+   The old code set `background:` inline on .tile-art. An inline
+   `background` shorthand also resets background-size, -position and
+   -repeat to their initial values, and inline beats every rule in a
+   stylesheet — so ui/library.css's `background-size:cover` never
+   applied to a single cover, and `background-repeat:no-repeat` never
+   applied to a single extracted icon. On the development laptop the
+   visible result was that Counter-Strike and Dota were shown as
+   unscaled crops of their own top-left corners, and that 2XKO, League
+   of Legends, Teamfight Tactics and TEKKEN 8 had their icons TILED
+   four-up across the box. It was the single biggest reason the rail
+   read as generated rather than designed, and no numeric check on this
+   screen could ever have caught it.
+
+   The face is now chosen by ui/library.js as a class — a real cover, a
+   portrait generated from the executable's icon, or a colour field for
+   the tiles that have no artwork by nature — and everything about how
+   it is drawn lives in ui/library.css. */
 function buildRail(){
   const rail = $("#rail");
   rail.innerHTML = "";
   APPS[tab].forEach((app, i) => {
     const t = document.createElement("button");
-    t.className = "tile";
+    t.className = "tile face-field";
     t.setAttribute("aria-current", i === idx ? "true" : "false");
     t.setAttribute("aria-label", app.name);
     t.setAttribute("data-nav", "3," + i);
     t.dataset.act = "railPick";
     t.dataset.label = "tile:" + app.id;
     t.innerHTML =
-      `<div class="tile-art" style="background:${tileCSS(app.art)}"></div>` +
-      `<div class="tile-sheen"></div>` +
+      `<div class="tile-art"></div>` +
+      `<div class="tile-arc"></div>` +
+      `<div class="tile-mark"></div>` +
       `<div class="tile-glyph"><svg viewBox="0 0 24 24">${ICON[app.icon]}</svg></div>` +
+      `<div class="tile-dim"></div>` +
+      `<div class="tile-sheen"></div>` +
       `<div class="tile-name">${app.name}</div>` +
       (app.badge ? `<span class="tile-badge">${app.badge}</span>` : "");
     t.addEventListener("click", safe("tile click", (ev) => {
@@ -2103,6 +2776,10 @@ function buildRail(){
     }));
     rail.appendChild(t);
   });
+  /* A rebuild throws the running marks away with the old tiles, so put
+     them back before anything is painted. Guarded because buildRail runs
+     during boot, before Apps exists. */
+  try{ if (typeof applyRunningMarks === "function") applyRunningMarks(); }catch(e){}
   centre();
 }
 
@@ -2130,28 +2807,82 @@ function rememberRow(row, col){
   homeScope.memo[row] = col;
 }
 
-function paintHero(app, instant){
-  // crossfade the background art between two stacked layers
-  const next = artFlip ? $("#art0") : $("#art1");
-  const prev = artFlip ? $("#art1") : $("#art0");
-  next.style.background = artCSS(app.art);
-  next.classList.add("on");
-  prev.classList.remove("on");
+/* The whole screen's ground, changed by moving one place along the
+   rail. ui/library.js hands back the focused title's cover, the
+   stretched downsample of it and the colour it is mostly made of;
+   this puts them on the two pairs of cross-fading layers and sets
+   --accent, which is what the arc mark and the eyebrow rule read.
+
+   Guarded on `token` because the art arrives asynchronously and a
+   person on a pad moves faster than a 600×900 JPEG decodes: without
+   it, walking briskly down the rail and stopping leaves whichever
+   cover happened to finish last on screen rather than the one under
+   the cursor. */
+let artToken = 0;
+
+function applyArt(art){
+  const nextW = artFlip ? $("#wash0") : $("#wash1");
+  const prevW = artFlip ? $("#wash1") : $("#wash0");
+  const nextK = artFlip ? $("#key0")  : $("#key1");
+  const prevK = artFlip ? $("#key1")  : $("#key0");
   artFlip ^= 1;
 
-  const swap = $("#heroSwap");
+  if (art && art.wash) nextW.style.backgroundImage = `url("${art.wash}")`;
+  nextW.classList.toggle("on", !!(art && art.wash));
+  prevW.classList.remove("on");
+
+  /* Only a REAL cover is worth showing sharp and full height. A
+     generated portrait blown up to 122vh is a 300px canvas stretched
+     across a television, so those titles get the wash and the arc and
+     nothing else — which is a quieter screen, not a broken one. */
+  const key = art && art.hasCover ? art.cover : null;
+  if (key) nextK.style.backgroundImage = `url("${key}")`;
+  nextK.classList.toggle("on", !!key);
+  prevK.classList.remove("on");
+  document.documentElement.classList.toggle("art-none", !key);
+
+  if (art && art.accent) document.documentElement.style.setProperty("--accent", art.accent);
+}
+
+function paintHero(app, instant){
+  const token = ++artToken;
+  if (window.ArcLibrary && ArcLibrary.art){
+    Promise.resolve(ArcLibrary.art(app)).then(safe("paintHero art", (art) => {
+      if (token === artToken) applyArt(art);
+    }), () => {});
+  }
+
+  const swap = $("#heroSwap"), side = $("#heroMeta");
   const write = safe("paintHero", () => {
     $("#heroEyebrow").textContent = app.eyebrow;
     $("#heroTitle").textContent   = app.title;
     $("#heroDesc").textContent    = app.desc;
-    $("#launchLabel").textContent = app.action;
-    $("#heroMeta").innerHTML = app.meta
-      .map((m, n) => `<span class="chip${app.live === n ? " live" : ""}">${m}</span>`)
+    /* "Resume" when this app is already open — the hero button is the
+       one place the human looks before pressing Cross. */
+    $("#launchLabel").textContent = isRunningId(app.id) ? "Resume" : app.action;
+
+    /* Capability tags on the left, under the description. */
+    $("#heroTags").innerHTML = (app.tags || [])
+      .map(t => `<span class="chip">${escHTML(t)}</span>`).join("");
+
+    /* The fact table on the right. `live` names the label whose value
+       is a running state rather than a static one, so it is picked out
+       in the semantic green — matching by label, not by index, because
+       an index silently points at the wrong row the moment a fact is
+       inserted above it. */
+    side.innerHTML = (app.facts || [])
+      .map(([k, v]) =>
+        `<div class="hero-fact${app.live === k ? " live" : ""}">` +
+        `<span class="hero-fact-k">${escHTML(k)}</span>` +
+        `<span class="hero-fact-v">${escHTML(v)}</span></div>`)
       .join("");
+
     swap.classList.remove("out");
+    side.classList.remove("out");
   });
   if (instant || RM) { write(); return; }
   swap.classList.add("out");
+  side.classList.add("out");
   setTimeout(write, 180);
 }
 
@@ -3194,6 +3925,43 @@ const SET_CATS = [
     blurb:"The Windows mixer, live. The volume slider is adjusted with left and right.",
     build(ctx){
       const loading = ctx.stat("Reading audio endpoints…", null, true);
+
+      /* The shell's cues are synthesised in the page and owe nothing to the
+         Windows mixer, so this is a function called on both the success and
+         the failure path rather than a block buried in the success one: a
+         machine whose audio endpoints cannot be read must still be able to
+         turn the shell's own clicks down. */
+      const shellSound = () => {
+        if (!(window.ArcSfx && window.ArcFeel)) return;
+        ctx.sec("Shell sound");
+        ctx.stat("The shell's own cues. Synthesised in the page, so there are no sound files on this "
+          + "machine to go missing and nothing to load before the first click.", null);
+        const ui = ctx.slider({
+          label:"UI sound", value: ArcSfx.volume, muted: ArcSfx.muted, step:0.05,
+          hint:"Left and right adjust · Cross mutes · every change plays itself",
+          commit(v){ ArcSfx.setVolume(v); ArcFeel.play("activate"); return Promise.resolve(); },
+          activate(el){
+            const next = !ArcSfx.muted;
+            ArcSfx.setMuted(next);
+            el.__arcSetMuted(next);
+            if (!next) ArcFeel.play("activate");
+            toast(next ? "Shell sound muted." : "Shell sound on.");
+          }
+        });
+        ui.setAttribute("aria-label", "UI sound volume");
+        ctx.row({ label:"Follow the Windows volume",
+                  sub:"Cues track the system level and go silent when Windows is muted",
+                  tailHTML: ArcSfx.followsSystem ? tagHTML("on", "on") : tagHTML("off"),
+                  icon:"info",
+                  run: () => { const n = !ArcSfx.followsSystem;
+                               ArcSfx.setFollowsSystem(n); ArcFeel.toggle(n);
+                               toast(n ? "Following the system volume." : "Independent of the system volume.");
+                               if (settingsRepaint) settingsRepaint(); } });
+        ctx.row({ label:"Play the boot signature",
+                  sub:"The cue the shell resolves on as the home screen wipes in",
+                  icon:"info", run: () => ArcFeel.play("bootDone") });
+      };
+
       return Sys.call("audio.devices").then(a => {
         if (!ctx.alive()) return;
         loading.remove();
@@ -3265,7 +4033,12 @@ const SET_CATS = [
             }
           });
         });
-      });
+
+        /* The shell's cues sit under whatever the television is doing, and this
+           pane is the only place that already knows the Windows level. */
+        if (window.ArcSfx && cur) ArcSfx.setSystemVolume(cur.volume, cur.muted);
+        shellSound();
+      }, e => { loading.remove(); ctx.err("Audio endpoints could not be read", e); shellSound(); });
     } },
 
   /* ── 4. Controllers ─────────────────────────────────────
@@ -3302,6 +4075,37 @@ const SET_CATS = [
         ctx.facts(padFacts());
         ctx.row({ label:"Re-read the controller", sub:"Ask the host for a fresh HID snapshot",
                   icon:"update", run: () => { padInfoAt = -1e9; if (settingsRepaint) settingsRepaint(); } });
+
+        /* ── Vibration ──────────────────────────────────────────
+           Reported, not assumed: the host says whether it has a write handle
+           to the pad and how many output reports it has actually placed, so
+           a pad that silently refuses them says so instead of leaving a
+           switch that appears to work. */
+        if (window.ArcFeel){
+          ctx.sec("Vibration");
+          const h = (p && p.haptic) || null;
+          if (!h) ctx.stat("This host build has no haptic channel.", "bad");
+          else if (!h.ready) ctx.stat("No write channel to the pad — " + (h.status || "not started") + ".", "bad");
+          else ctx.stat("The host is writing " + h.outputLength + "-byte output reports over "
+            + (p.transport === "BT" ? "Bluetooth" : "USB") + ": " + h.writes + " sent, "
+            + h.failures + " refused.", null);
+
+          const vs = ctx.slider({
+            label:"Vibration strength", value: ArcFeel.hapticLevel, muted: !ArcFeel.hapticEnabled, step:0.05,
+            hint:"Left and right adjust · Cross turns it off · every change is played on the pad",
+            commit(v){ ArcFeel.setHapticLevel(v); ArcFeel.haptic("test"); return Promise.resolve(); },
+            activate(el){
+              const next = !ArcFeel.hapticEnabled;
+              ArcFeel.setHapticEnabled(next);
+              el.__arcSetMuted(!next);
+              if (next) ArcFeel.haptic("test");
+              toast(next ? "Vibration on." : "Vibration off.");
+            }
+          });
+          vs.setAttribute("aria-label", "Vibration strength");
+          ctx.row({ label:"Test the vibration", sub:"One pulse on each motor in turn",
+                    icon:"pad", run: () => { ArcFeel.haptic("test"); toast("Sent a test pulse to the pad."); } });
+        }
 
         return Sys.call("bt.status").then(b => b, e => ({ __err:e }));
       }).then(b => {
@@ -3635,7 +4439,7 @@ const SET_CATS = [
 
         ctx.sec("Shell");
         ctx.facts([
-          ["ARC OS",     "1.0"],
+          ["PC1 OS",     "1.0"],
           ["Host",       Host.caps.sys ? "ShellHostWeb v4 (system channel live)"
                         : (Host.caps.nav ? "ShellHostWeb v3 — no system channel" : "ShellHostWeb v2 (legacy pad channel)")],
           ["Keyboard",   window.ArcOSK ? ("ArcOSK " + (window.ArcOSK.version || "loaded")) : "not loaded"],
@@ -4324,6 +5128,7 @@ function doLaunch(){
     return;
   }
   hostLog("launch: " + app.id);
+  try{ if (window.ArcFeel) ArcFeel.play("launch"); }catch(e){}
   Host.post({ type:"launch", target:"" });
 }
 
@@ -4343,6 +5148,145 @@ function openAppOptions(){
   pushPanel("appOptions", node, { hints:["navUD", "select", "back"] });
 }
 ACT.launchFromPanel = function(){ Overlay.closeAll(); doLaunch(); };
+
+/* ═══ What is running ════════════════════════════════════
+   The host publishes; this subscribes. It is never polled — the
+   page cannot see the process table and any interval it invented
+   here would either lag or burn a scan the host has already done.
+
+   Message shape (host -> page), pushed on every change:
+
+     {type:"apps",
+      running:[{id,title,kind,pid,tracked,foreground,pids}],
+      background:[{name,category,pid,procs,actionable}]}
+
+   `running` is zero or one entry: the app the shell has yielded to
+   and can Resume, Minimise or Close. `background` is everything
+   worth naming that is up, whether the shell started it or not —
+   Steam, Discord, Vanguard. The status bar is not built here; that
+   is another owner's surface. Apps.background() is the data. */
+const Apps = (function(){
+  let running = null;
+  let background = [];
+  const listeners = [];
+
+  function emit(){
+    listeners.forEach(fn => { try{ fn(running, background); }catch(err){ report("apps listener", err); } });
+  }
+
+  return {
+    handle(m){
+      const was = running && running.id;
+      running = (m.running && m.running.length) ? m.running[0] : null;
+      background = m.background || [];
+      if ((running && running.id) !== was)
+        hostLog("apps: running = " + (running ? running.title + " (pid " + running.pid +
+                (running.tracked ? ", tracked" : ", untracked") + ")" : "nothing"));
+      applyRunningMarks();
+      emit();
+    },
+    /* True for the library id of the app that is open right now. The rail
+       and the hero both ask this; nothing else should need to. */
+    isRunning(id){ return !!(running && id && running.id === id); },
+    current(){ return running; },
+    background(){ return background.slice(); },
+    onChange(fn){ listeners.push(fn); try{ fn(running, background); }catch(e){} },
+    ask(){ Host.post({ type:"app", cmd:"state" }); }
+  };
+})();
+
+/* Paint the running state onto the rail and the hero. Cheap and
+   idempotent: called on every apps message and after every rail
+   rebuild, because a rebuild throws the marks away with the tiles. */
+function applyRunningMarks(){
+  const list = APPS[tab] || [];
+  [...$("#rail").children].forEach((t, n) => {
+    const app = list[n];
+    const on = !!(app && Apps.isRunning(app.id));
+    t.classList.toggle("running", on);
+    let pill = t.querySelector(".tile-live");
+    if (on && !pill){
+      pill = document.createElement("span");
+      pill.className = "tile-live";
+      pill.textContent = "Running";
+      t.appendChild(pill);
+    } else if (!on && pill){
+      pill.remove();
+    }
+  });
+  const app = list[idx];
+  if (app){
+    const on = Apps.isRunning(app.id);
+    $("#launchLabel").textContent = on ? "Resume" : (app.action || "Launch");
+    $("#btnLaunch").dataset.label = on ? "resume" : "launch";
+  }
+}
+
+/* ═══ The guide menu ═════════════════════════════════════
+   What a short press of PS opens when something is running. Three
+   rows and no cleverness: the thing you almost always want (Resume)
+   is focused, the thing that loses work (Close) is last and behind a
+   confirmation. It is an ordinary panel on the existing focus stack,
+   so Circle backs out of it exactly like every other panel and the
+   pad hints are the ones the human already knows. */
+function openGuideMenu(app){
+  const a = app || Apps.current();
+  if (!a){
+    /* The host only sends this with something running, so arriving
+       here means the app exited between the press and the message.
+       Say so rather than opening an empty menu. */
+    toast("Nothing is running.");
+    return;
+  }
+  Overlay.closeAll();
+  const node = panelShell(a.title, a.tracked
+    ? "This app is open. The shell is in front of it."
+    : "This app is open, but the shell could not attach to it — it will not know when the app closes.",
+    "Guide");
+  const body = node.querySelector(".panel-body");
+  [
+    { label:"Resume",   sub:"Go back to " + a.title, icon:"play",  act:"appResume" },
+    { label:"Minimise", sub:"Stay here. " + a.title + " keeps running.", icon:"shell", act:"appMinimise" },
+    { label:"Close",    sub:"Quit " + a.title + " and everything it started", icon:"stop",
+      act:"appClose", tone:"danger" }
+  ].forEach((o, i) => body.appendChild(rowEl(o, i, 0)));
+  pushPanel("guide", node, { hints:["navUD", "select", "back"] });
+  hostLog("guide menu opened for " + a.title);
+}
+
+ACT.appResume = function(){
+  const a = Apps.current();
+  Overlay.closeAll();
+  hostLog("guide: resume " + (a ? a.title : "(nothing)"));
+  Host.post({ type:"app", cmd:"resume" });
+};
+
+ACT.appMinimise = function(){
+  Overlay.closeAll();
+  hostLog("guide: minimise — staying in the shell");
+  Host.post({ type:"app", cmd:"minimise" });
+};
+
+/* Close terminates a process tree. A game does not get to save first,
+   so this is the one guide action that asks. Cancel is the default. */
+ACT.appClose = function(){
+  const a = Apps.current();
+  const name = a ? a.title : "this app";
+  confirmAction({
+    id:"appClose",
+    eyebrow:"Close",
+    title:"Close " + name + "?",
+    sub:"It will be shut down immediately, together with everything it started. " +
+        "Anything unsaved is lost.",
+    goLabel:"Close it",
+    cancelLabel:"Keep it open",
+    onConfirm(){
+      Overlay.closeAll();
+      hostLog("guide: close " + name + " (confirmed)");
+      Host.post({ type:"app", cmd:"close" });
+    }
+  });
+};
 
 /* ═══ Semantic action router ═════════════════════════════
    One table, whatever the source: host pad message, Gamepad API
@@ -4396,6 +5340,17 @@ const Nav = (function(){
   }
   return { action, table };
 })();
+
+/* ═══ Sensory layer ════════════════════════
+   ui/sfx.js wraps Nav.action(). It reads what just happened out of the
+   action's own return string and the change in focus depth, so sound and
+   haptics stay in step with the shell without the shell having to
+   announce anything. No file, no behaviour: the shell runs silent rather
+   than failing. */
+try{
+  if (window.ArcFeel){ ArcFeel.setLogger(hostLog); ArcFeel.attach(Nav, Focus); }
+  else hostLog("ArcFeel missing; the shell will run silent");
+}catch(e){ report("sensory layer attach", e); }
 
 /* window.arcPad is the v3 shim's single entry point. phase is
    press/repeat/release and button is the literal pad button, both
@@ -4605,8 +5560,26 @@ Host.post({ type:"sysinfo" });          // v3 answers; v2 logs it as unhandled
 Host.onSysinfo(safe("apply sysinfo", (s) => {
   if (s.user){ $("#userName").textContent = s.user; $("#avatarSmall").textContent = (s.user[0] || "?").toUpperCase(); }
   if (s.diskFree) $("#chipStorage").textContent = s.diskFree;
-  if (s.netType)  $("#chipNet").textContent = s.netType;
+  if (s.netType){ $("#chipNet").textContent = s.netType; setNetIcon(s.netType); }
 }));
+
+/* One glyph per kind of connection. Called from both places that can
+   change the label, so the picture and the word are never allowed to
+   disagree — a wireless fan over the word "Wired" is the kind of thing
+   only a human looking at the screen ever catches. */
+const NET_ICON = {
+  wifi: '<path d="M2.4 8.6a15 15 0 0 1 19.2 0"/><path d="M5.8 12.1a10 10 0 0 1 12.4 0"/>'
+      + '<path d="M9.2 15.6a5 5 0 0 1 5.6 0"/><circle cx="12" cy="19.1" r="1"/>',
+  wired:'<rect x="3.2" y="13.4" width="17.6" height="7.4" rx="1.6"/><path d="M12 13.4V9.2"/>'
+      + '<path d="M7.6 9.2h8.8"/><path d="M7.6 9.2V6.4M16.4 9.2V6.4"/>',
+  none: '<circle cx="12" cy="12" r="8.6"/><path d="m8.4 8.4 7.2 7.2"/>'
+};
+function setNetIcon(kind){
+  const k = /wi-?fi/i.test(kind || "") ? "wifi"
+          : /offline|not connected/i.test(kind || "") ? "none" : "wired";
+  const el = $("#chipNetIcon");
+  if (el) el.innerHTML = NET_ICON[k];
+}
 
 /* The status bar's two chips, from the same system channel the Settings
    screen uses — so the summary and the detail can never disagree. They
@@ -4615,7 +5588,9 @@ function refreshChips(){
   Sys.call("net.status", {}, { timeout: 8000 }).then(n => {
     const r = n.reachability || {};
     const kind = n.connectionType === "wifi" ? "Wi-Fi" : (n.connectionType === "ethernet" ? "Wired" : "Network");
-    $("#chipNet").textContent = r.internet ? kind : (r.connected ? kind + " · local only" : "Offline");
+    const label = r.internet ? kind : (r.connected ? kind + " · local only" : "Offline");
+    $("#chipNet").textContent = label;
+    setNetIcon(label);
   }, () => {});
   Sys.call("sys.storage", {}, { timeout: 8000 }).then(s => {
     const c = (s.drives || []).filter(d => d.ready && d.fixed)[0];

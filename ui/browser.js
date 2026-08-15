@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — browser chrome  (ui/browser.js)
+   PC1 — browser chrome  (ui/browser.js)
 
    This is the browser everything EXCEPT the web page. The tab strip, the
    address bar, the TLS indicator, the start page of pinned tiles, the
@@ -37,6 +37,9 @@
      oskIsOpen()
      log(text)      host log
      toast(text)    the shell's own toast, for things the browser is not up
+     files(folder, path)   optional — show a finished download in the
+                    console's file explorer. Return false if it could not,
+                    and the browser falls back to naming the path.
    ═══════════════════════════════════════════════════════════════════════ */
 
 (function (root) {
@@ -54,7 +57,11 @@ var bridge = {
   osk: function () { return false; },
   oskIsOpen: function () { return false; },
   log: function () {},
-  toast: function () {}
+  toast: function () {},
+  /* Optional. The shell supplies it so a finished download can be shown where
+     it landed, in the console's own file explorer. Without it the browser says
+     the path in a toast rather than pretending the file is unreachable. */
+  files: null
 };
 
 function say(what) { try { bridge.log("ArcBrowser " + what); } catch (e) {} }
@@ -133,8 +140,19 @@ var st = {
   chromeIdx: 0,
   sheetIdx: 0,
   sheetRows: [],
+  sheetKind: null,        // which sheet is up, when the scope alone cannot say
+
+  /* Downloads, as the host reports them. The list is authoritative and
+     arrives whole on every change; nothing here is inferred from the last
+     one except the transfer rate, which the host does not send because it
+     is a property of two samples rather than of the download. */
+  downloads: [],
+  downActive: 0,
+  rates: {},              // id -> { got, at, bps }
+  downSeen: {},           // id -> last state a toast was raised for
 
   navMode: "spatial",     // what arcnav.js reports it is doing
+  focusKind: null,        // kind of the element the page's ring is on
   media: null,
   pendingEdit: null,      // a text field inside the page is waiting for the OSK
   pendingSelect: null,
@@ -160,13 +178,22 @@ var G = {
   menu:   '<path d="M4.5 7.5h15M4.5 12h15M4.5 16.5h15"/>',
   clock:  '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.2V12l3.2 2"/>',
   plus:   '<path d="M12 5.5v13M5.5 12h13"/>',
-  cross:  '<circle cx="12" cy="12" r="9.2"/><path d="M8.6 8.6 15.4 15.4M15.4 8.6 8.6 15.4"/>',
-  circle: '<circle cx="12" cy="12" r="9.2"/><circle cx="12" cy="12" r="4"/>',
-  square: '<circle cx="12" cy="12" r="9.2"/><rect x="8.2" y="8.2" width="7.6" height="7.6" rx="1.1"/>',
-  tri:    '<circle cx="12" cy="12" r="9.2"/><path d="M12 7.3 16.2 15.1H7.8z"/>',
-  dpad:   '<path d="M9.6 3.7h4.8v5.9h5.9v4.8h-5.9v5.9H9.6v-5.9H3.7V9.6h5.9z"/>',
-  stick:  '<circle cx="12" cy="12" r="8.4"/><circle cx="12" cy="12" r="3.3"/>',
-  opts:   '<rect x="7.2" y="4.4" width="9.6" height="15.2" rx="2.6"/><path d="M9.9 9.2h4.2M9.9 12h4.2"/>'
+  /* The pad glyphs, kept identical to index.html's PAD_GLYPH — read the
+     long note beside it for where each shape comes from. Three files now
+     carry this vocabulary (here, ui/files.js and index.html); they have to
+     stay in step, because a browser whose Cross is a different Cross from
+     the home screen's is worse than either drawing on its own. */
+  cross:  '<path class="face" d="M5.7 5.7 18.3 18.3M18.3 5.7 5.7 18.3"/>',
+  circle: '<circle class="face" cx="12" cy="12" r="6.15"/>',
+  square: '<rect class="face" x="6.45" y="6.45" width="11.1" height="11.1"/>',
+  tri:    '<path class="face tri" d="M12 3.7 20 17.9H4z"/>',
+  dpad:   '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z"/>'
+        + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z"/>'
+        + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z"/>'
+        + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z"/>',
+  stick:  '<circle cx="12" cy="12" r="6.55"/><circle class="solid" cx="12" cy="12" r="4.7"/>',
+  opts:   '<path class="solid" d="M3 4.76h18v2H3zM3 11h18v2H3zM3 17.24h18v2H3z"/>',
+  down:   '<path d="M12 4v10.5"/><path d="M7.6 10.6 12 15l4.4-4.4"/><path d="M4.6 18.6h14.8"/>'
 };
 
 function svg(path) { return '<svg viewBox="0 0 24 24" aria-hidden="true">' + path + "</svg>"; }
@@ -238,9 +265,17 @@ function buildDOM() {
   addr.appendChild(tls); addr.appendChild(url);
 
   var zoomChip = el("div", "arcbw-chip", svg(G.zoom) + "<span>100%</span>");
+  /* The downloads chip is in the chrome and not in the menu because a download
+     is the one thing in this browser that happens WHILE the human is doing
+     something else. Buried two presses deep it would be invisible exactly when
+     it matters — a 400 MB file that failed at 90% behind a menu nobody opened.
+     It is only in the row while there is something to say; see renderDown(). */
+  var dlChip = el("div", "arcbw-chip is-dl is-off",
+    svg(G.down) + "<span>Downloads</span><i class=\"arcbw-chip-bar\"></i>");
   var menuChip = el("div", "arcbw-chip", svg(G.menu) + "<span>Menu</span>");
 
-  omni.appendChild(addr); omni.appendChild(zoomChip); omni.appendChild(menuChip);
+  omni.appendChild(addr); omni.appendChild(zoomChip);
+  omni.appendChild(dlChip); omni.appendChild(menuChip);
   chrome.appendChild(tabs); chrome.appendChild(omni);
 
   var stage = el("div", "arcbw-stage");
@@ -265,7 +300,7 @@ function buildDOM() {
 
   st.el = {
     wrap: wrap, chrome: chrome, tabs: tabs, omni: omni,
-    addr: addr, tls: tls, url: url, zoom: zoomChip, menu: menuChip,
+    addr: addr, tls: tls, url: url, zoom: zoomChip, dl: dlChip, menu: menuChip,
     stage: stage, msg: msg, sheet: sheet, toast: toast, hints: hints
   };
 }
@@ -291,11 +326,96 @@ function pushBounds() {
   bridge.post({ type: "browser", cmd: "bounds", x: b.x, y: b.y, w: b.w, h: b.h });
 }
 
-/* Show or hide the content window. Every full-screen surface in this file
-   goes through here — see the rule at the top. */
-function stage(showContent) {
-  bridge.post({ type: "browser", cmd: "show", on: showContent ? 1 : 0 });
-  bridge.post({ type: "browser", cmd: "focus", content: (showContent && st.scope === "content") ? 1 : 0 });
+/* ═══ Suspending the content view ══════════════════════════════════════
+   A WebView2 content controller is a child HWND, not a layer. Nothing this
+   file draws can appear on top of it. So every shell-drawn surface that has
+   to be seen — the start page, the menu, the history list, the extensions
+   list, a crash sheet, and above all the on-screen keyboard — must take the
+   content view off the screen for as long as it is up, and put it back
+   after.
+
+   This used to be a bare boolean, stage(true) / stage(false), called from a
+   dozen places. Two problems with that, both of which bit:
+
+     - it is a TOGGLE, so two overlapping surfaces fight. The keyboard opens
+       over the start page, the keyboard closes, and whoever restores first
+       wins: either the page comes back underneath a start page that is
+       still up, or it stays hidden with nothing left holding it down.
+     - it is easy to forget. showZoom() and showEngines() never called it at
+       all, so choosing a zoom level from the chrome drew the sheet behind a
+       live web page.
+
+   So visibility is DERIVED, never toggled. Two inputs:
+
+     - the set of reasons currently holding the content view down. Each is a
+       named string, taken by suspendContent(reason) and given back by
+       resumeContent(reason). Names, not a counter, so a double-suspend is
+       idempotent and a leaked resume cannot push the count negative.
+     - the scope. Only "content" and "chrome" want the page visible at all;
+       the chrome is a thin strip at the top, and hiding the page behind it
+       would make walking to the address bar look like closing the tab.
+
+   apply() recomputes from those two and posts only on a real change. That
+   makes the state impossible to strand: whatever happens, the next scope
+   change or resume recomputes the truth from scratch rather than trying to
+   undo a toggle. Every transition is one line in the log with its reason
+   and the list of remaining holds, because "the keyboard is up and nothing
+   is on the screen" is exactly the failure this has to make readable. */
+
+var holds = {};            /* reason -> true */
+var shownNow = null;        /* last "show" posted; null until the first apply */
+var focusNow = null;        /* last "focus" posted */
+
+function holdList() {
+  var out = [], k;
+  for (k in holds) if (Object.prototype.hasOwnProperty.call(holds, k)) out.push(k);
+  return out.length ? out.join("+") : "none";
+}
+
+function wantContent() {
+  for (var k in holds) if (Object.prototype.hasOwnProperty.call(holds, k)) return false;
+  return st.scope === "content" || st.scope === "chrome";
+}
+
+function applyContent(why) {
+  if (!st.open) return;
+  var show = wantContent();
+  /* Keyboard focus only ever goes to the content window when the page
+     itself is what the pad is driving. It must come back to the shell
+     WebView for anything else, because that is what keeps Esc/F2/F3
+     reaching the host's accelerator hook. */
+  var focus = show && st.scope === "content";
+  if (show === shownNow && focus === focusNow) return;
+  shownNow = show; focusNow = focus;
+  bridge.post({ type: "browser", cmd: "show", on: show ? 1 : 0 });
+  bridge.post({ type: "browser", cmd: "focus", content: focus ? 1 : 0 });
+  say("content " + (show ? "SHOWN" : "HIDDEN") + " — " + why +
+      " (scope " + st.scope + ", holds: " + holdList() + ")");
+}
+
+function suspendContent(reason) {
+  if (!reason || holds[reason]) return;
+  holds[reason] = true;
+  applyContent("suspend:" + reason);
+}
+
+function resumeContent(reason) {
+  if (!reason || !holds[reason]) return;
+  delete holds[reason];
+  applyContent("resume:" + reason);
+}
+
+/* Scope changed; recompute. Named so the call sites read as what they mean. */
+function syncContent(why) { applyContent(why || "scope"); }
+
+/* The one thing a derived model still needs: a way back from an impossible
+   state. Nothing should ever leak a hold, but if a surface throws between
+   suspending and resuming, the browser must not be left showing a blank
+   rectangle for the rest of the session. Closing and reopening clears them. */
+function clearHolds(why) {
+  var had = holdList();
+  holds = {};
+  if (had !== "none") say("cleared content holds (" + had + ") — " + why);
 }
 
 /* ═══ Rendering ════════════════════════════════════════════════════════ */
@@ -405,22 +525,56 @@ function renderHints() {
     h.push(keyHint("L1 / R1", "Page up / down"));
     h.push(hint(G.circle, "Back"));
     h.push(hint(G.opts, "Address bar"));
-    h.push(hint(G.tri, "Menu"));
+    /* The label has to follow what the button actually does right now, or
+       the one press that gets a dismissed keyboard back is undiscoverable. */
+    h.push(hint(G.tri, st.focusKind === "text" ? "Keyboard" : "Menu"));
     if (st.media) h.push(hint(G.square, "Full screen"));
   } else if (st.scope === "chrome") {
     h.push(hint(G.dpad, "Move"));
     h.push(hint(G.cross, "Select"));
+    h.push(hint(G.opts, "Address bar"));
     h.push(hint(G.circle, "Back to the page"));
     h.push(keyHint("L1 / R1", "Switch tab"));
   } else if (st.scope === "start") {
     h.push(hint(G.dpad, "Move"));
     h.push(hint(G.cross, "Open"));
+    /* Options is listed on EVERY scope, first among the shortcuts. It is
+       the one button that reaches the address bar from anywhere in the
+       browser, and a shortcut nobody is told about is a shortcut nobody
+       uses — the whole browser was unusable for exactly that reason. */
+    h.push(hint(G.opts, "Address bar"));
     h.push(hint(G.square, "Remove pin"));
     h.push(hint(G.circle, "Leave the browser"));
     h.push(hint(G.tri, "Menu"));
+  } else if (st.sheetKind === "extensions") {
+    var erow = st.sheetRows[st.sheetIdx];
+    var etail = erow ? (erow.querySelector(".arcbw-row-tail") || {}).textContent : "";
+    h.push(hint(G.dpad, "Move"));
+    h.push(hint(G.cross, etail === "On" ? "Turn off" : etail === "Off" ? "Turn on"
+                       : etail === "Install" ? "Install it" : "Select"));
+    if (erow && typeof erow.__arcRemove === "function") h.push(hint(G.square, "Remove"));
+    h.push(hint(G.circle, "Back"));
+  } else if (st.sheetKind === "downloads") {
+    /* The two buttons do different things on different rows here, so the
+       hint bar has to follow the row the cursor is actually on rather than
+       state one meaning for the whole screen. */
+    var row = st.sheetRows[st.sheetIdx];
+    var d = (row && typeof row.__dl === "number") ? findDown(row.__dl) : null;
+    h.push(hint(G.dpad, "Move"));
+    if (d) {
+      h.push(hint(G.cross, d.state === "running" ? "Pause"
+                         : d.state === "paused" ? "Carry on"
+                         : d.state === "done" ? "Show in Files" : "Ask again"));
+      h.push(hint(G.square, (d.state === "running" || d.state === "paused") ? "Cancel" : "Remove from the list"));
+    } else {
+      h.push(hint(G.cross, "Select"));
+    }
+    h.push(hint(G.opts, "Address bar"));
+    h.push(hint(G.circle, "Back"));
   } else {
     h.push(hint(G.dpad, "Move"));
     h.push(hint(G.cross, "Select"));
+    h.push(hint(G.opts, "Address bar"));
     h.push(hint(G.circle, "Back"));
   }
   st.el.hints.innerHTML = h.join("");
@@ -432,14 +586,51 @@ function renderHints() {
    they do not nest) and its rows are rebuilt from host messages several
    times a second. One attribute, one function, no bookkeeping to go stale. */
 
+/* The chrome is TWO rows on the screen and used to be one list to the
+   D-pad: tabs, then the + button, then the address bar, then zoom, then
+   Menu, all walked with left and right, with up and down both meaning
+   "leave". That is why the address bar could not be reached. Standing on a
+   tab — which is where entering the chrome puts you when a page is loading —
+   the obvious press for the address bar directly below it is Down, and Down
+   dropped straight back into the page. Nothing said the row had to be
+   crossed sideways through the + button.
+
+   So the rows are modelled as rows. Left and right stay inside a row, up and
+   down cross between them, and only a press that leaves the last row leaves
+   the chrome. */
+
+function chromeRows() {
+  var top = [], i;
+  var kids = st.el.tabs.children;      // the tabs and the + button
+  for (i = 0; i < kids.length; i++) top.push(kids[i]);
+  /* The downloads chip is only walkable while it is on the screen. A hidden
+     element in this list is a cursor position that looks like a dead press. */
+  var bottom = [st.el.addr, st.el.zoom];
+  if (!st.el.dl.classList.contains("is-off")) bottom.push(st.el.dl);
+  bottom.push(st.el.menu);
+  return [top, bottom];
+}
+
+/* Flat order, still the thing paintFocus() and st.chromeIdx speak. */
 function chromeItems() {
-  var out = [], i;
-  var kids = st.el.tabs.children;
-  for (i = 0; i < kids.length; i++) out.push(kids[i]);
-  out.push(st.el.addr);
-  out.push(st.el.zoom);
-  out.push(st.el.menu);
-  return out;
+  var r = chromeRows();
+  return r[0].concat(r[1]);
+}
+
+function chromeAt() {
+  var rows = chromeRows(), top = rows[0].length;
+  var i = Math.max(0, Math.min(top + rows[1].length - 1, st.chromeIdx));
+  return (i < top) ? { row: 0, col: i, rows: rows }
+                   : { row: 1, col: i - top, rows: rows };
+}
+
+function chromeGo(row, col) {
+  var rows = chromeRows();
+  var r = rows[row] || [];
+  if (!r.length) { row = row ? 0 : 1; r = rows[row] || []; }
+  if (!r.length) return;
+  col = Math.max(0, Math.min(r.length - 1, col));
+  st.chromeIdx = (row === 0) ? col : rows[0].length + col;
 }
 
 var lastFocusKey = "";
@@ -473,6 +664,37 @@ function paintFocus() {
   renderHints();
 }
 
+/* ═══ Keeping the ring on the screen ═══════════════════════════════════
+   The shell's own focus manager clears focus DOCUMENT-WIDE before
+   repainting its stack:
+
+       document.querySelectorAll("[data-focus]").forEach(e => e.removeAttribute(...))
+
+   The browser's chrome lives in the same document, so any repaint the shell
+   does while the browser is up — and several things trigger one — erases the
+   browser's ring as a side effect. The browser then looks like it has no
+   cursor at all until the next pad press repaints it, which reads exactly
+   like "the address bar cannot be reached": the human is on it, and nothing
+   on the screen says so.
+
+   The proper fix is one line in index.html, scoping that clear to the focus
+   manager's own elements, and it is not this file's to make. Until then this
+   notices the ring has been taken off something that should have it and puts
+   it back. It runs on the bounds tick that is already going round, costs one
+   querySelector, and does nothing at all in the common case. */
+function focusStillPainted() {
+  if (!st.open || !st.el) return true;
+  if (st.scope === "content") return true;          // the ring is the page's own
+  return !!st.el.wrap.querySelector('[data-focus="on"]');
+}
+
+function keepFocusPainted() {
+  if (focusStillPainted()) return;
+  lastFocusKey = "";                                 // so the restore is logged once
+  paintFocus();
+  say("focus ring was cleared by a shell repaint; restored it");
+}
+
 function scrollIntoRow(node) {
   try { node.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" }); }
   catch (e) { try { node.scrollIntoView(); } catch (e2) {} }
@@ -484,6 +706,14 @@ function closeSheet() {
   st.el.sheet.classList.remove("is-open");
   st.el.sheet.innerHTML = "";
   st.sheetRows = [];
+  /* The downloads sheet keeps live references into its own DOM so it can
+     write new byte counts into rows that are already on the screen. Those
+     references are dead the moment the sheet's markup is thrown away, and a
+     host message arriving one frame later would otherwise write into
+     detached nodes for the rest of the session. */
+  st.sheetKind = null;
+  st.dlList = null;
+  st.dlKey = null;
 }
 
 function sheet(title, sub) {
@@ -516,10 +746,37 @@ function showStart() {
      which is the one thing nobody wants pre-selected. */
   if (st.scope !== "start") st.sheetIdx = 0;
   st.scope = "start";
-  stage(false);
+  syncContent("start page");
   var s = sheet("Browser", "Pinned apps open full screen. Everything else is one address away.");
   var grid = el("div", "arcbw-pins");
   st.sheetRows = [];
+
+  /* ── The first tile is always the address ────────────────────────────
+     This is where the browser failed hardest, and it failed silently. On a
+     console with no pins yet the start page was ONE tile, "+ Add a site",
+     and the hint bar never mentioned Options — so the address bar had no
+     route to it that anybody could find by pressing things. The bench log
+     of a real attempt is four unbroken minutes of a human pressing every
+     direction on a page with a single item, then leaving:
+
+         pad down  -> browser: down      (nothing moved: one row)
+         pad right -> browser: right
+         pad up    -> browser: up
+         ... Circle, gone
+
+     Not one Options press in the whole session, because nothing on the
+     screen suggested one. So the thing everybody actually came for is now
+     the first tile, it is where the cursor starts, and Cross on it opens
+     the keyboard straight into the address field. Discoverability is not a
+     nicety here — with no pointer and no keyboard, a control you cannot
+     find is a control that does not exist. */
+  var go = el("button", "arcbw-pin is-go");
+  go.appendChild(el("div", "arcbw-pin-glyph", svg(G.zoom)));
+  go.appendChild(el("div", "arcbw-pin-name", "Search or enter an address"));
+  go.appendChild(el("div", "arcbw-pin-host", "The keyboard opens on Cross"));
+  go.__arcRun = editAddress;
+  grid.appendChild(go);
+  st.sheetRows.push(go);
 
   for (var i = 0; i < st.pins.length; i++) {
     (function (pin) {
@@ -561,6 +818,9 @@ function openPin(pin) {
 }
 
 function addPin() {
+  /* Before the keyboard, not after: suspending second leaves one frame in
+     which the keyboard is up and the page is still covering it. */
+  suspendContent("keyboard");
   bridge.osk({
     title: "Add a site",
     mode: "url",
@@ -578,7 +838,6 @@ function addPin() {
     }),
     onCancel: guard("addPin cancel", afterOsk)
   });
-  stage(false);
 }
 
 function removePin(pin) {
@@ -616,7 +875,7 @@ function remember(url, title) {
 
 function showHistory() {
   st.scope = "history";
-  stage(false);
+  syncContent("history");
   var s = sheet("History", st.session.length + " this session, " + st.history.length + " kept on this machine.");
   var list = el("div", "arcbw-list");
   st.sheetRows = [];
@@ -656,11 +915,381 @@ function ago(t) {
   return Math.round(h / 24) + " d ago";
 }
 
+/* ═══ Downloads ════════════════════════════════════════════════════════
+   The host takes every download off Chromium before its own flyout can be
+   drawn (see the Downloads region in ShellHostWeb.cs for why that flyout is
+   unusable here) and reports the whole list on every change. This is the
+   half the human actually touches:
+
+     - a chip in the chrome row, present only while there is something to
+       say, carrying the percentage and a progress bar. A download is the
+       one thing in this browser that happens while the human is doing
+       something else, so it gets a permanent place on the screen rather
+       than a line in a menu nobody has a reason to open;
+     - a sheet listing every download of the session with a focus ring, one
+       action on Cross (pause, resume, show the finished file, ask again for
+       a failed one) and one on Square (cancel, or forget the row);
+     - toasts for the three transitions worth interrupting for: it started,
+       it landed, it failed.
+
+   THE LIST IS THE HOST'S. Nothing here invents a state or remembers one
+   across a message; the only thing measured on this side is the transfer
+   rate, which is a property of two samples rather than of the download and
+   so cannot be sent. Everything else is drawn from what just arrived.
+
+   The one gap, stated rather than hidden: in full screen there is no chrome
+   band and no toast (browser.css explains why), so a download that starts
+   during a video is silent until the human leaves full screen — where the
+   chip is waiting for them. */
+
+function bytes(n) {
+  if (typeof n !== "number" || !isFinite(n) || n < 0) return "";
+  if (n < 1024) return n + " B";
+  var units = ["KB", "MB", "GB", "TB"], i = -1, v = n;
+  do { v /= 1024; i++; } while (v >= 1024 && i < units.length - 1);
+  return (v < 10 ? v.toFixed(1) : Math.round(v)) + " " + units[i];
+}
+
+/* -1 when the server never declared a length. That is a real case (chunked
+   responses, most streamed archives) and it has to read as "no percentage",
+   never as 0% — a bar stuck at zero on a download that is working is the
+   single most alarming thing this screen could show. */
+function pctOf(d) {
+  if (!d || !d.total || d.total <= 0) return -1;
+  return Math.max(0, Math.min(100, Math.round((d.got / d.total) * 100)));
+}
+
+function shortFolder(p) {
+  var s = String(p || "");
+  var m = s.match(/([^\\\/]+)[\\\/]*$/);
+  return m ? m[1] : s;
+}
+
+/* Smoothed, deliberately. A raw sample over three quarters of a second of a
+   television's Wi-Fi swings by a factor of three, and a number that cannot be
+   read is not a measurement. */
+function sampleRate(d) {
+  var now = Date.now();
+  var r = st.rates[d.id];
+  if (!r) { st.rates[d.id] = { got: d.got, at: now, bps: 0 }; return 0; }
+  var dt = now - r.at;
+  if (dt >= 700) {
+    var inst = (d.got - r.got) * 1000 / dt;
+    if (!(inst > 0)) inst = 0;
+    r.bps = r.bps ? (r.bps * 0.6 + inst * 0.4) : inst;
+    r.got = d.got;
+    r.at = now;
+  }
+  return r.bps;
+}
+
+function findDown(id) {
+  for (var i = 0; i < st.downloads.length; i++) if (st.downloads[i].id === id) return st.downloads[i];
+  return null;
+}
+
+function applyDownloads(m) {
+  st.downloads = m.list || [];
+  st.downActive = m.active || 0;
+
+  var live = {}, i, k;
+  for (i = 0; i < st.downloads.length; i++) {
+    var d = st.downloads[i];
+    live[d.id] = true;
+    if (d.state === "running") sampleRate(d);
+    else if (st.rates[d.id]) st.rates[d.id].bps = 0;
+  }
+  /* A forgotten or trimmed download takes its bookkeeping with it, or the
+     rate table grows for the life of the session. */
+  for (k in st.rates) if (Object.prototype.hasOwnProperty.call(st.rates, k) && !live[k]) delete st.rates[k];
+  for (k in st.downSeen) if (Object.prototype.hasOwnProperty.call(st.downSeen, k) && !live[k]) delete st.downSeen[k];
+
+  announceDownload(m);
+  renderDown();
+  if (st.sheetKind === "downloads") renderDownloadRows();
+}
+
+/* One toast per state, and only for the download the message is about. The
+   host re-sends the whole list several times a second while bytes arrive;
+   without the seen-state check a 40-second download would raise forty
+   identical toasts. */
+function announceDownload(m) {
+  var d = findDown(m.id);
+  if (!d) return;
+  if (st.downSeen[d.id] === d.state) return;
+  var first = !(d.id in st.downSeen);
+  st.downSeen[d.id] = d.state;
+
+  if (d.state === "running") {
+    if (first) toast("Downloading " + d.name + " to " + shortFolder(d.folder));
+    return;
+  }
+  if (d.state === "done") { toast("Saved " + d.name + " in " + shortFolder(d.folder)); return; }
+  if (d.state === "failed") { toast(d.name + " did not finish — " + (d.why || "it was interrupted")); return; }
+  /* Pause and cancel are things the human just did on this screen; saying
+     them back is noise. */
+}
+
+function renderDown() {
+  if (!st.el) return;
+  var chip = st.el.dl;
+  var running = 0, failed = 0, i, d, lead = null;
+
+  for (i = 0; i < st.downloads.length; i++) {
+    d = st.downloads[i];
+    if (d.state === "running" || d.state === "paused") { running++; if (!lead) lead = d; }
+    else if (d.state === "failed") failed++;
+  }
+
+  var off = st.downloads.length === 0;
+  var was = chip.classList.contains("is-off");
+  /* The cursor is an INDEX into the chrome row, and this chip joins and leaves
+     that row on its own schedule — a download can start while the human is
+     standing on Menu. Holding the index would slide the ring sideways under
+     their thumb, so the ELEMENT is remembered and its new index looked up
+     afterwards. */
+  var stood = (was !== off && st.scope === "chrome") ? chromeItems()[st.chromeIdx] : null;
+  chip.classList.toggle("is-off", off);
+  if (stood) {
+    var after = chromeItems();
+    for (var s = 0; s < after.length; s++) if (after[s] === stood) { st.chromeIdx = s; break; }
+  }
+  chip.classList.toggle("is-bad", !off && !running && failed > 0);
+
+  if (!off) {
+    var label;
+    var pct = lead ? pctOf(lead) : -1;
+    if (lead && lead.state === "paused") label = running > 1 ? running + " paused/running" : "Paused";
+    /* "0 B" is what a size-less download reads as in its first second, and it
+       looks like a download that is not working. It says Starting instead. */
+    else if (lead) label = (running > 1 ? running + " · " : "") +
+      (pct >= 0 ? pct + "%" : (lead.got > 0 ? bytes(lead.got) : "Starting"));
+    else if (failed) label = failed > 1 ? failed + " failed" : "Failed";
+    else label = "Downloads";
+
+    var span = chip.querySelector("span");
+    if (span) span.textContent = label;
+    var bar = chip.querySelector(".arcbw-chip-bar");
+    if (bar) {
+      bar.style.width = (lead && pct >= 0) ? pct + "%" : (lead ? "100%" : "0%");
+      chip.classList.toggle("is-unknown", !!lead && pct < 0);
+    }
+  }
+
+  /* The chip appearing or leaving changes what the chrome row contains, and
+     the cursor is an index into that row. */
+  if (was !== off && st.scope === "chrome") paintFocus();
+}
+
+function downCmd(act, id) {
+  say("download " + act + " " + id);
+  bridge.post({ type: "browser", cmd: "download", "do": act, id: id });
+}
+
+function revealDownload(d) {
+  if (!d.folder) { toast("The console does not know where that file went."); return; }
+  if (typeof bridge.files !== "function") { toast("Saved at " + d.path); return; }
+  say("showing " + d.path + " in the file explorer");
+  var ok;
+  try { ok = bridge.files(d.folder, d.path); }
+  catch (err) { report("show in files", err); ok = false; }
+  if (ok === false) toast("Saved at " + d.path);
+}
+
+function retryDownload(d) {
+  if (!d.url) { toast("There is no address to ask for again."); return; }
+  closeSheet();
+  goToContent();
+  bridge.post({ type: "browser", cmd: "navigate", url: d.url });
+  toast("Asking for " + d.name + " again");
+}
+
+function downLine(d) {
+  var host = hostOf(d.url);
+  var rate = st.rates[d.id] ? st.rates[d.id].bps : 0;
+  switch (d.state) {
+    case "running":
+      return (d.total > 0 ? bytes(d.got) + " of " + bytes(d.total) : bytes(d.got) + " so far") +
+             (rate > 0 ? " · " + bytes(Math.round(rate)) + "/s" : "") +
+             (host ? " · " + host : "");
+    case "paused":
+      return "Paused at " + bytes(d.got) + (d.total > 0 ? " of " + bytes(d.total) : "") +
+             (d.canResume ? " · Cross to carry on" : " · this one cannot be resumed, only started again");
+    case "done":
+      return "Saved in " + (d.folder || "the downloads folder") +
+             (d.total > 0 ? " · " + bytes(d.total) : (d.got > 0 ? " · " + bytes(d.got) : ""));
+    case "cancelled":
+      return "Cancelled" + (host ? " · " + host : "");
+    default:
+      return d.why || "It did not finish";
+  }
+}
+
+function downTailText(d) {
+  if (d.state === "running") { var p = pctOf(d); return p >= 0 ? p + "%" : bytes(d.got); }
+  if (d.state === "paused") return "Paused";
+  if (d.state === "done") return "Saved";
+  if (d.state === "cancelled") return "Cancelled";
+  return "Failed";
+}
+
+/* Cross does the obvious thing for the state the row is in, and Square is
+   always the destructive one. Both are rebound whenever the state changes,
+   which is why the state is part of the rebuild key below. */
+function bindDownRow(r, d) {
+  if (d.state === "running") {
+    r.__arcRun = function () { downCmd("pause", d.id); };
+    r.__arcRemove = function () { downCmd("cancel", d.id); };
+  } else if (d.state === "paused") {
+    r.__arcRun = function () { downCmd("resume", d.id); };
+    r.__arcRemove = function () { downCmd("cancel", d.id); };
+  } else if (d.state === "done") {
+    r.__arcRun = function () { revealDownload(d); };
+    r.__arcRemove = function () { downCmd("forget", d.id); };
+  } else {
+    r.__arcRun = function () { retryDownload(d); };
+    r.__arcRemove = function () { downCmd("forget", d.id); };
+  }
+}
+
+function fillDownRow(r, d) {
+  var pct = pctOf(d);
+  r.__sub.textContent = downLine(d);
+  r.__tail.textContent = downTailText(d);
+  r.__bar.style.width = (pct >= 0 ? pct : (d.state === "done" ? 100 : 0)) + "%";
+}
+
+function downRow(d) {
+  var r = el("button", "arcbw-row arcbw-drow is-" + d.state + (d.state === "failed" ? " is-danger" : ""));
+  var main = el("div", "arcbw-row-main");
+  var lab = el("div", "arcbw-row-label");
+  lab.textContent = d.name;
+  var sub = el("div", "arcbw-row-sub");
+  var bar = el("div", "arcbw-bar", "<i></i>");
+  main.appendChild(lab); main.appendChild(sub); main.appendChild(bar);
+  var tail = el("div", "arcbw-row-tail");
+  r.appendChild(main); r.appendChild(tail);
+  r.__dl = d.id; r.__sub = sub; r.__tail = tail; r.__bar = bar.firstChild;
+  bindDownRow(r, d);
+  fillDownRow(r, d);
+  return r;
+}
+
+function downMenuTail() {
+  if (st.downActive) return st.downActive + " running";
+  if (!st.downloads.length) return "None yet";
+  return st.downloads.length + (st.downloads.length === 1 ? " file" : " files");
+}
+
+function downSub() {
+  var running = 0, done = 0, bad = 0, folder = "", i;
+  for (i = 0; i < st.downloads.length; i++) {
+    var d = st.downloads[i];
+    if (d.state === "running" || d.state === "paused") running++;
+    else if (d.state === "done") done++;
+    else bad++;
+    if (!folder && d.folder) folder = d.folder;
+  }
+  if (!st.downloads.length)
+    return "Files a site sends are saved straight to this console's downloads folder and listed here.";
+  var bits = [];
+  if (running) bits.push(running + (running === 1 ? " in progress" : " in progress"));
+  if (done) bits.push(done + " finished");
+  if (bad) bits.push(bad + " stopped");
+  return bits.join(" · ") + (folder ? " · saved to " + folder : "");
+}
+
+/* Rebuilt only when the set of downloads or any of their states changes;
+   otherwise the numbers are written into the rows that are already there.
+   A full rebuild several times a second would throw the focus ring and the
+   list's scroll position away between two presses of the D-pad. */
+function renderDownloadRows() {
+  if (st.sheetKind !== "downloads" || !st.dlList) return;
+  var i, key = [];
+  for (i = 0; i < st.downloads.length; i++) key.push(st.downloads[i].id + ":" + st.downloads[i].state);
+  var k = key.join(",");
+  if (k === st.dlKey) {
+    for (i = 0; i < st.sheetRows.length; i++) {
+      var row = st.sheetRows[i];
+      /* typeof, not truthiness: the footer rows have no id at all, and an id
+         of 0 is a perfectly good download. */
+      if (typeof row.__dl !== "number") continue;
+      var d = findDown(row.__dl);
+      if (d) fillDownRow(row, d);
+    }
+    /* The sub-line counts bytes too, and it is the line the human reads when
+       the list is long enough that their row has scrolled off. */
+    var sub = st.el.sheet.querySelector(".arcbw-sub");
+    if (sub) sub.textContent = downSub();
+    return;
+  }
+  st.dlKey = k;
+
+  var list = st.dlList;
+  list.innerHTML = "";
+  st.sheetRows = [];
+
+  if (!st.downloads.length) {
+    list.appendChild(el("div", "arcbw-empty",
+      "Nothing has been downloaded yet. When a site sends a file it is saved automatically " +
+      "and appears here, with the console's own progress rather than the browser's."));
+  }
+
+  var folder = "";
+  for (i = 0; i < st.downloads.length; i++) {
+    var one = st.downloads[i];
+    if (!folder && one.folder) folder = one.folder;
+    var r = downRow(one);
+    list.appendChild(r);
+    st.sheetRows.push(r);
+  }
+
+  var finished = 0;
+  for (i = 0; i < st.downloads.length; i++)
+    if (st.downloads[i].state !== "running" && st.downloads[i].state !== "paused") finished++;
+
+  if (folder && typeof bridge.files === "function") {
+    var open = rowEl({
+      label: "Open the downloads folder",
+      sub: folder + " — opens in Files; the browser stays as it is behind it",
+      run: function () { revealDownload({ folder: folder, path: folder }); }
+    });
+    list.appendChild(open); st.sheetRows.push(open);
+  }
+  if (finished) {
+    var clear = rowEl({
+      label: "Clear the finished ones",
+      sub: "Empties this list only. Nothing is deleted from the disk.",
+      danger: true,
+      run: function () { downCmd("clear", 0); }
+    });
+    list.appendChild(clear); st.sheetRows.push(clear);
+  }
+
+  st.sheetIdx = Math.max(0, Math.min(st.sheetIdx, st.sheetRows.length - 1));
+  paintFocus();
+}
+
+function showDownloads() {
+  if (st.sheetKind !== "downloads") st.sheetIdx = 0;
+  st.scope = "menu";
+  syncContent("downloads");
+  var s = sheet("Downloads", downSub());
+  st.sheetKind = "downloads";
+  st.dlKey = null;
+  st.dlList = el("div", "arcbw-list");
+  s.appendChild(st.dlList);
+  renderDownloadRows();
+  /* Ask for a fresh list rather than drawing the last one and hoping: this
+     sheet can be opened long after the browser was last looked at. */
+  downCmd("list", 0);
+}
+
 /* ── Menu ────────────────────────────────────────────────────────────── */
 
 function showMenu() {
   st.scope = "menu";
-  stage(false);
+  syncContent("menu");
   var t = activeTab();
   var s = sheet("Browser menu", t && t.url ? t.url : "No page loaded");
   var list = el("div", "arcbw-list");
@@ -697,18 +1326,189 @@ function showMenu() {
           showMenu();
         } });
   add({ label: "History", sub: st.history.length + " entries", run: showHistory });
+  add({ label: "Downloads", tail: downMenuTail(),
+        sub: "Files sites have sent, where they were saved, and what stopped the ones that stopped",
+        run: showDownloads });
   add({ label: "New tab", sub: st.tabs.length + " of " + st.max + " open",
         run: function () { closeSheet(); goToContent(); bridge.post({ type: "browser", cmd: "newtab", url: "" }); showStart(); } });
   if (t) add({ label: "Close this tab", sub: t.title || hostOf(t.url) || "New tab", danger: true,
         run: function () { bridge.post({ type: "browser", cmd: "closetab", tab: t.id }); showMenu(); } });
   add({ label: "Search engine", tail: (ENGINES[st.engine] || ENGINES.duckduckgo).name, run: showEngines });
+  add({ label: "Extensions", tail: extensionTail(),
+        sub: "Ad blocking and anything else — install one from a download or a USB stick",
+        run: showExtensions });
 
   sec("Leave");
-  add({ label: "Close the browser", sub: "Tabs stay loaded and come back where you left them",
+  add({ label: "Close the browser",
+        sub: st.downActive
+          ? "Tabs stay loaded, and so do the " + st.downActive + " download" +
+            (st.downActive === 1 ? "" : "s") + " still running"
+          : "Tabs stay loaded and come back where you left them",
         run: function () { close(); } });
-  add({ label: "Close the browser and every tab", sub: "Frees the memory the pages are using", danger: true,
+  /* The warning is not decoration. Downloads belong to the content WebViews,
+     so tearing every tab down stops them, and a human who has been waiting
+     ten minutes for a file deserves to be told that before they press it
+     rather than after. */
+  add({ label: "Close the browser and every tab",
+        sub: st.downActive
+          ? "Stops " + st.downActive + " download" + (st.downActive === 1 ? "" : "s") +
+            " that " + (st.downActive === 1 ? "is" : "are") + " still running"
+          : "Frees the memory the pages are using",
+        danger: true,
         run: function () { bridge.post({ type: "browser", cmd: "quit" }); close(); } });
 
+  s.appendChild(list);
+  st.sheetIdx = 0;
+  paintFocus();
+}
+
+/* ═══ Extensions ═══════════════════════════════════════════════════════
+   Installed from the sofa, with a controller, on a machine with no mouse,
+   no file dialog and no web store.
+
+   WHERE AN EXTENSION COMES FROM. Two places, and the host looks in both:
+   a .zip or .crx this browser has DOWNLOADED (most extensions worth having
+   publish exactly that on their releases page), and anything on a plugged-in
+   USB stick. Both end as rows on this sheet; Cross installs one. The host
+   unpacks it into the console's own extensions folder and hands the folder to
+   the profile, which loads it into every open page immediately and remembers
+   it for next boot — see the Installing extensions region in ShellHostWeb.cs.
+
+   WHY NOT THE CHROME WEB STORE. It serves .crx to Chrome-branded browsers
+   behind a signed request this host cannot honestly fake, so a store button
+   here would be a button that fails for reasons nobody in a living room can
+   do anything about. A .crx already on the disk installs fine.
+
+   A FAILED EXTENSION IS A ROW, NOT A LOG LINE. An ad blocker that silently
+   did not load leaves a television showing adverts, which from the sofa is
+   indistinguishable from one that loaded and found nothing to block. So
+   anything on disk that did not load is listed here with the reason. */
+
+var exts = { ready: false, folder: "", list: [], candidates: [] };
+
+function extensionTail() {
+  var xs = exts.list;
+  if (!xs.length) return "None";
+  var bad = 0, off = 0, i;
+  for (i = 0; i < xs.length; i++) { if (!xs[i].ok) bad++; else if (!xs[i].enabled) off++; }
+  if (bad) return bad + " failed";
+  if (off) return (xs.length - off) + " of " + xs.length + " on";
+  return xs.length === 1 ? "1 installed" : xs.length + " installed";
+}
+
+function extCmd(act, o) {
+  o = o || {};
+  say("extension " + act + " " + (o.id || o.path || ""));
+  bridge.post({ type: "browser", cmd: "extension", "do": act, id: o.id || "", path: o.path || "" });
+}
+
+function extSub() {
+  if (!exts.ready) return "The browser has not started a page yet, so nothing can be installed into it.";
+  var on = 0, i;
+  for (i = 0; i < exts.list.length; i++) if (exts.list[i].ok && exts.list[i].enabled) on++;
+  if (!exts.list.length)
+    return "Nothing is installed. Extensions run inside every page this browser loads — an ad " +
+           "blocker is the one most people want on a television.";
+  return on + " running · installed into " + exts.folder;
+}
+
+/* Opening the sheet and drawing it are two things, and they have to stay two
+   things. The host answers a "list" with an {ev:"extensions"} message, and the
+   page redraws when one arrives — so a draw that also asked for a list was a
+   loop that ran as fast as the message channel could carry it. The bench found
+   it in one run: twenty-four list pushes inside a fifth of a second, and a walk
+   that never got another press in edgeways. ASK ON THE WAY IN, ONLY HERE. */
+function showExtensions() {
+  if (st.sheetKind !== "extensions") st.sheetIdx = 0;
+  renderExtensions();
+  /* Rescan on the way in: a .zip downloaded two minutes ago has to be on this
+     screen without anybody being told to press "look again" first — the whole
+     route into this sheet is "I just downloaded an extension". */
+  extCmd("list");
+}
+
+function renderExtensions() {
+  st.scope = "menu";
+  syncContent("extensions");
+  var s = sheet("Extensions", extSub());
+  st.sheetKind = "extensions";
+  var list = el("div", "arcbw-list");
+  st.sheetRows = [];
+  var i;
+
+  function add(o) { var r = rowEl(o); list.appendChild(r); st.sheetRows.push(r); return r; }
+  function sec(text) { list.appendChild(el("div", "arcbw-sec", text)); }
+
+  if (exts.list.length) {
+    sec("Installed");
+    for (i = 0; i < exts.list.length; i++) {
+      (function (x) {
+        if (!x.ok) {
+          /* No id, so nothing can be switched: this one is on disk and did not
+             load. The reason is the whole content of the row. */
+          add({ label: x.name, sub: x.detail || "It did not load", tail: "Failed", danger: true,
+                run: function () { toast(x.name + " — " + (x.detail || "it did not load")); } });
+          return;
+        }
+        var r = add({
+          label: x.name,
+          sub: x.enabled ? "Running in every page this browser opens"
+                         : "Installed but switched off — nothing is loading it into pages",
+          tail: x.enabled ? "On" : "Off",
+          run: function () { extCmd(x.enabled ? "disable" : "enable", { id: x.id }); }
+        });
+        r.__arcRemove = function () { confirmRemoveExtension(x); };
+      })(exts.list[i]);
+    }
+  }
+
+  sec(exts.list.length ? "Add another" : "Add one");
+  if (exts.candidates.length) {
+    for (i = 0; i < exts.candidates.length; i++) {
+      (function (c) {
+        add({
+          label: c.name,
+          sub: c.where + (c.kind === "folder" ? " · an unpacked extension folder"
+                                              : " · " + c.kind.toUpperCase() + (c.size ? " · " + bytes(c.size) : "")),
+          tail: "Install",
+          run: function () {
+            toast("Installing " + c.name + "…");
+            extCmd("install", { path: c.path });
+          }
+        });
+      })(exts.candidates[i]);
+    }
+  } else {
+    list.appendChild(el("div", "arcbw-empty",
+      "Nothing to install was found. Download an extension's .zip in this browser — most publish " +
+      "one on their releases page — or plug in a USB stick with the unpacked folder on it, then " +
+      "look again."));
+  }
+  add({ label: "Look again", sub: "Re-checks the downloads folder and any plugged-in drive",
+        run: function () { extCmd("list"); toast("Looking…"); } });
+
+  s.appendChild(list);
+  st.sheetIdx = Math.max(0, Math.min(st.sheetIdx, st.sheetRows.length - 1));
+  paintFocus();
+}
+
+/* Removing deletes files off the disk, so it is asked rather than done. The
+   confirmation is its own sheet because a modal dialog would have to be drawn
+   over the page, and nothing here can be. */
+function confirmRemoveExtension(x) {
+  st.scope = "menu";
+  st.sheetKind = "extconfirm";
+  syncContent("remove extension");
+  var s = sheet("Remove " + x.name + "?",
+    "It stops running everywhere immediately, and the copy in the console's extensions folder is " +
+    "deleted. Anything you installed it from — a download, a USB stick — is left alone.");
+  var list = el("div", "arcbw-list");
+  st.sheetRows = [];
+  var keep = rowEl({ label: "Keep it", sub: "Nothing changes", run: showExtensions });
+  var go = rowEl({ label: "Remove it", sub: x.name, danger: true,
+    run: function () { extCmd("remove", { id: x.id }); showExtensions(); } });
+  list.appendChild(keep); st.sheetRows.push(keep);
+  list.appendChild(go); st.sheetRows.push(go);
   s.appendChild(list);
   st.sheetIdx = 0;
   paintFocus();
@@ -717,7 +1517,7 @@ function showMenu() {
 function showCrash(m) {
   st.scope = "menu";
   st.el.wrap.classList.remove("is-immersive");
-  stage(false);
+  syncContent("crash sheet");
   var t = activeTab();
   var s = sheet("This page stopped responding",
     "Its process ended (" + (m.reason || "unknown") + "). Nothing else was affected: web pages run in " +
@@ -745,6 +1545,10 @@ var ZOOMS = [75, 90, 100, 110, 125, 150, 175, 200, 250];
 
 function showZoom() {
   st.scope = "menu";
+  /* This sheet is reachable straight from the chrome's zoom chip, with a
+     page still on the screen. Without this it drew behind the content
+     window and the human saw nothing happen. */
+  syncContent("zoom");
   var t = activeTab();
   var cur = t ? Math.round((t.zoom || 1) * 100) : 100;
   var s = sheet("Zoom", "Television viewing distance is about three metres; 125% or 150% is usually right. " +
@@ -774,6 +1578,7 @@ function setZoom(pct) {
 
 function showEngines() {
   st.scope = "menu";
+  syncContent("search engine");
   var s = sheet("Search engine", "What a typed phrase is sent to when it is not an address.");
   var list = el("div", "arcbw-list");
   st.sheetRows = [];
@@ -798,7 +1603,7 @@ function showEngines() {
 function goToContent() {
   st.scope = "content";
   closeSheet();
-  stage(true);
+  syncContent("into the page");
   pushBounds();
   renderStage();
   paintFocus();
@@ -830,22 +1635,24 @@ function goToChrome() {
   st.el.wrap.classList.remove("is-immersive");
   /* The chrome bar is a thin strip; there is no need to hide the page for
      it, and not hiding it means the human can see what they are navigating
-     away from. */
-  stage(true);
-  bridge.post({ type: "browser", cmd: "focus", content: 0 });
-  var items = chromeItems();
-  st.chromeIdx = Math.min(st.chromeIdx, items.length - 1);
-  /* Land on the address bar rather than on tab one: reaching for Options
-     almost always means "I want to go somewhere else". */
-  if (st.chromeIdx < st.tabs.length) st.chromeIdx = items.indexOf(st.el.addr);
+     away from. syncContent() also drops keyboard focus back to the shell,
+     because the scope is no longer "content". */
+  syncContent("into the chrome");
+  /* ALWAYS the address bar, not "the address bar unless the index happened
+     to survive from last time". Reaching for Options means "I want to go
+     somewhere else" every time, and a cursor that lands on whichever tab was
+     last touched is the reason this was hard to reach at all. The tab strip
+     is one press of Up from here. */
+  chromeGo(1, 0);
   paintFocus();
+  say("chrome active, on the address bar (Up for the tabs, Cross to type)");
 }
 
 /* ═══ Address bar ══════════════════════════════════════════════════════ */
 
 function editAddress() {
   var t = activeTab();
-  stage(false);
+  suspendContent("keyboard");
   bridge.osk({
     title: "Address or search",
     mode: "url",
@@ -870,7 +1677,7 @@ function editAddress() {
    like closing the tab. */
 function afterOsk() {
   if (!st.open) return;
-  stage(st.scope === "content" || st.scope === "chrome");
+  resumeContent("keyboard");
 }
 
 /* ═══ Text fields inside the page ══════════════════════════════════════
@@ -878,25 +1685,48 @@ function afterOsk() {
    value goes back down and is written through the native setter so that a
    framework-controlled input keeps it. */
 
+/* NOTHING IN HERE MAY LOG m.value.
+   This is the one message in the whole browser that carries what a human
+   typed, and one of the fields it carries is a password. The value goes from
+   the page, through the host (which relays it to this page and does not write
+   it to the log), into the keyboard, and back the same way. It is never a
+   toast, never a say(), never part of an error string. The only things
+   written to the log here are the field's NAME and whether it was secure. */
 function editPageField(m) {
+  var secure = !!m.secure || m.inputType === "password";
+  var title = m.label || "Enter text";
+
+  /* arcnav sends the mapped mode; inputType is kept as the fallback for a
+     page injected by an older build that predates it. */
+  var mode = m.mode ||
+    (m.inputType === "password" ? "password"
+     : m.inputType === "number" ? "number"
+     : m.inputType === "url"    ? "url" : "text");
+
   st.pendingEdit = true;
-  stage(false);
+  suspendContent("keyboard");
+  say("keyboard up for " + (secure ? "a password field" : "field \"" + title + "\"") +
+      " (" + mode + (m.why ? ", " + m.why : "") + ")");
+
   bridge.osk({
-    title: m.label || "Enter text",
-    mode: m.inputType === "password" ? "password"
-        : m.inputType === "search" ? "search"
-        : m.inputType === "number" ? "number"
-        : m.inputType === "url" ? "url" : "text",
+    title: title,
+    mode: mode,
     value: String(m.value === undefined ? "" : m.value),
-    commitLabel: m.inputType === "search" ? "Search" : "Done",
+    maxLength: (typeof m.maxLength === "number" && m.maxLength > 0) ? m.maxLength : null,
+    /* A search box still says "Search" on its commit key even though it uses
+       the plain text layout — the label is what the human reads, the mode is
+       what the keys do. */
+    commitLabel: m.inputType === "search" ? "Search" : (mode === "url" ? "Go" : "Done"),
     onCommit: guard("page field commit", function (v) {
       st.pendingEdit = null;
       bridge.post({ type: "browser", cmd: "text", payload: { value: String(v) } });
+      say("keyboard committed into " + (secure ? "the password field" : "\"" + title + "\""));
       afterOsk();
     }),
     onCancel: guard("page field cancel", function () {
       st.pendingEdit = null;
       bridge.post({ type: "browser", cmd: "cancel" });
+      say("keyboard cancelled; the field was left as it was");
       afterOsk();
     })
   });
@@ -905,7 +1735,7 @@ function editPageField(m) {
 function choosePageOption(m) {
   st.pendingSelect = true;
   st.scope = "menu";
-  stage(false);
+  syncContent("page dropdown");
   var s = sheet(m.label || "Choose", "From the page.");
   var list = el("div", "arcbw-list");
   st.sheetRows = [];
@@ -966,6 +1796,58 @@ function hostMessage(m) {
       st.unavailable = null;
       return true;
 
+    /* An extension that did not load must be VISIBLE. The failure mode this
+       guards against is specific: an ad blocker that silently did not load
+       leaves a browser showing adverts on a television, and from the sofa
+       that is indistinguishable from one that loaded and found nothing to
+       block. So a failure is a toast and a menu row, not a log line. */
+    /* The whole extension picture: what is installed, what failed, and what
+       is sitting on disk waiting to be installed. */
+    case "extensions":
+      exts = {
+        ready: !!m.ready,
+        folder: m.folder || "",
+        list: m.list || [],
+        candidates: m.candidates || []
+      };
+      say("extensions: " + exts.list.length + " known, " + exts.candidates.length + " installable found ("
+          + (m.reason || "") + ")");
+      /* renderExtensions, NOT showExtensions: the latter asks for a list, and
+         this is the answer to one. */
+      if (st.sheetKind === "extensions") renderExtensions();
+      return true;
+
+    /* The answer to an install, enable, disable or remove. Always said out
+       loud: these are the presses whose effect is invisible until a page is
+       reloaded, so silence would read as nothing having happened. */
+    case "extresult":
+      say("extension result ok=" + m.ok + ": " + m.detail);
+      toast(m.detail || (m.ok ? "Done" : "That did not work"));
+      return true;
+
+    case "extension":
+      if (!st.extensions) st.extensions = [];
+      {
+        /* Keyed by name, not appended. The host loads extensions once per
+           process, but the browser can be closed and reopened many times
+           inside that process, and a list that grew on every report would
+           read "2 failed" when one extension failed twice as many times as
+           it existed. Replacing also means a later report about the same
+           extension is the one that counts. */
+        var rec = { name: m.name, ok: !!m.ok, detail: m.detail || "" }, seen = false;
+        for (var xi = 0; xi < st.extensions.length; xi++) {
+          if (st.extensions[xi].name === rec.name) { st.extensions[xi] = rec; seen = true; break; }
+        }
+        if (!seen) st.extensions.push(rec);
+      }
+      if (m.ok) {
+        say("extension loaded: " + m.name);
+      } else {
+        say("EXTENSION FAILED: " + m.name + " - " + m.detail);
+        toast(m.name + " did not load — " + m.detail);
+      }
+      return true;
+
     case "closed":
     case "empty":
       return true;
@@ -978,6 +1860,19 @@ function hostMessage(m) {
 
     case "navfail":
       toast("Could not open that address.");
+      return true;
+
+    /* The whole list, on every change. See the Downloads section above. */
+    case "downloads":
+      applyDownloads(m);
+      return true;
+
+    /* Pause, resume or cancel threw on the operation itself. Rare, and worth
+       saying out loud: the row would otherwise sit there looking as though
+       the press had done something. */
+    case "downfail":
+      say("download " + m.id + " could not be " + m.act + ": " + m.detail);
+      toast("That download could not be " + (m.act || "changed") + " — " + (m.detail || "the browser refused"));
       return true;
 
     case "backresult":
@@ -1031,7 +1926,12 @@ function fromPage(m) {
          is technically working and practically useless, and that judgement
          has to be makeable from a log after an unattended run. */
       st.lastFocus = m.label;
+      /* Kept because it decides what Triangle means and what the hint bar
+         says. m.label is the field's NAME, never its contents — arcnav.js
+         guarantees that; see describe() there. */
+      st.focusKind = m.kind;
       say("focus [" + m.kind + "] " + m.label + (m.href ? "  -> " + m.href : ""));
+      renderHints();
       return true;
     case "nofocus":
       /* The honest message, not a spinner. This is the case cursor mode
@@ -1143,7 +2043,20 @@ function contentAction(name, raw) {
       bridge.post({ type: "browser", cmd: "back" });
       return true;
     case "chrome":  goToChrome(); return true;
-    case "menu":    showMenu(); return true;
+
+    /* Triangle is the keyboard when there is a field to type into, and the
+       menu the rest of the time. The keyboard has to be reopenable: it is
+       dismissible with Circle, and a keyboard you can dismiss and not get
+       back is a field you cannot correct. arcnav.js reopens it on whatever
+       is focused, so this only has to get the press down there. */
+    case "menu":
+      if (st.focusKind === "text") {
+        bridge.post({ type: "browser", cmd: "pad", action: "triangle", phase: "press" });
+        return true;
+      }
+      showMenu();
+      return true;
+
     case "history": showHistory(); return true;
     default:
       return relay(raw, "press");
@@ -1161,12 +2074,30 @@ function leaveContent() {
 
 function chromeAction(name) {
   var items = chromeItems();
+  var at = chromeAt();
   switch (name) {
-    case "left":  st.chromeIdx = Math.max(0, st.chromeIdx - 1); paintFocus(); return true;
-    case "right": st.chromeIdx = Math.min(items.length - 1, st.chromeIdx + 1); paintFocus(); return true;
-    case "up":    goToContent(); return true;
-    case "down":  goToContent(); return true;
+    case "left":  chromeGo(at.row, at.col - 1); paintFocus(); return true;
+    case "right": chromeGo(at.row, at.col + 1); paintFocus(); return true;
+
+    /* Up from the address row goes to the tab strip; up from the tab strip
+       is the only Up that leaves. Down is the mirror of it. */
+    case "up":
+      if (at.row === 1) { chromeGo(0, Math.min(at.col, at.rows[0].length - 1)); paintFocus(); }
+      else goToContent();
+      return true;
+    case "down":
+      if (at.row === 0) { chromeGo(1, 0); paintFocus(); }
+      else goToContent();
+      return true;
+
     case "back":  goToContent(); return true;
+
+    /* Options again, already in the chrome: go straight to the address bar.
+       It is the dedicated shortcut — one button from anywhere in the
+       browser to the thing people actually want, and pressing it twice from
+       a page is never worse than pressing it once. */
+    case "chrome": chromeGo(1, 0); paintFocus(); return true;
+
     case "menu":  showMenu(); return true;
     case "prev":  cycleTab(-1); return true;
     case "next":  cycleTab(1); return true;
@@ -1190,6 +2121,7 @@ function chromeAction(name) {
         }
         if (n === st.el.addr) { editAddress(); return true; }
         if (n === st.el.zoom) { showZoom(); return true; }
+        if (n === st.el.dl)   { showDownloads(); return true; }
         if (n === st.el.menu) { showMenu(); return true; }
       }
       return true;
@@ -1211,6 +2143,12 @@ function sheetAction(name) {
 
   switch (name) {
     case "up":
+      /* Up off the top row of the start page goes to the chrome, because
+         that is where the chrome IS — the tab strip and the address bar are
+         drawn directly above this grid. Clamping here instead was the other
+         half of the unreachable address bar: the one gesture that matches
+         what is on the screen did nothing at all. */
+      if (isGrid && st.sheetIdx < gridCols()) { goToChrome(); return true; }
       st.sheetIdx = Math.max(0, st.sheetIdx - (isGrid ? gridCols() : 1)); paintFocus(); return true;
     case "down":
       st.sheetIdx = Math.min(rows.length - 1, st.sheetIdx + (isGrid ? gridCols() : 1)); paintFocus(); return true;
@@ -1296,21 +2234,46 @@ function open(cfg) {
   st.media = null;
   st.lastBounds = "";
 
+  /* A fresh session starts holding nothing, and with no memory of what was
+     last posted — the host has torn its tabs down and back up, so the first
+     apply() must actually send rather than decide it is already correct. */
+  clearHolds("browser opening");
+  shownNow = null; focusNow = null;
+
   st.open = true;
   st.el.wrap.classList.add("is-open");
   st.el.wrap.setAttribute("aria-hidden", "false");
   st.el.wrap.classList.remove("is-immersive");
 
-  renderTabs(); renderAddress(); renderStage();
+  renderTabs(); renderAddress(); renderStage(); renderDown();
 
   bridge.post({ type: "browser", cmd: "open", url: cfg.url || "" });
+  /* So the menu's Extensions row can say how many are on before anybody opens
+     it. Cheap, and it is the only thing that would otherwise read "None" on a
+     console that has an ad blocker running. */
+  bridge.post({ type: "browser", cmd: "extension", "do": "list" });
 
   /* The layout has to exist before its rectangle means anything, and the
      root font-size is viewport-derived so the first frame is not final. */
   setTimeout(guard("bounds", pushBounds), 0);
   setTimeout(guard("bounds", pushBounds), 120);
   clearInterval(st.boundsTimer);
-  st.boundsTimer = setInterval(guard("bounds tick", pushBounds), 700);
+  st.boundsTimer = setInterval(guard("bounds tick", function () {
+    pushBounds();
+    keepFocusPainted();
+    /* The one hold that is not ours to end. The keyboard can be closed by
+       something other than its own commit/cancel — the shell tearing it
+       down, or a re-open with a new config that supersedes it — and a
+       "keyboard" hold left behind after it has gone means a blank rectangle
+       where the web page should be, with nothing on the screen explaining
+       it. Cheap to check, and it is the difference between a stuck browser
+       and a browser that fixes itself within a second. */
+    if (holds.keyboard) {
+      var up = false;
+      try { up = !!bridge.oskIsOpen(); } catch (e) {}
+      if (!up) resumeContent("keyboard");
+    }
+  }), 700);
   addEventListener("resize", onResize);
 
   if (cfg.url) { goToContent(); }
@@ -1329,6 +2292,8 @@ function close() {
   st.boundsTimer = 0;
   removeEventListener("resize", onResize);
   closeSheet();
+  clearHolds("browser closed");
+  shownNow = null; focusNow = null;
   bridge.post({ type: "browser", cmd: "close" });
   try {
     st.el.wrap.classList.remove("is-open", "is-immersive");
@@ -1349,6 +2314,7 @@ root.ArcBrowser = {
     if (b.oskIsOpen) bridge.oskIsOpen = b.oskIsOpen;
     if (b.log) bridge.log = b.log;
     if (b.toast) bridge.toast = b.toast;
+    if (b.files) bridge.files = b.files;
   }),
   open: guard("open", open),
   close: guard("close", close),
@@ -1361,6 +2327,9 @@ root.ArcBrowser = {
       open: st.open, scope: st.scope, navMode: st.navMode,
       tabs: st.tabs.length, active: st.active, max: st.max,
       chromeIdx: st.chromeIdx, sheetIdx: st.sheetIdx, sheetRows: st.sheetRows.length,
+      sheetKind: st.sheetKind,
+      downloads: st.downloads.length, downloadsActive: st.downActive,
+      contentShown: shownNow, contentFocused: focusNow, holds: holdList(),
       pins: st.pins.length, history: st.history.length, engine: st.engine,
       bounds: st.lastBounds, url: (activeTab() || {}).url || null,
       unavailable: st.unavailable
