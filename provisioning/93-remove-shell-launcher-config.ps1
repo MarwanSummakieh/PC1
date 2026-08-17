@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    UNDO for 03-apply-shell-launcher.ps1 -- removes the custom shell for 'arcshell'
+    UNDO for 03-apply-shell-launcher.ps1 -- removes the custom shell for 'marwanshell'
     and turns Shell Launcher enforcement off.
 
 .DESCRIPTION
-    THIS IS THE PRIMARY RECOVERY SCRIPT. If the arcshell session is unusable, sign
+    THIS IS THE PRIMARY RECOVERY SCRIPT. If the marwanshell session is unusable, sign
     into 'brain' (which is never configured and always gets Explorer) and run this.
 
     What it does, in order:
@@ -22,7 +22,7 @@
 
     Changes take effect at the next sign-in of the affected account
     (https://learn.microsoft.com/en-us/windows/configuration/shell-launcher/configure).
-    An arcshell session that is currently running its custom shell keeps running it
+    An marwanshell session that is currently running its custom shell keeps running it
     until sign-out.
 
 .DOCS
@@ -38,7 +38,7 @@
 
     UNVERIFIED on Windows 11 IoT Enterprise LTSC 2024: whether SetEnabled($false)
     takes effect for an already-signed-in Shell Launcher session, or only at the
-    next sign-in. Assume "next sign-in" and sign the arcshell session out.
+    next sign-in. Assume "next sign-in" and sign the marwanshell session out.
 
     RUN AS: elevated *Windows PowerShell 5.1* (powershell.exe), signed in as 'brain'.
 #>
@@ -46,7 +46,7 @@
 [CmdletBinding()]
 param(
     [ValidateNotNullOrEmpty()]
-    [string]$UserName = 'arcshell',
+    [string]$UserName = 'marwanshell',
 
     # Remove every per-SID custom shell entry, not just the target's.
     # Use when the configuration state is unknown or the account was already deleted.
@@ -220,6 +220,6 @@ if ($remaining.Count -gt 0) {
 
 Write-Host ""
 Write-Host "Done. The affected account gets its normal shell at the NEXT SIGN-IN." -ForegroundColor Green
-Write-Host "If an arcshell session is still open, sign it out (Ctrl+Alt+Del > Sign out)."
+Write-Host "If an marwanshell session is still open, sign it out (Ctrl+Alt+Del > Sign out)."
 Write-Host "Record this in provisioning\MACHINE-CHANGES.md" -ForegroundColor DarkGray
 exit 0

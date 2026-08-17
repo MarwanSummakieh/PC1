@@ -1,4 +1,4 @@
-// ARC OS - ShellHost spike
+// MarwanOS - ShellHost spike
 // Minimal native host proving (a) window handoff to a child process tree and
 // reliable forced return to foreground, and (b) XInput gamepad input.
 //
@@ -16,7 +16,7 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
-namespace ArcOs.Spike
+namespace MarwanOs.Spike
 {
     #region Native interop
 
@@ -1364,7 +1364,7 @@ namespace ArcOs.Spike
             TopMost = false;                    // hard requirement: never fight games
             ShowInTaskbar = true;               // needed so restore-from-minimized behaves
             KeyPreview = true;
-            Text = "ARC OS ShellHost (spike)";
+            Text = "MarwanOS ShellHost (spike)";
             DoubleBuffered = true;
 
             Rectangle b = Screen.PrimaryScreen.Bounds;
@@ -1776,7 +1776,7 @@ namespace ArcOs.Spike
         string BuildStatus()
         {
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine("ARC OS  //  ShellHost spike");
+            sb.AppendLine("MarwanOS  //  ShellHost spike");
             sb.AppendLine("----------------------------------------------------------------------");
             sb.AppendLine("state            : " + (_childRunning ? "CHILD RUNNING (host yielded)" : "IDLE / FOREGROUND"));
             sb.AppendLine("hwnd             : 0x" + Handle.ToInt64().ToString("X") + "   pid " + Process.GetCurrentProcess().Id

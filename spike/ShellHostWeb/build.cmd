@@ -1,26 +1,32 @@
 @echo off
-REM ARC OS ShellHostWeb - build with the inbox .NET Framework compiler.
+REM MarwanOS ShellHostWeb - build with the inbox .NET Framework compiler.
 REM No SDK install required; csc.exe ships with Windows.
 REM Output is staged into bin\ together with every DLL the exe needs at runtime.
 
-REM Optional first argument = output file name, e.g.  build.cmd ArcShellHostWeb-v2.exe
+REM Optional first argument = output file name, e.g.  build.cmd MarwanShellHostWeb-v2.exe
 REM Deploying under a NEW name avoids overwriting the binary a running shell holds open.
 REM
 REM SystemApi.cs (the native system-control layer behind the Settings screen) compiles into the
-REM same binary and needs no extra /reference. Call it as ArcOs.Sys.SystemApi.Handle(json).
+REM same binary and needs no extra /reference. Call it as MarwanOs.Sys.SystemApi.Handle(json).
 REM Build the standalone test harness for it with build-cli.cmd.
 REM
 REM FileApi.cs (the native file-operations layer behind the file explorer, ui/files.js) is the
-REM same deal: no extra /reference, call it as ArcOs.Files.FileApi.Handle(json). Its namespace
+REM same deal: no extra /reference, call it as MarwanOs.Files.FileApi.Handle(json). Its namespace
 REM and helper type names are distinct from SystemApi's, so the two coexist in one binary.
 REM Build its standalone harness with build-file-cli.cmd.
 REM
 REM LibraryApi.cs (the installed-software scan behind the home rail, ui/library.js) is the third:
-REM call it as ArcOs.Library.LibraryApi.Handle(json). Namespace ArcOs.Library, helper types
+REM call it as MarwanOs.Library.LibraryApi.Handle(json). Namespace MarwanOs.Library, helper types
 REM prefixed L*, so all three coexist. It is the only one that needs System.Drawing.dll - already
 REM referenced below because ShellHostWeb.cs is a WinForms host - and it needs it only for
 REM lib.icon, which turns an HICON or an on-disk logo into a PNG data URI.
 REM Build its standalone harness with build-lib-cli.cmd.
+REM
+REM LibraryWatch.cs (namespace MarwanOs.LibWatch) and MetaApi.cs (namespace MarwanOs.Meta) are
+REM additions to LibraryApi.cs rather than edits of it: live install detection plus configurable
+REM scan folders, and metadata/artwork. LibraryApi.Dispatch asks each of them whether it Owns()
+REM a command before its own switch runs, so the two families route themselves. Both reuse
+REM LibraryApi's LJ/LKv/LApi/Sources helpers and need no extra /reference.
 
 setlocal
 set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
@@ -29,7 +35,7 @@ set OUTDIR=%HERE%bin
 set SDK=%HERE%..\..\vendor\webview2
 set REPO=%HERE%..\..
 set OUTNAME=%~1
-if "%OUTNAME%"=="" set OUTNAME=ArcShellHostWeb.exe
+if "%OUTNAME%"=="" set OUTNAME=MarwanShellHostWeb.exe
 
 if not exist "%CSC%" (
   echo ERROR: inbox csc.exe not found at %CSC%
@@ -54,7 +60,9 @@ if not exist "%OUTDIR%" mkdir "%OUTDIR%"
   "%HERE%ShellHostWeb.cs" ^
   "%HERE%SystemApi.cs" ^
   "%HERE%FileApi.cs" ^
-  "%HERE%LibraryApi.cs"
+  "%HERE%LibraryApi.cs" ^
+  "%HERE%LibraryWatch.cs" ^
+  "%HERE%MetaApi.cs"
 
 if errorlevel 1 (
   echo BUILD FAILED
@@ -69,7 +77,7 @@ copy /y "%SDK%\runtimes\win-x64\native\WebView2Loader.dll"      "%OUTDIR%\" >nul
 REM The UI itself. Served from the exe directory unless --assets says otherwise.
 REM ui\*.css and ui\*.js are flattened alongside index.html because that is how the
 REM page links them (href="osk.css", src="files.js") and how they are deployed.
-REM arcnav.js is a special case: it is never loaded by index.html at all. The host
+REM mosnav.js is a special case: it is never loaded by index.html at all. The host
 REM reads it off this folder and injects it into every page the CONTENT WebView
 REM loads, so it has to be here even though nothing links to it.
 copy /y "%REPO%\index.html" "%OUTDIR%\" >nul

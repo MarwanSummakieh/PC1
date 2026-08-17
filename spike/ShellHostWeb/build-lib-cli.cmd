@@ -1,5 +1,5 @@
 @echo off
-REM ARC OS - build the LibraryApi console harness with the inbox .NET Framework compiler.
+REM MarwanOS - build the LibraryApi console harness with the inbox .NET Framework compiler.
 REM
 REM   build-lib-cli.cmd               -> bin\libraryapi-cli.exe
 REM   build-lib-cli.cmd myname.exe    -> bin\myname.exe
@@ -10,6 +10,11 @@ REM build.cmd already references it because ShellHostWeb.cs is a WinForms host, 
 REM LibraryApi.cs there costs one source line and nothing else.
 REM Registry access is Microsoft.Win32.Registry, which lives in mscorlib. No extra reference,
 REM no winmd, no NuGet.
+REM
+REM LibraryWatch.cs and MetaApi.cs compile in too, and not optionally: LibraryApi's ScanMod asks
+REM WCfg for its scan roots and its disabled-source list, and Dispatch routes lib.config.* /
+REM meta.* to them, so the harness does not link without them. Same three sources as
+REM build-watch-cli.cmd, different Main.
 
 setlocal
 set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
@@ -30,6 +35,8 @@ if not exist "%OUTDIR%" mkdir "%OUTDIR%"
   /reference:System.Core.dll ^
   /reference:System.Drawing.dll ^
   "%HERE%LibraryApi.cs" ^
+  "%HERE%LibraryWatch.cs" ^
+  "%HERE%MetaApi.cs" ^
   "%HERE%libraryapi-cli.cs"
 
 if errorlevel 1 (

@@ -1,5 +1,5 @@
-// ARC OS - FileApi
-// Native Windows file-operations layer for the ARC OS file explorer (ui/files.js).
+// MarwanOS - FileApi
+// Native Windows file-operations layer for the MarwanOS file explorer (ui/files.js).
 //
 // The WebView2 page posts a JSON command object; FileApi.Handle() returns a JSON response string.
 // Same envelope as SystemApi.cs, deliberately, so one page-side transport serves both:
@@ -21,9 +21,9 @@
 // -------------------------------------------------------------------------------------------
 // NAMESPACE AND TYPE NAMES
 // -------------------------------------------------------------------------------------------
-// Namespace is ArcOs.Files, not ArcOs.Sys and not ArcOs.ShellWeb. The helper types are further
+// Namespace is MarwanOs.Files, not MarwanOs.Sys and not MarwanOs.ShellWeb. The helper types are further
 // prefixed (FJ, FApi, FJobs, FNative, FsFault) so that a future file which does
-// `using ArcOs.Sys; using ArcOs.Files;` still compiles - a bare `J` in both namespaces would be
+// `using MarwanOs.Sys; using MarwanOs.Files;` still compiles - a bare `J` in both namespaces would be
 // ambiguous, and finding that out at integration time is exactly the collision this avoids.
 //
 // -------------------------------------------------------------------------------------------
@@ -66,7 +66,7 @@
 // -------------------------------------------------------------------------------------------
 // ELEVATION
 // -------------------------------------------------------------------------------------------
-// The shell runs as a STANDARD USER (arcshell). Nothing in this file requires administrator
+// The shell runs as a STANDARD USER (marwanshell). Nothing in this file requires administrator
 // rights for normal user-profile work. What a standard user cannot do is an ACL question, not
 // an elevation-of-this-API question, and it surfaces as "Access denied" with the path named.
 // fs.eject is the one command whose behaviour genuinely differs: CM_Request_Device_Eject works
@@ -81,7 +81,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-namespace ArcOs.Files
+namespace MarwanOs.Files
 {
     #region JSON  (hand-rolled writer + reader)
 
@@ -2340,7 +2340,7 @@ namespace ArcOs.Files
 
     #region Job bodies
 
-    // Named JobRun, not Jobs: ArcOs.Sys already has a Jobs, and a file that `using`s both
+    // Named JobRun, not Jobs: MarwanOs.Sys already has a Jobs, and a file that `using`s both
     // namespaces must still compile.
     internal static class JobRun
     {
@@ -2367,7 +2367,7 @@ namespace ArcOs.Files
                 op.pFrom = from.ToString();
                 op.pTo = null;
                 op.fFlags = (ushort)(FNative.FOF_ALLOWUNDO | FNative.FOF_NO_UI);
-                op.lpszProgressTitle = "ARC OS";
+                op.lpszProgressTitle = "MarwanOS";
 
                 int rc = FNative.SHFileOperationW(ref op);
 

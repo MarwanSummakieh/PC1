@@ -1,29 +1,29 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   PC1 — on-screen keyboard  (ui/osk.js)
+   MarwanOS — on-screen keyboard  (ui/osk.js)
 
    A controller-driven text-entry surface. No dependencies, no build step,
-   no module system: this file defines one global, `ArcOSK`, in the same
+   no module system: this file defines one global, `MarwanOSK`, in the same
    plain-JS style as index.html.
 
    Public API
    ──────────
-     ArcOSK.open({ title, value, mode, maxLength, placeholder,
+     MarwanOSK.open({ title, value, mode, maxLength, placeholder,
                    commitLabel, onCommit, onCancel })
-     ArcOSK.close()                 // dismiss, fire nothing
-     ArcOSK.isOpen()
-     ArcOSK.handleAction(action)    // the pad channel — see ACTIONS below
-     ArcOSK.beginRepeat(action)     // hold-to-repeat: press
-     ArcOSK.endRepeat()             // hold-to-repeat: release
-     ArcOSK.getValue()
-     ArcOSK.debugState()            // { open, mode, layer, shift, r, i, key, value, caret }
-     ArcOSK._model                  // pure grid model, for the headless nav test
+     MarwanOSK.close()                 // dismiss, fire nothing
+     MarwanOSK.isOpen()
+     MarwanOSK.handleAction(action)    // the pad channel — see ACTIONS below
+     MarwanOSK.beginRepeat(action)     // hold-to-repeat: press
+     MarwanOSK.endRepeat()             // hold-to-repeat: release
+     MarwanOSK.getValue()
+     MarwanOSK.debugState()            // { open, mode, layer, shift, r, i, key, value, caret }
+     MarwanOSK._model                  // pure grid model, for the headless nav test
 
    Crash isolation
    ───────────────
    This UI runs inside the Windows shell process. An escaped exception blanks
    a television, so every entry point — public method, event listener, timer —
    is wrapped by guard(). Failures are logged to the console and, when the
-   ShellHostWeb shim is present, forwarded to the host log via window.arcPost.
+   ShellHostWeb shim is present, forwarded to the host log via window.mosPost.
 
    Styling lives in ui/osk.css. It is a separate file rather than an injected
    <style> block because a strict CSP (`style-src 'self'`) blocks inline style
@@ -40,9 +40,9 @@ var VERSION = "1.0.0";
 /* ═══ Crash isolation ══════════════════════════════════════════════════ */
 
 function emit(level, where, what) {
-  var msg = "ArcOSK[" + where + "] " + (what && what.stack ? what.stack : what);
+  var msg = "MarwanOSK[" + where + "] " + (what && what.stack ? what.stack : what);
   try { if (root.console && console[level]) console[level](msg); } catch (e) {}
-  try { if (typeof root.arcPost === "function") root.arcPost({ type: "log", target: msg }); } catch (e) {}
+  try { if (typeof root.mosPost === "function") root.mosPost({ type: "log", target: msg }); } catch (e) {}
 }
 
 /* something went wrong */
@@ -129,6 +129,25 @@ var LAYOUTS = {
       K("~", 2), A("commit", "Go", 6, "osk-mod osk-commit") ]
   ]},
 
+  /* ── send ───────────────────────────────────────────────── 20 units ──
+     The text layer with one extra key. It exists for pointer mode: the host
+     brings the shell forward so this keyboard can type into a window the
+     shell cannot draw on — an elevated installer, a launcher's sign-in — and
+     out there "finish" and "finish and press Enter" are two different
+     outcomes, because nothing else on the pad can reach that window's own
+     Enter once the shell has gone away again. Everything else is the text
+     layout unchanged; a mode is a smaller thing to add than a second
+     keyboard. */
+  send: { cols: 20, rows: [
+    row(DIGITS, 2),
+    row(QWERTY, 2),
+    row(HOME, 2).concat([ K("-", 2) ]),
+    [ A("shift", "shift", 3, "osk-mod") ].concat(row(BOTTOM, 2), [ A("backspace", "back", 3, "osk-mod") ]),
+    [ A("symbols", "?123", 3, "osk-mod"), K("@", 2), A("space", "space", 6, "osk-mod osk-space"),
+      K(".", 2), A("commit", "Done", 3, "osk-mod osk-commit"),
+      A("commitEnter", "Done + ⏎", 4, "osk-mod osk-commit") ]
+  ]},
+
   /* ── number ─────────────────────────────────────────────── 12 units ── */
   number: { cols: 12, rows: [
     [ K("1", 4), K("2", 4), K("3", 4) ],
@@ -145,7 +164,8 @@ var MODES = {
   password: { base: "text",   commit: "Done",   hint: "Password" },
   search:   { base: "text",   commit: "Search", hint: "Search" },
   url:      { base: "url",    commit: "Go",     hint: "Address" },
-  number:   { base: "number", commit: "Done",   hint: "Number" }
+  number:   { base: "number", commit: "Done",   hint: "Number" },
+  send:     { base: "send",   commit: "Done",   hint: "Type into" }
 };
 
 /* ── grid construction (pure) ─────────────────────────────────────────── */
@@ -366,7 +386,7 @@ function ensureCSS(doc) {
   if (st.cssChecked) return;
   st.cssChecked = true;
   var probe = doc.createElement("div");
-  probe.className = "arc-osk-probe";
+  probe.className = "mos-osk-probe";
   doc.body.appendChild(probe);
   var loaded = false;
   try { loaded = getComputedStyle(probe).getPropertyValue("--osk-loaded").indexOf("1") >= 0; }
@@ -389,7 +409,7 @@ function ensureCSS(doc) {
   var link = doc.createElement("link");
   link.rel = "stylesheet";
   link.href = href;
-  link.setAttribute("data-arc-osk", "auto");
+  link.setAttribute("data-mos-osk", "auto");
   doc.head.appendChild(link);
   note("css", "osk.css was not linked; injected <link href=\"" + href + "\">");
 }
@@ -402,15 +422,15 @@ var SVG = {
   space:     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.5v3.2h16v-3.2"/></svg>',
   eye:       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.6"/></svg>',
   eyeOff:    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 6.5 12 6.5c1.6 0 3 .4 4.2 1M21.5 12s-3.5 5.5-9.5 5.5c-1.7 0-3.2-.4-4.4-1.1"/><path d="M4 4l16 16"/></svg>',
-  /* The four PlayStation face symbols, matching index.html's PAD_GLYPH
-     exactly — bare rather than ringed, unequal in size the way Sony draws
-     them, square-cut and sharp-cornered. See the long note beside
-     PAD_GLYPH for the references. The keyboard's hint bar sits beside the
-     shell's and the two have to agree about what a Cross looks like. */
-  cross:     '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="face" d="M5.7 5.7 18.3 18.3M18.3 5.7 5.7 18.3"/></svg>',
-  circle:    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle class="face" cx="12" cy="12" r="6.15"/></svg>',
-  square:    '<svg viewBox="0 0 24 24" aria-hidden="true"><rect class="face" x="6.45" y="6.45" width="11.1" height="11.1"/></svg>',
-  triangle:  '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="face tri" d="M12 3.7 20 17.9H4z"/></svg>'
+  /* The four DualSense face buttons, identical to index.html's PAD_GLYPH —
+     PromptFont outlines, filled caps with the mark knocked out, and the
+     four marks at the four different sizes the hardware uses. The
+     keyboard's hint bar sits beside the shell's and the two have to agree
+     about what a Cross looks like. */
+  cross:     '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M12 11.04L7.61 6.65L6.65 7.61L11.04 12L6.65 16.39L7.61 17.35L12 12.96L16.39 17.35L17.35 16.39L12.96 12L17.35 7.61L16.39 6.65L12 11.04"/></svg>',
+  circle:    '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M15.91 8.09Q14.28 6.46 12 6.46Q9.72 6.46 8.09 8.09Q6.46 9.72 6.46 12Q6.46 14.28 8.09 15.91Q9.72 17.54 12 17.54Q14.28 17.54 15.91 15.91Q17.54 14.28 17.54 12Q17.54 9.72 15.91 8.09M9.05 9.05Q10.27 7.82 12 7.82Q13.73 7.82 14.95 9.05Q16.18 10.27 16.18 12Q16.18 13.73 14.95 14.95Q13.73 16.18 12 16.18Q10.27 16.18 9.05 14.95Q7.82 13.73 7.82 12Q7.82 10.27 9.05 9.05"/></svg>',
+  square:    '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M16.9 7.1L7.1 7.1L7.1 7.82L7.1 16.9L16.9 16.9L16.9 7.1M8.57 15.43L8.57 8.57L15.43 8.57L15.43 15.43L8.57 15.43"/></svg>',
+  triangle:  '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M18.05 16.01L12 5.14L5.95 16.01L7.1 16.01L18.05 16.01M8.28 14.66L12 7.94L15.72 14.66L8.28 14.66"/></svg>'
 };
 
 var HINTS = [
@@ -435,7 +455,7 @@ function buildDOM() {
   var doc = document;
   ensureCSS(doc);
 
-  var scrim = el("div", "arc-osk");
+  var scrim = el("div", "mos-osk");
   scrim.setAttribute("role", "dialog");
   scrim.setAttribute("aria-modal", "true");
   scrim.setAttribute("aria-label", "On-screen keyboard");
@@ -758,7 +778,8 @@ function runAct(act) {
     case "space":     insert(" "); break;
     case "symbols":   setLayer("symbols"); break;
     case "base":      setLayer(st.base); break;
-    case "commit":    commit(); break;
+    case "commit":    commit(false); break;
+    case "commitEnter": commit(true); break;
     case "reveal":    toggleMask(); break;
     default: report("runAct", "unknown key action '" + act + "'");
   }
@@ -770,11 +791,14 @@ function toggleMask() {
   paintField();
 }
 
-function commit() {
+/* `enter` is the second outcome the "send" mode's extra key produces. It is
+   passed as a second argument rather than folded into the value, so every
+   existing caller — all of which take one argument — is untouched. */
+function commit(enter) {
   var cfg = st.cfg, v = st.value;
   teardown();
   if (cfg && typeof cfg.onCommit === "function") {
-    try { cfg.onCommit(v); } catch (err) { report("onCommit", err); }
+    try { cfg.onCommit(v, { enter: !!enter }); } catch (err) { report("onCommit", err); }
   }
 }
 
@@ -961,7 +985,7 @@ var API = {
             firstPos: firstPos, posFor: posFor }
 };
 
-root.ArcOSK = API;
+root.MarwanOSK = API;
 if (typeof module !== "undefined" && module.exports) module.exports = API;
 
 })(typeof window !== "undefined" ? window

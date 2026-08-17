@@ -1,4 +1,4 @@
-// ARC OS - FileApi console harness
+// MarwanOS - FileApi console harness
 //
 // Exercises FileApi.Handle() from the command line so the whole file-operations surface can be
 // tested without going anywhere near the live shell. Same shape as systemapi-cli.cs.
@@ -29,9 +29,9 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
-using ArcOs.Files;
+using MarwanOs.Files;
 
-namespace ArcOs.Files.Cli
+namespace MarwanOs.Files.Cli
 {
     public static class FileCliProgram
     {
@@ -98,7 +98,7 @@ namespace ArcOs.Files.Cli
 
         static void Usage()
         {
-            Console.WriteLine("ARC OS FileApi harness");
+            Console.WriteLine("MarwanOS FileApi harness");
             Console.WriteLine();
             Console.WriteLine("  fileapi-cli <cmd> [key=value ...] [--wait[=ms]] [--cancel=ms] [--raw] [--quiet]");
             Console.WriteLine("  fileapi-cli --json '{\"cmd\":\"...\"}'");
@@ -408,7 +408,7 @@ namespace ArcOs.Files.Cli
         // ====================================================================================
         static int SelfTest(string root)
         {
-            Console.WriteLine("ARC OS FileApi self-test");
+            Console.WriteLine("MarwanOS FileApi self-test");
             Console.WriteLine("user      : " + Environment.UserName + "  elevated=" + IsElev());
             Console.WriteLine("machine   : " + Environment.MachineName);
             Console.WriteLine("scratch   : " + root);

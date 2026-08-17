@@ -19,11 +19,11 @@ Only `notepad.exe` and `cmd.exe` were used as child processes.
 | `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe` | **present**, version **4.8.9232.0**, "for C# 5" |
 
 **Built with:** the inbox .NET Framework compiler. Single source file
-`spike\ShellHost\ShellHost.cs` (1065 lines) → `spike\ShellHost\bin\ArcShellHost.exe` via
+`spike\ShellHost\ShellHost.cs` (1065 lines) → `spike\ShellHost\bin\MarwanShellHost.exe` via
 `spike\ShellHost\build.cmd`:
 
 ```
-csc.exe /target:winexe /platform:x64 /optimize+ /warn:4 /out:bin\ArcShellHost.exe
+csc.exe /target:winexe /platform:x64 /optimize+ /warn:4 /out:bin\MarwanShellHost.exe
         /reference:System.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll
         ShellHost.cs
 ```
@@ -33,7 +33,7 @@ no string interpolation, `nameof`, or expression-bodied members.
 
 **Naming finding:** Windows 11 ships `C:\Windows\System32\ShellHost.exe` (a live system
 process, seen running as PID 18516 during testing). The spike binary was renamed to
-`ArcShellHost.exe` so process-level checks are unambiguous. Worth keeping for the real host.
+`MarwanShellHost.exe` so process-level checks are unambiguous. Worth keeping for the real host.
 
 ---
 
@@ -46,10 +46,10 @@ process, seen running as PID 18516 during testing). The spike binary was renamed
 External observer timeline (foreground process / is-host / host-minimized / #notepad):
 
 ```
-   585 | ArcShellHost | True  | False | 0     <- host has foreground
+   585 | MarwanShellHost | True  | False | 0     <- host has foreground
   1642 | msedge       | False | True  | 1     <- launched, host minimized itself
   1914 | notepad      | False | True  | 1     <- child owns the screen
-  6017 | ArcShellHost | True  | False | 0     <- child killed, host is back
+  6017 | MarwanShellHost | True  | False | 0     <- child killed, host is back
   8410 | msedge       | False | False | 0     <- host exited
 ```
 
@@ -122,7 +122,7 @@ the screen** — it stole the foreground back from the "game". External observer
 
 ```
   2384 | notepad      | False | True  | 1
-  2651 | ArcShellHost | True  | False | 1     <- host in foreground, notepad STILL running
+  2651 | MarwanShellHost | True  | False | 1     <- host in foreground, notepad STILL running
 ```
 
 Cause: `start` hands the spawn off, `cmd` exits, and the descendant walk loses the chain
@@ -142,7 +142,7 @@ Verified two independent ways: `Process.ExitCode` from the PowerShell harness, a
 literal `ERRORLEVEL` a Shell Launcher policy would observe.
 
 ```
-cmd /v:on /c "start /wait ArcShellHost.exe --auto-exit=1000 --exit-as=<K> & echo !ERRORLEVEL!"
+cmd /v:on /c "start /wait MarwanShellHost.exe --auto-exit=1000 --exit-as=<K> & echo !ERRORLEVEL!"
 
 ESC -> ERRORLEVEL=0     B -> ERRORLEVEL=0     X -> ERRORLEVEL=2     Y -> ERRORLEVEL=3
 ```
@@ -262,5 +262,5 @@ So the answer to "does ordinal #100 resolve on this OS build": **yes, reliably.*
 ## 11. Cleanup
 
 Every window opened during testing was closed and every child process terminated. Final
-check after the suite: `notepad = 0`, `cmd = 0`, `ArcShellHost = 0`. No stray processes
+check after the suite: `notepad = 0`, `cmd = 0`, `MarwanShellHost = 0`. No stray processes
 left behind.

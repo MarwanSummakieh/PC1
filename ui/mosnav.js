@@ -1,6 +1,6 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   PC1 — the navigation layer injected into every browsed page
-   (ui/arcnav.js)
+   MarwanOS — the navigation layer injected into every browsed page
+   (ui/mosnav.js)
 
    WHERE THIS RUNS
    ───────────────
@@ -43,20 +43,20 @@
        {t:"scan"}                    rebuild the focusable set now
 
    page -> host   window.chrome.webview.postMessage:
-       {type:"arcnav", ev:"ready",  url, title}
-       {type:"arcnav", ev:"mode",   mode, items}
-       {type:"arcnav", ev:"focus",  label, kind, href}
-       {type:"arcnav", ev:"edit",   value, inputType, label, multiline}
-       {type:"arcnav", ev:"select", label, options:[...], index}
-       {type:"arcnav", ev:"media",  playing, muted, time, duration, fullscreen}
-       {type:"arcnav", ev:"nofocus"}      nothing focusable on this page
-       {type:"arcnav", ev:"log",    text}
+       {type:"mosnav", ev:"ready",  url, title}
+       {type:"mosnav", ev:"mode",   mode, items}
+       {type:"mosnav", ev:"focus",  label, kind, href}
+       {type:"mosnav", ev:"edit",   value, inputType, label, multiline}
+       {type:"mosnav", ev:"select", label, options:[...], index}
+       {type:"mosnav", ev:"media",  playing, muted, time, duration, fullscreen}
+       {type:"mosnav", ev:"nofocus"}      nothing focusable on this page
+       {type:"mosnav", ev:"log",    text}
    ═══════════════════════════════════════════════════════════════════════ */
 
 (function () {
 "use strict";
 
-if (window.__arcnav) return;
+if (window.__mosnav) return;
 
 /* TOP FRAME ONLY. WebView2 injects this into every document in the WebView,
    which means every iframe as well - an ad, a video embed, a consent widget.
@@ -73,8 +73,8 @@ if (window.__arcnav) return;
 if (window.top !== window) return;
 
 var VERSION = "1.0.0";
-var ACCENT = "#4c8dff";
-var ACCENT_HOT = "#a6d4ff";
+var ACCENT = "#50e380";
+var ACCENT_HOT = "#c9e5bb";
 
 /* ═══ Never throw ══════════════════════════════════════════════════════
    This layer is the only way the human can move on this page. If it dies
@@ -85,11 +85,11 @@ var ACCENT_HOT = "#a6d4ff";
 function post(o) {
   try { window.chrome.webview.postMessage(JSON.stringify(o)); } catch (e) {}
 }
-function say(text) { post({ type: "arcnav", ev: "log", text: String(text) }); }
+function say(text) { post({ type: "mosnav", ev: "log", text: String(text) }); }
 function guard(where, fn) {
   return function () {
     try { return fn.apply(this, arguments); }
-    catch (err) { say("arcnav[" + where + "] " + (err && err.stack ? err.stack : err)); }
+    catch (err) { say("mosnav[" + where + "] " + (err && err.stack ? err.stack : err)); }
   };
 }
 
@@ -176,7 +176,7 @@ function base() {
       'transition:left .09s cubic-bezier(.16,.84,.24,1),top .09s cubic-bezier(.16,.84,.24,1),' +
       'width .09s cubic-bezier(.16,.84,.24,1),height .09s cubic-bezier(.16,.84,.24,1);display:none}' +
     '[part=dot]{width:1.5rem;height:1.5rem;margin:-0.75rem 0 0 -0.75rem;border-radius:50%;' +
-      'border:0.125rem solid ' + ACCENT_HOT + ';background:rgba(76,141,255,.35);' +
+      'border:0.125rem solid ' + ACCENT_HOT + ';background:rgba(80,227,128,.32);' +
       'box-shadow:0 0 0 0.0625rem rgba(4,6,11,.9),0 0 1rem rgba(166,212,255,.6);display:none}' +
     '[part=hint]{display:none}';
 }
@@ -342,7 +342,7 @@ function score(from, cand, dx, dy) {
 
 function move(dx, dy) {
   var items = fresh();
-  if (!items.length) { post({ type: "arcnav", ev: "nofocus" }); return scrollBy(dx, dy) ? "scrolled" : "nothing here"; }
+  if (!items.length) { post({ type: "mosnav", ev: "nofocus" }); return scrollBy(dx, dy) ? "scrolled" : "nothing here"; }
 
   var cur = st.el && rectOf(st.el);
   if (!cur) {
@@ -412,7 +412,7 @@ function reFocus() {
   if (st.el !== st.reported) {
     st.reported = st.el;
     post({
-      type: "arcnav", ev: "focus",
+      type: "mosnav", ev: "focus",
       label: describe(st.el),
       kind: kindOf(st.el),
       href: (st.el.tagName === "A" && st.el.href) ? String(st.el.href).slice(0, 400) : null
@@ -427,15 +427,31 @@ function reFocus() {
    keyboard occupies the bottom of the display: when the content view is
    shown again after a commit, the field and the text now in it should be in
    the upper half where they are certainly not behind anything. */
+/* Returns true when it actually asked the page to move, false when the
+   element was already inside the band and nothing happened. Every caller but
+   R3 ignores it; R3 needs it because it has to tell the human which of the
+   two occurred instead of claiming "recentred" either way.
+
+   The false answer is certain: the element was in the band, no scroll was
+   requested, nothing moved. The true answer is "a scroll was issued" rather
+   than "the viewport is now elsewhere" - a smooth scroll has not applied by
+   the time this returns, so the result cannot be measured here, only the
+   request. That is the same reason scrollBy() below compares capability and
+   not result. Saying "recentred" for a scroll that was issued against a
+   scroll container already at its stop is the one remaining overclaim, and
+   it is small: the element was genuinely off-band, so the human's press was
+   not a no-op in the way "already in view" would suggest. */
 function ensureVisible(el, padFrac) {
-  var r = rectOf(el); if (!r) return;
+  var r = rectOf(el); if (!r) return false;
   var vh = window.innerHeight, vw = window.innerWidth;
   var frac = (typeof padFrac === "number") ? padFrac : 0.16;
   var pad = Math.round(vh * frac);
   if (r.top < pad || r.bottom > vh - pad || r.left < 0 || r.right > vw) {
     try { el.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" }); }
     catch (e) { try { el.scrollIntoView(); } catch (e2) {} }
+    return true;
   }
+  return false;
 }
 
 /* NEVER let a field's contents into this string.
@@ -663,7 +679,7 @@ function requestEdit(el, why) {
   try { multiline = el.tagName === "TEXTAREA" || !!el.isContentEditable; } catch (e) {}
 
   post({
-    type: "arcnav", ev: "edit",
+    type: "mosnav", ev: "edit",
     /* The one message in this protocol that carries what the human typed.
        It goes to the keyboard and nowhere else; the shell does not log it,
        and nothing downstream of the shell ever sees it. */
@@ -756,7 +772,7 @@ function activate() {
       }
     } catch (e) {}
     st.pending = st.el;
-    post({ type: "arcnav", ev: "select", label: describe(st.el), options: opts, index: st.el.selectedIndex });
+    post({ type: "mosnav", ev: "select", label: describe(st.el), options: opts, index: st.el.selectedIndex });
     return "choosing";
   }
 
@@ -905,7 +921,7 @@ function togglePlay(v) {
 function reportMedia(v) {
   try {
     post({
-      type: "arcnav", ev: "media",
+      type: "mosnav", ev: "media",
       playing: !v.paused, muted: !!v.muted,
       time: Math.round(v.currentTime || 0), duration: Math.round(v.duration || 0),
       volume: Math.round((v.volume === undefined ? 1 : v.volume) * 100),
@@ -935,10 +951,64 @@ function seek(v, d) {
  * The refusal is reported rather than swallowed, so the log says which of
  * the two actually happened.
  */
+/* What may be put full screen, and why it is not "whatever is focused".
+ *
+ * The old target was `v || media() || st.el`, and st.el on a page with no
+ * video at all is a link or a button. That fell into the closest()
+ * ["class contains player"] walk, which on a page with none of those
+ * resolves to the element itself, and the shell then took a <a> full screen
+ * and logged "asked the page for full screen" - a true sentence about a
+ * meaningless act, which reads to a human as if Square had done the thing
+ * Square is for. Full screen is only meaningful for something playing.
+ *
+ * So the focused element qualifies only when it IS a video or sits inside the
+ * chrome wrapped around one - a play button, a scrub bar - and "contains a
+ * video somewhere" is NOT enough to prove that. Every element on a page has
+ * <body> as an ancestor, and on a page with an article and a video in it the
+ * article wrapper contains both; taking the first ancestor with a <video>
+ * under it puts a link's grandparent DIV full screen and tells the same lie
+ * one level up. Two things have to hold:
+ *
+ *   1. It is close. A play button is inside its player's chrome, not six
+ *      layout wrappers above it, so the walk gives up after a few levels and
+ *      never considers body or the document element at all.
+ *   2. It is mostly video. The container's box has to be largely filled by
+ *      the video's box - which is what a player IS, and what a page section
+ *      that merely happens to hold a video is not. A 1250x2400 column with a
+ *      320x180 clip in it fails this by two orders of magnitude; a player
+ *      div hugging its video passes at nearly 1.
+ *
+ * Anything that fails both is refused, honestly, and the shell's own full
+ * screen - which is already covering the television - is what happens. */
+var PLAYER_FILL = 0.4;   // video area / container area before it counts as a player
+var PLAYER_DEPTH = 6;    // ancestors to consider above the focused element
+
+function mostlyVideo(box, v) {
+  var b, r;
+  try { b = box.getBoundingClientRect(); r = v.getBoundingClientRect(); } catch (e) { return false; }
+  var ba = b.width * b.height, ra = r.width * r.height;
+  if (ba <= 0 || ra <= 0) return false;
+  return ra >= ba * PLAYER_FILL;
+}
+
+function playerFor(el) {
+  if (!el || el.nodeType !== 1) return null;
+  if (el.tagName === "VIDEO") return el;
+  var node = el, up = 0;
+  while (node && node.nodeType === 1 && up++ < PLAYER_DEPTH) {
+    if (node === document.body || node === document.documentElement) break;
+    var v = null;
+    try { v = node.querySelector && node.querySelector("video"); } catch (e) {}
+    if (v && mostlyVideo(node, v)) return node;
+    node = node.parentElement || (node.getRootNode && node.getRootNode().host) || null;
+  }
+  return null;
+}
+
 function fullscreen(v) {
   try {
     if (document.fullscreenElement) { document.exitFullscreen(); return "left the page's full screen"; }
-    var target = v || media() || st.el;
+    var target = v || media() || playerFor(st.el);
     if (!target) return "no page full screen available; the shell's is what you get";
     var box = target.closest ? (target.closest("[class*=player],[id*=player],video") || target) : target;
     var p = (box.requestFullscreen ? box.requestFullscreen() : target.requestFullscreen());
@@ -1007,7 +1077,7 @@ function toCursor() {
   st.cy = r ? r.top + r.height / 2 : window.innerHeight / 2;
   st.vx = st.vy = 0;
   paint(); pump();
-  post({ type: "arcnav", ev: "mode", mode: "cursor", items: st.items.length });
+  post({ type: "mosnav", ev: "mode", mode: "cursor", items: st.items.length });
   return "cursor mode";
 }
 
@@ -1016,7 +1086,7 @@ function toSpatial() {
   scan();
   var it = st.items.length ? nearest(st.items, st.cx, st.cy) : null;
   if (it) focusItem(it); else { st.rect = null; paint(); }
-  post({ type: "arcnav", ev: "mode", mode: "spatial", items: st.items.length });
+  post({ type: "mosnav", ev: "mode", mode: "spatial", items: st.items.length });
   return "spatial mode";
 }
 
@@ -1051,6 +1121,68 @@ function cursorHover() {
     el.dispatchEvent(new MouseEvent("mousemove", { bubbles: true, composed: true, clientX: st.cx, clientY: st.cy }));
     el.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, composed: true, clientX: st.cx, clientY: st.cy }));
   } catch (e) {}
+}
+
+/* The D-pad in cursor mode.
+ *
+ * It used to answer "use the stick" and do nothing, which is the wrong
+ * answer twice over: a DualSense stick is not precise enough to put a
+ * pointer on a 20 px close button from across a room, and there is no reason
+ * the coarse control should be dead when the fine one exists. The D-pad now
+ * nudges the same st.cx/st.cy the stick drives, one fixed step per press, so
+ * the human rides the stick to the neighbourhood and taps the pad the last
+ * few pixels.
+ *
+ * The step is a fraction of the SMALLER viewport dimension rather than a
+ * pixel count, because this file runs on a 4K television and on a windowed
+ * 720p WebView both, and a fixed 40 px is either a crawl or a leap depending
+ * on which. 4% puts ~25 presses across the short axis - coarse enough to
+ * cross the screen if you lean on it, fine enough to land on a control. The
+ * floor stops it becoming sub-pixel in a tiny window. */
+var CURSOR_STEP_FRAC = 0.04;
+
+function cursorStepPx() {
+  return Math.max(8, Math.round(Math.min(window.innerWidth, window.innerHeight) * CURSOR_STEP_FRAC));
+}
+
+/* Can the document still move this way? Asked BEFORE scrolling, not measured
+   after: a page with CSS scroll-behavior:smooth has not moved by the time
+   scrollBy() returns, so a before/after comparison would report "did not
+   scroll" for a scroll that is under way. */
+function pageCanScrollY(dy) {
+  var y = window.scrollY || 0;
+  var maxY = Math.max(0, (document.documentElement.scrollHeight || 0) - window.innerHeight);
+  return dy > 0 ? y < maxY - 1 : y > 1;
+}
+
+function cursorStep(dx, dy) {
+  var step = cursorStepPx();
+  var x0 = st.cx, y0 = st.cy;
+  /* Same clamp as the stick path in frame(), so the two controls cannot
+     disagree about where the edge is. */
+  st.cx = Math.max(2, Math.min(Math.max(2, window.innerWidth - 2), st.cx + dx * step));
+  st.cy = Math.max(2, Math.min(Math.max(2, window.innerHeight - 2), st.cy + dy * step));
+
+  if (st.cx !== x0 || st.cy !== y0) {
+    paint();
+    cursorHover();
+    return "cursor moved " + (dx < 0 ? "left" : dx > 0 ? "right" : dy < 0 ? "up" : "down");
+  }
+
+  /* Pinned against the edge. Vertically the stick pushes the page instead of
+     stopping dead (see frame()); the pad mirrors that, by its own step so a
+     press moves the same distance whichever way it is spent. There is no
+     horizontal equivalent to mirror - the stick does not side-scroll at the
+     edge - so left/right simply reports the wall rather than inventing a
+     behaviour the stick does not have. */
+  var edge = dx < 0 ? "left" : dx > 0 ? "right" : dy < 0 ? "top" : "bottom";
+  if (dy && pageCanScrollY(dy)) {
+    window.scrollBy(0, dy * step);
+    /* What is under the cursor changed even though the cursor did not. */
+    cursorHover();
+    return "cursor at " + edge + " edge, scrolled";
+  }
+  return "cursor at " + edge + " edge";
 }
 
 /* ═══ The analog loop ══════════════════════════════════════════════════
@@ -1111,10 +1243,10 @@ function action(name, phase) {
                 (document.fullscreenElement || (st.el && st.el.tagName === "VIDEO"));
 
   switch (name) {
-    case "up":    return inVideo ? volume(v, +0.1) : (st.mode === "cursor" ? "use the stick" : move(0, -1));
-    case "down":  return inVideo ? volume(v, -0.1) : (st.mode === "cursor" ? "use the stick" : move(0, 1));
-    case "left":  return inVideo ? seek(v, -10)    : (st.mode === "cursor" ? "use the stick" : move(-1, 0));
-    case "right": return inVideo ? seek(v, +10)    : (st.mode === "cursor" ? "use the stick" : move(1, 0));
+    case "up":    return inVideo ? volume(v, +0.1) : (st.mode === "cursor" ? cursorStep(0, -1) : move(0, -1));
+    case "down":  return inVideo ? volume(v, -0.1) : (st.mode === "cursor" ? cursorStep(0, 1)  : move(0, 1));
+    case "left":  return inVideo ? seek(v, -10)    : (st.mode === "cursor" ? cursorStep(-1, 0) : move(-1, 0));
+    case "right": return inVideo ? seek(v, +10)    : (st.mode === "cursor" ? cursorStep(1, 0)  : move(1, 0));
 
     case "cross": case "launch": case "select": case "activate":
       return st.mode === "cursor" ? cursorClick() : activate();
@@ -1136,7 +1268,7 @@ function action(name, phase) {
     case "l1": case "tabPlay":  return scrollBy(0, -1, Math.round(window.innerHeight * 0.85)) ? "page up" : "top";
     case "r1": case "tabMedia": return scrollBy(0,  1, Math.round(window.innerHeight * 0.85)) ? "page down" : "bottom";
     case "l3":            return st.mode === "cursor" ? toSpatial() : toCursor();
-    case "r3":            return st.el ? (ensureVisible(st.el), "recentred") : "nothing focused";
+    case "r3":            return st.el ? (ensureVisible(st.el) ? "recentred" : "already in view") : "nothing focused";
     case "rescan":        scan(); reFocus(); return "rescanned: " + st.items.length + " targets";
   }
   return "";
@@ -1210,8 +1342,8 @@ function announce() {
   if (!ensureOverlay()) { setTimeout(guard("announce", announce), 120); return; }
   scan();
   if (st.items.length) focusItem(st.items[0]);
-  else post({ type: "arcnav", ev: "nofocus" });
-  post({ type: "arcnav", ev: "ready", url: location.href, title: document.title, items: st.items.length });
+  else post({ type: "mosnav", ev: "nofocus" });
+  post({ type: "mosnav", ev: "ready", url: location.href, title: document.title, items: st.items.length });
 }
 
 if (document.readyState === "loading")
@@ -1300,7 +1432,7 @@ document.addEventListener("focusin", guard("focusin", function (e) {
   say(requestEdit(el, "page focus"));
 }), true);
 
-window.__arcnav = {
+window.__mosnav = {
   version: VERSION,
 
   /* The same entry point as the {t:"act"} message, exposed so the host can

@@ -1,5 +1,5 @@
-// ARC OS - ShellHostWeb
-// The real ARC OS UI (index.html / boot.html) hosted in WebView2, running as the Windows shell.
+// MarwanOS - ShellHostWeb
+// The real MarwanOS UI (index.html / boot.html) hosted in WebView2, running as the Windows shell.
 //
 // Native plumbing (job-object child tracking, forced-foreground return ladder, exit-code contract,
 // handoff logging) is lifted verbatim from spike/ShellHost/ShellHost.cs, which is the proven host.
@@ -24,8 +24,28 @@ using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
-namespace ArcOs.ShellWeb
+namespace MarwanOs.ShellWeb
 {
+    /// <summary>
+    /// The name this console uses ON DISK, which is deliberately NOT the product name.
+    ///
+    /// The product was renamed from ARC OS to MarwanOS. The machine was not: the install root
+    /// is still C:\ArcOS, the shell account is still 'arcshell', and the per-user state -
+    /// %LOCALAPPDATA%\ArcOS\WebView2 (browser profile, pinned sites, cookies, every installed
+    /// extension) and %LOCALAPPDATA%\ArcOS\library.json (the installed-software scan) - is
+    /// still under the old name.
+    ///
+    /// Renaming these constants does not migrate any of that. It abandons it: a shell that
+    /// boots with a blank browser profile, no extensions, and a full disk re-scan on the home
+    /// rail, with the real data sitting untouched one folder over. So the strings stay, in one
+    /// place, with this note attached, until somebody deliberately moves the folders.
+    /// </summary>
+    internal static class OnDisk
+    {
+        public const string Brand = "ArcOS";
+        public const string Root = @"C:\ArcOS";
+    }
+
     #region Native interop  (copied from ShellHost.cs)
 
     [StructLayout(LayoutKind.Sequential)]
@@ -147,6 +167,45 @@ namespace ArcOs.ShellWeb
     [StructLayout(LayoutKind.Sequential)]
     public struct RECT { public int Left, Top, Right, Bottom; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT { public int X, Y; }
+
+    // ── SendInput, for the pointer the pad drives over a foreign window ──────────────────
+    // Nothing this shell draws can appear over another process's window, so a pointer drawn
+    // by the page would be invisible exactly when it is needed. Windows already draws a
+    // cursor; this is how it gets driven. The union is laid out by hand because C# 5 has no
+    // other way to express it: on x64 the type field is at 0, the union at 8 (IntPtr
+    // alignment), and sizeof(INPUT) is 40 - SendInput rejects any other cbSize.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MOUSEINPUT
+    {
+        public int dx, dy;
+        public uint mouseData, dwFlags, time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct KEYBDINPUT
+    {
+        public ushort wVk, wScan;
+        public uint dwFlags, time;
+        public IntPtr dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    public struct INPUTUNION
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct INPUT
+    {
+        public uint type;
+        public INPUTUNION u;
+    }
+
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     public delegate uint XInputGetStateDelegate(uint dwUserIndex, out XINPUT_STATE pState);
 
@@ -181,6 +240,42 @@ namespace ArcOs.ShellWeb
 
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();
+
+        // --- synthetic input (pointer mode over a foreign window) ---
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetCursorPos(out POINT p);
+        [DllImport("user32.dll")]
+        public static extern int GetSystemMetrics(int nIndex);
+
+        public const uint INPUT_MOUSE = 0;
+        public const uint INPUT_KEYBOARD = 1;
+
+        public const uint MOUSEEVENTF_MOVE = 0x0001;
+        public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
+        public const uint MOUSEEVENTF_LEFTUP = 0x0004;
+        public const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
+        public const uint MOUSEEVENTF_RIGHTUP = 0x0010;
+        public const uint MOUSEEVENTF_WHEEL = 0x0800;
+        public const uint MOUSEEVENTF_HWHEEL = 0x1000;
+        public const uint MOUSEEVENTF_VIRTUALDESK = 0x4000;
+        public const uint MOUSEEVENTF_ABSOLUTE = 0x8000;
+
+        public const uint KEYEVENTF_KEYUP2 = 0x0002;   // KEYEVENTF_KEYUP already exists above
+        public const uint KEYEVENTF_UNICODE = 0x0004;
+
+        public const ushort VK_RETURN = 0x0D;
+        public const ushort VK_ESCAPE = 0x1B;
+        public const ushort VK_PRIOR = 0x21;           // Page Up
+        public const ushort VK_NEXT = 0x22;            // Page Down
+
+        // Virtual screen, in the coordinate space SetCursorPos/SendInput absolute use.
+        public const int SM_XVIRTUALSCREEN = 76;
+        public const int SM_YVIRTUALSCREEN = 77;
+        public const int SM_CXVIRTUALSCREEN = 78;
+        public const int SM_CYVIRTUALSCREEN = 79;
 
         // --- power ---
         // Restart and shut down deliberately do NOT go through here: they are
@@ -429,8 +524,10 @@ namespace ArcOs.ShellWeb
             catch
             {
                 // exe directory not writable (very likely under Shell Launcher) - fall back to LOCALAPPDATA.
+                // "ArcOS", not "MarwanOS": see OnDisk.Brand below. The product was renamed; the
+                // folders on the bench were not, and a rename here silently orphans them.
                 string fallbackDir = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ArcOS");
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), OnDisk.Brand);
                 try { Directory.CreateDirectory(fallbackDir); }
                 catch { }
                 _path = System.IO.Path.Combine(fallbackDir, "shellhostweb-log.txt");
@@ -563,6 +660,15 @@ namespace ArcOs.ShellWeb
         public int BatteryPercent;          // 0-100, approximate: the pad reports 0-10 steps
         public string BatteryState = "";    // discharging | charging | full | temperature-fault | error
         public byte BatteryRaw;
+
+        // The touchpad surface, as opposed to the touchpad BUTTON (which is BTN_TOUCHPAD and
+        // has always been decoded). Two fingers, 12-bit each, 0..1919 x 0..1079 over roughly
+        // 52 x 23 mm of glass. TouchKnown is false on report layouts that carry no touch
+        // block, so a consumer can tell "no fingers" from "this pad's report cannot say".
+        public bool TouchKnown;
+        public bool T1Down, T2Down;
+        public int T1X, T1Y, T2X, T2Y;
+        public int T1Id, T2Id;
     }
 
     /// <summary>
@@ -584,6 +690,18 @@ namespace ArcOs.ShellWeb
     ///     byte 9        L1 R1 L2 R2 Create Options L3 R3 (buttons 5-12, bits 0-7)
     ///     byte 10 b0-2  PS / Touchpad / Mute            (buttons 13-15)
     /// Bluetooth (report 0x31) shifts the whole payload by +1.
+    ///
+    /// The TOUCH SURFACE sits later in the same payload, at payload offset +32 (absolute 33
+    /// wired, 34 over Bluetooth's 0x31), as two four-byte fingers:
+    ///     b0  bit7 = 1 when the finger is NOT down; bits 0-6 = contact id
+    ///     b1  x low 8              b2  low nibble = x high 4, high nibble = y low 4
+    ///     b3  y high 8             -> 12-bit x (0..1919), 12-bit y (0..1079)
+    /// The offset is anchored to the same payload base the sticks and buttons use rather
+    /// than hardcoded per transport, and it is corroborated by the battery byte this decode
+    /// already reads at payload +52: both land where the DualSense full report puts them,
+    /// and both are read defensively, so a wrong guess can only cost the reading itself.
+    /// The Bluetooth COMPATIBILITY report (a DualShock-4-shaped 0x01 frame) has a different
+    /// layout and is left with no touch at all rather than decoded on a guess.
     /// </summary>
     public class DualSense
     {
@@ -765,6 +883,7 @@ namespace ArcOs.ShellWeb
             int family = FamilyOf(_snap.Pid);
             bool loggedTransport = false;
             bool loggedBattery = false;
+            bool loggedTouch = false;
             bool haveBaseline = false;
             long count = 0;
 
@@ -785,9 +904,10 @@ namespace ArcOs.ShellWeb
                 if (got <= 0) continue;
                 count++;
 
-                int stick, btn, trig, btn2Mask, bat;
+                int stick, btn, trig, btn2Mask, bat, touch;
                 string transport;
-                if (!SelectLayout(family, buf[0], len, out stick, out btn, out trig, out btn2Mask, out bat, out transport))
+                if (!SelectLayout(family, buf[0], len, out stick, out btn, out trig, out btn2Mask,
+                                  out bat, out touch, out transport))
                 {
                     if (count < 4)
                         Log.Write("PAD", "unrecognised report: id=0x" + buf[0].ToString("X2") + " len=" + got + " (ignored)");
@@ -828,6 +948,27 @@ namespace ArcOs.ShellWeb
                 s.L2 = buf[trig];
                 s.R2 = buf[trig + 1];
                 s.Status = "streaming";
+
+                // The touch surface. Defensive in exactly the way the battery read is: a
+                // layout with no touch block, or a short read, leaves TouchKnown false rather
+                // than publishing coordinates nobody can trust.
+                if (touch >= 0 && touch + 7 < got)
+                {
+                    try
+                    {
+                        s.TouchKnown = true;
+                        DecodeFinger(buf, touch, out s.T1Down, out s.T1X, out s.T1Y, out s.T1Id);
+                        DecodeFinger(buf, touch + 4, out s.T2Down, out s.T2X, out s.T2Y, out s.T2Id);
+                        if (!loggedTouch && s.T1Down)
+                        {
+                            loggedTouch = true;
+                            Log.Write("PAD", "touch surface at offset " + touch + ": finger 1 down at "
+                                + s.T1X + "," + s.T1Y + " (12-bit, 0-1919 x 0-1079)"
+                                + "  bytes " + Hex4(buf, touch));
+                        }
+                    }
+                    catch { s.TouchKnown = false; }
+                }
 
                 // Battery is a bonus reading, never a precondition: if anything about it is
                 // unexpected the snapshot simply carries BatteryKnown=false and the UI says
@@ -901,7 +1042,16 @@ namespace ArcOs.ShellWeb
         static bool SelectLayout(int family, byte reportId, int length,
             out int stick, out int btn, out int trig, out int btn2Mask, out int bat, out string transport)
         {
-            stick = 0; btn = 0; trig = 0; btn2Mask = 0; bat = -1; transport = "";
+            int touch;
+            return SelectLayout(family, reportId, length, out stick, out btn, out trig,
+                                out btn2Mask, out bat, out touch, out transport);
+        }
+
+        static bool SelectLayout(int family, byte reportId, int length,
+            out int stick, out int btn, out int trig, out int btn2Mask, out int bat,
+            out int touch, out string transport)
+        {
+            stick = 0; btn = 0; trig = 0; btn2Mask = 0; bat = -1; touch = -1; transport = "";
             if (family == FAMILY_DS5)
             {
                 if (reportId == 0x31 && length >= 12)
@@ -909,6 +1059,7 @@ namespace ArcOs.ShellWeb
                     // Bluetooth full report: the wired payload shifted by +1.
                     stick = 2; btn = 9; trig = 6; btn2Mask = 0x07; transport = "BT";
                     bat = 0x35 + 1;
+                    touch = stick + 32;
                     return true;
                 }
                 if (reportId == 0x01 && length <= 64 && length >= 11)
@@ -916,6 +1067,7 @@ namespace ArcOs.ShellWeb
                     // Wired full report. Verified byte-by-byte on the bench.
                     stick = 1; btn = 8; trig = 5; btn2Mask = 0x07; transport = "USB";
                     bat = 0x35;
+                    touch = stick + 32;
                     return true;
                 }
                 if (reportId == 0x01 && length > 64)
@@ -1118,6 +1270,26 @@ namespace ArcOs.ShellWeb
                 sb.Append(b[i].ToString("X2"));
             }
             return sb.ToString();
+        }
+
+        static string Hex4(byte[] b, int at)
+        {
+            return b[at].ToString("X2") + " " + b[at + 1].ToString("X2") + " "
+                 + b[at + 2].ToString("X2") + " " + b[at + 3].ToString("X2");
+        }
+
+        /// <summary>
+        /// One four-byte finger. Bit 7 of the first byte is the INACTIVE flag - it is set
+        /// while nothing is touching - so the sense is inverted here once, at the decode,
+        /// rather than in every consumer.
+        /// </summary>
+        static void DecodeFinger(byte[] b, int at, out bool down, out int x, out int y, out int id)
+        {
+            byte b0 = b[at], b1 = b[at + 1], b2 = b[at + 2], b3 = b[at + 3];
+            down = (b0 & 0x80) == 0;
+            id = b0 & 0x7F;
+            x = b1 | ((b2 & 0x0F) << 8);
+            y = ((b2 & 0xF0) >> 4) | (b3 << 4);
         }
     }
 
@@ -2159,6 +2331,256 @@ namespace ArcOs.ShellWeb
             Native.GetWindowText(hwnd, sb, 256);
             return "hwnd=0x" + hwnd.ToInt64().ToString("X") + " pid=" + pid + " proc=" + name + " title='" + sb + "'";
         }
+
+        public static string Title(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return "";
+            StringBuilder sb = new StringBuilder(256);
+            Native.GetWindowText(hwnd, sb, 256);
+            return sb.ToString();
+        }
+
+        public static int PidOf(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero) return 0;
+            uint pid;
+            Native.GetWindowThreadProcessId(hwnd, out pid);
+            return (int)pid;
+        }
+    }
+
+    #endregion
+
+    #region The pointer  (a real Windows cursor, driven by the pad)
+
+    /// <summary>
+    /// The mouse the DualSense does not have.
+    ///
+    /// The shell's own pointer (ui/mosnav.js cursor mode) is drawn by the page and therefore
+    /// exists only inside a WebView. Over a FOREIGN window - an elevated installer, a
+    /// launcher's sign-in - nothing this process paints can appear at all, so a drawn pointer
+    /// would be invisible at exactly the moment it is the only way through. Windows already
+    /// draws a cursor for every session; this class drives THAT one, with SendInput.
+    ///
+    /// Everything is absolute over the VIRTUAL screen (MOUSEEVENTF_ABSOLUTE |
+    /// MOUSEEVENTF_VIRTUALDESK, normalised to 0..65535) rather than relative: a relative move
+    /// is put through the pointer ballistics ("enhance pointer precision"), so the same stick
+    /// deflection travels a different distance depending on a system setting this shell must
+    /// not read or change. Absolute goes where it is told.
+    ///
+    /// The position is read back from the OS on every step instead of being remembered, so a
+    /// human touching a real mouse mid-move is followed rather than fought; only the
+    /// sub-pixel remainder is carried between ticks, which is what keeps a small stick
+    /// deflection moving slowly instead of not at all.
+    /// </summary>
+    public class PointerMode
+    {
+        double _fracX, _fracY;          // sub-pixel remainder between ticks
+        double _wheelAcc, _hwheelAcc;   // wheel accumulates until it is worth a notch
+        bool _leftDown, _rightDown;
+
+        public bool LeftDown { get { return _leftDown; } }
+        public bool RightDown { get { return _rightDown; } }
+
+        public static POINT Cursor()
+        {
+            POINT p;
+            if (!Native.GetCursorPos(out p)) { p.X = 0; p.Y = 0; }
+            return p;
+        }
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool GetTokenInformation(IntPtr token, int cls, IntPtr info, int len, out int ret);
+        const uint TOKEN_QUERY = 0x0008;
+        const int TokenElevation = 20;
+
+        /// <summary>
+        /// Is the process behind that pid running with an ELEVATED token - the full admin
+        /// token, not the filtered one a signed-in admin's desktop normally runs on?
+        /// 1 = yes, 0 = no, -1 = could not tell (the process would not open, or is gone).
+        ///
+        /// Asked by PointerRule for one reason: since 2026-08-16 the install broker starts an
+        /// `interactive` installer under the CONSOLE USER's linked admin token, at the
+        /// desktop's own (medium) integrity, precisely so that this pointer can drive it. That
+        /// window opens fine (same user, same integrity) and so is invisible to the "refuses
+        /// to open" rule - and its token is the only thing that tells it apart from any other
+        /// window of ours. TokenElevation survives the integrity change (measured on the bench:
+        /// IL=0x2000 elevated=1), which is what makes it usable as the identity test.
+        /// </summary>
+        public static int TokenElevated(int pid)
+        {
+            IntPtr h = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (h == IntPtr.Zero) return -1;
+            IntPtr tok;
+            int result = -1;
+            if (OpenProcessToken(h, TOKEN_QUERY, out tok))
+            {
+                IntPtr buf = Marshal.AllocHGlobal(4);
+                int got;
+                if (GetTokenInformation(tok, TokenElevation, buf, 4, out got))
+                    result = Marshal.ReadInt32(buf) != 0 ? 1 : 0;
+                Marshal.FreeHGlobal(buf);
+                Native.CloseHandle(tok);
+            }
+            Native.CloseHandle(h);
+            return result;
+        }
+
+        public static RECT VirtualScreen()
+        {
+            RECT r;
+            r.Left = Native.GetSystemMetrics(Native.SM_XVIRTUALSCREEN);
+            r.Top = Native.GetSystemMetrics(Native.SM_YVIRTUALSCREEN);
+            int w = Native.GetSystemMetrics(Native.SM_CXVIRTUALSCREEN);
+            int h = Native.GetSystemMetrics(Native.SM_CYVIRTUALSCREEN);
+            if (w <= 0) w = 1920;
+            if (h <= 0) h = 1080;
+            r.Right = r.Left + w;
+            r.Bottom = r.Top + h;
+            return r;
+        }
+
+        /// <summary>
+        /// Absolute move to a point in virtual-screen pixels. Clamped, then normalised.
+        ///
+        /// Returns false when the cursor did NOT end up where it was asked to go although it
+        /// was asked to move somewhere else - which is how this class finds out that Windows
+        /// is refusing the input. SendInput is subject to UIPI: a process may only inject
+        /// input into applications at its own integrity level or lower, and it fails SILENTLY
+        /// - the call succeeds, the input is discarded. See PointerRefused in HostForm.
+        /// </summary>
+        public bool MoveTo(int x, int y)
+        {
+            RECT v = VirtualScreen();
+            int w = v.Right - v.Left, h = v.Bottom - v.Top;
+            if (x < v.Left) x = v.Left;
+            if (y < v.Top) y = v.Top;
+            if (x > v.Right - 1) x = v.Right - 1;
+            if (y > v.Bottom - 1) y = v.Bottom - 1;
+            POINT before = Cursor();
+
+            INPUT[] inp = new INPUT[1];
+            inp[0].type = Native.INPUT_MOUSE;
+            inp[0].u.mi.dx = (int)(((double)(x - v.Left) * 65535.0) / Math.Max(1, w - 1) + 0.5);
+            inp[0].u.mi.dy = (int)(((double)(y - v.Top) * 65535.0) / Math.Max(1, h - 1) + 0.5);
+            inp[0].u.mi.dwFlags = Native.MOUSEEVENTF_MOVE | Native.MOUSEEVENTF_ABSOLUTE
+                                | Native.MOUSEEVENTF_VIRTUALDESK;
+            Native.SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+
+            POINT after = Cursor();
+            if (before.X == x && before.Y == y) return true;         // nothing was asked for
+            return after.X != before.X || after.Y != before.Y;
+        }
+
+        /// <summary>
+        /// Move by a fractional pixel delta, carrying the remainder. Returns 0 when the delta
+        /// did not add up to a whole pixel yet, +1 when the cursor moved, -1 when it was asked
+        /// to move and did not (see MoveTo).
+        /// </summary>
+        public int MoveBy(double dx, double dy)
+        {
+            _fracX += dx; _fracY += dy;
+            int sx = (int)_fracX, sy = (int)_fracY;
+            _fracX -= sx; _fracY -= sy;
+            if (sx == 0 && sy == 0) return 0;
+            POINT p = Cursor();
+            return MoveTo(p.X + sx, p.Y + sy) ? 1 : -1;
+        }
+
+        public void ResetFraction() { _fracX = _fracY = 0; _wheelAcc = _hwheelAcc = 0; }
+
+        public void Button(bool right, bool down)
+        {
+            INPUT[] inp = new INPUT[1];
+            inp[0].type = Native.INPUT_MOUSE;
+            inp[0].u.mi.dwFlags = right
+                ? (down ? Native.MOUSEEVENTF_RIGHTDOWN : Native.MOUSEEVENTF_RIGHTUP)
+                : (down ? Native.MOUSEEVENTF_LEFTDOWN : Native.MOUSEEVENTF_LEFTUP);
+            Native.SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+            if (right) _rightDown = down; else _leftDown = down;
+        }
+
+        /// <summary>Release anything this class is still holding down. Called whenever pointer mode ends.</summary>
+        public void ReleaseButtons()
+        {
+            if (_leftDown) Button(false, false);
+            if (_rightDown) Button(true, false);
+        }
+
+        /// <summary>
+        /// One wheel notch is WHEEL_DELTA (120). The right stick produces pixels-per-tick like
+        /// the browser's inertial scroll does, and those pixels are banked until they are worth
+        /// a notch - anything else either scrolls in unusable jumps or sends 60 messages a
+        /// second to an application that treats each one as three lines.
+        /// </summary>
+        public void WheelPixels(double dy, double dx)
+        {
+            _wheelAcc += dy; _hwheelAcc += dx;
+            const double PxPerNotch = 34.0;
+            int notches = (int)(_wheelAcc / PxPerNotch);
+            if (notches != 0)
+            {
+                _wheelAcc -= notches * PxPerNotch;
+                Wheel(false, notches * 120);
+            }
+            int hn = (int)(_hwheelAcc / PxPerNotch);
+            if (hn != 0)
+            {
+                _hwheelAcc -= hn * PxPerNotch;
+                Wheel(true, hn * 120);
+            }
+        }
+
+        public void Wheel(bool horizontal, int delta)
+        {
+            INPUT[] inp = new INPUT[1];
+            inp[0].type = Native.INPUT_MOUSE;
+            inp[0].u.mi.mouseData = unchecked((uint)delta);
+            inp[0].u.mi.dwFlags = horizontal ? Native.MOUSEEVENTF_HWHEEL : Native.MOUSEEVENTF_WHEEL;
+            Native.SendInput(1, inp, Marshal.SizeOf(typeof(INPUT)));
+        }
+
+        public void KeyTap(ushort vk)
+        {
+            INPUT[] inp = new INPUT[2];
+            inp[0].type = Native.INPUT_KEYBOARD;
+            inp[0].u.ki.wVk = vk;
+            inp[1].type = Native.INPUT_KEYBOARD;
+            inp[1].u.ki.wVk = vk;
+            inp[1].u.ki.dwFlags = Native.KEYEVENTF_KEYUP2;
+            Native.SendInput(2, inp, Marshal.SizeOf(typeof(INPUT)));
+        }
+
+        /// <summary>
+        /// Type a string as text, not as keystrokes: KEYEVENTF_UNICODE carries the character
+        /// itself, so nothing depends on the keyboard layout the machine happens to have and
+        /// no dead key or AltGr combination can turn one character into another. Surrogate
+        /// pairs go through as their two UTF-16 units, which is what the flag expects.
+        /// Returns the number of characters sent.
+        /// </summary>
+        public int TypeText(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return 0;
+            int sent = 0;
+            for (int i = 0; i < s.Length; i++)
+            {
+                char c = s[i];
+                if (c == '\n' || c == '\r') { KeyTap(Native.VK_RETURN); sent++; continue; }
+                INPUT[] inp = new INPUT[2];
+                inp[0].type = Native.INPUT_KEYBOARD;
+                inp[0].u.ki.wScan = c;
+                inp[0].u.ki.dwFlags = Native.KEYEVENTF_UNICODE;
+                inp[1].type = Native.INPUT_KEYBOARD;
+                inp[1].u.ki.wScan = c;
+                inp[1].u.ki.dwFlags = Native.KEYEVENTF_UNICODE | Native.KEYEVENTF_KEYUP2;
+                Native.SendInput(2, inp, Marshal.SizeOf(typeof(INPUT)));
+                sent++;
+                Thread.Sleep(8);      // an installer's edit control drops a burst sent faster
+            }
+            return sent;
+        }
     }
 
     #endregion
@@ -2197,6 +2619,26 @@ namespace ArcOs.ShellWeb
             if (!m.Success) return fallback;
             double v;
             if (double.TryParse(m.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out v)) return v;
+            return fallback;
+        }
+
+        /// <summary>
+        /// A real JSON boolean, with 1/0 accepted as well. The page's own messages are hand-built
+        /// strings in places and JSON.stringify output in others, so "allow":true and "allow":1
+        /// both turn up; Int() reads the first as the fallback and would silently turn an Allow
+        /// into a Deny.
+        /// </summary>
+        public static bool Bool(string json, string key, bool fallback)
+        {
+            if (string.IsNullOrEmpty(json)) return fallback;
+            Match m = Regex.Match(json, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(true|false|-?[0-9]+)",
+                                  RegexOptions.IgnoreCase);
+            if (!m.Success) return fallback;
+            string v = m.Groups[1].Value;
+            if (string.Equals(v, "true", StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(v, "false", StringComparison.OrdinalIgnoreCase)) return false;
+            int n;
+            if (int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out n)) return n != 0;
             return fallback;
         }
 
@@ -2245,7 +2687,7 @@ namespace ArcOs.ShellWeb
     #region SystemApi worker  (the Settings screen's channel into the OS)
 
     /// <summary>
-    /// Runs ArcOs.Sys.SystemApi.Handle() off the UI thread.
+    /// Runs MarwanOs.Sys.SystemApi.Handle() off the UI thread.
     ///
     /// WHY A DEDICATED THREAD AND NOT THE THREAD POOL
     /// SystemApi's contract says Handle() is called from the WebView2 UI thread: calls are
@@ -2284,7 +2726,7 @@ namespace ArcOs.ShellWeb
             _stop = false;
             _thread = new Thread(new ThreadStart(Loop));
             _thread.IsBackground = true;          // never keeps the shell alive at exit
-            _thread.Name = "ArcSysApi";
+            _thread.Name = "MarwanSysApi";
             try { _thread.SetApartmentState(ApartmentState.STA); }
             catch (Exception ex) { Log.Write("SYS", "could not set STA on the worker thread: " + ex.Message); }
             _thread.Start();
@@ -2351,7 +2793,7 @@ namespace ArcOs.ShellWeb
                 // SystemApi.Handle() is documented never to throw. The try/catch is here because
                 // this process is the Windows shell and "documented" is not "proven for every
                 // input"; a thrown exception on this thread would take the whole shell down.
-                envelope = ArcOs.Sys.SystemApi.Handle(request);
+                envelope = MarwanOs.Sys.SystemApi.Handle(request);
             }
             catch (Exception ex)
             {
@@ -2405,7 +2847,7 @@ namespace ArcOs.ShellWeb
     #region FileApi worker  (the file explorer's channel into the file system)
 
     /// <summary>
-    /// Runs ArcOs.Files.FileApi.Handle() off the UI thread, on the same serial-queue pattern
+    /// Runs MarwanOs.Files.FileApi.Handle() off the UI thread, on the same serial-queue pattern
     /// SysWorker uses. It is a separate class rather than a second instance of SysWorker because
     /// the two have genuinely different tolerances: a SystemApi call that takes 1.5 s is worth a
     /// warning, whereas a directory sweep over a 2 TB disk taking 8 s is normal and the explorer's
@@ -2452,7 +2894,7 @@ namespace ArcOs.ShellWeb
             _stop = false;
             _thread = new Thread(new ThreadStart(Loop));
             _thread.IsBackground = true;
-            _thread.Name = "ArcFileApi";
+            _thread.Name = "MarwanFileApi";
             try { _thread.SetApartmentState(ApartmentState.STA); }
             catch (Exception ex) { Log.Write("FS", "could not set STA on the file worker thread: " + ex.Message); }
             _thread.Start();
@@ -2517,7 +2959,7 @@ namespace ArcOs.ShellWeb
                 // for every input it has been given. This process is the Windows shell, so the
                 // claim is belt-and-braced here too: an escaped exception on this thread would
                 // take the television down with it.
-                envelope = ArcOs.Files.FileApi.Handle(command);
+                envelope = MarwanOs.Files.FileApi.Handle(command);
             }
             catch (Exception ex)
             {
@@ -2566,7 +3008,7 @@ namespace ArcOs.ShellWeb
     }
 
     /// <summary>
-    /// The WebView2 host object the explorer probes for second, after window.arcFileApi and
+    /// The WebView2 host object the explorer probes for second, after window.mosFileApi and
     /// before the postMessage channel.
     ///
     /// READ THIS BEFORE ENABLING IT. AddHostObjectToScript dispatches every proxy call onto the
@@ -2584,7 +3026,7 @@ namespace ArcOs.ShellWeb
     {
         public string Handle(string json)
         {
-            try { return ArcOs.Files.FileApi.Handle(json); }
+            try { return MarwanOs.Files.FileApi.Handle(json); }
             catch (Exception ex)
             {
                 Log.Write("FS", "host-object Handle threw (contained): " + ex.ToString());
@@ -2599,7 +3041,7 @@ namespace ArcOs.ShellWeb
     #region LibraryApi worker  (the home rail's channel into what is installed)
 
     /// <summary>
-    /// Runs ArcOs.Library.LibraryApi.Handle() off the UI thread, on the same serial-queue pattern
+    /// Runs MarwanOs.Library.LibraryApi.Handle() off the UI thread, on the same serial-queue pattern
     /// SysWorker and FileWorker use, and on a queue of its own for the same reason FileWorker has
     /// one: a cold library scan is measured in seconds, and if it shared the explorer's queue a
     /// scan started by the home rail would sit in front of every directory read the human is
@@ -2649,7 +3091,7 @@ namespace ArcOs.ShellWeb
             _stop = false;
             _thread = new Thread(new ThreadStart(Loop));
             _thread.IsBackground = true;
-            _thread.Name = "ArcLibraryApi";
+            _thread.Name = "MarwanLibraryApi";
             try { _thread.SetApartmentState(ApartmentState.STA); }
             catch (Exception ex) { Log.Write("LIB", "could not set STA on the library worker thread: " + ex.Message); }
             _thread.Start();
@@ -2716,7 +3158,7 @@ namespace ArcOs.ShellWeb
                 // LibraryApi.Handle() is documented never to throw and its own catch-all proves
                 // it. This process is the Windows shell, so the claim is belt-and-braced here as
                 // well: an escaped exception on this thread would take the television down.
-                envelope = ArcOs.Library.LibraryApi.Handle(command);
+                envelope = MarwanOs.Library.LibraryApi.Handle(command);
             }
             catch (Exception ex)
             {
@@ -2843,7 +3285,7 @@ namespace ArcOs.ShellWeb
 
         readonly Control _parent;                 // the Panel the content views live in
         readonly Action<string> _toPage;          // post a JSON string to the SHELL page
-        readonly string _script;                  // ui/arcnav.js, injected into every document
+        readonly string _script;                  // ui/mosnav.js, injected into every document
         readonly string _userData;
         readonly EventHandler<CoreWebView2AcceleratorKeyPressedEventArgs> _accel;
 
@@ -3019,7 +3461,8 @@ namespace ArcOs.ShellWeb
         // ── Extensions ──────────────────────────────────────────────────────────────────
 
         bool _extensionsDone;
-        public static string ExtensionsFolder = @"C:\ArcOS\extensions";
+        // On-disk name, not the product name - see OnDisk.Brand.
+        public static string ExtensionsFolder = OnDisk.Root + @"\extensions";
 
         /// <summary>
         /// Load every unpacked extension in ExtensionsFolder, once, as soon as there is a
@@ -3203,7 +3646,7 @@ namespace ArcOs.ShellWeb
         /// accepted - it is a zip with a signature header, and the header is skipped.
         ///
         /// EVERY archive is unpacked with ZipFile.ExtractToDirectory into a fresh folder
-        /// under C:\ArcOS\extensions. That call refuses entries that would land outside the
+        /// under C:\ArcOS\extensions (OnDisk.Root). That call refuses entries that would land outside the
         /// destination, which is the zip-slip defence; the extension is then only as
         /// trusted as the human who chose it, which is the same deal as on a desktop.
         /// </summary>
@@ -3581,7 +4024,7 @@ namespace ArcOs.ShellWeb
                 byte[] raw = File.ReadAllBytes(file);
                 int start = CrxPayloadOffset(raw);
                 if (start <= 0 || start >= raw.Length) throw new IOException("that .crx file has no archive inside it");
-                temp = Path.Combine(Path.GetTempPath(), "arcos-ext-" + Guid.NewGuid().ToString("N") + ".zip");
+                temp = Path.Combine(Path.GetTempPath(), "marwanos-ext-" + Guid.NewGuid().ToString("N") + ".zip");
                 using (FileStream fs = new FileStream(temp, FileMode.Create, FileAccess.Write))
                     fs.Write(raw, start, raw.Length - start);
                 zip = temp;
@@ -3864,7 +4307,12 @@ namespace ArcOs.ShellWeb
             s.IsWebMessageEnabled = true;
             s.IsZoomControlEnabled = false;        // zoom is ours, from the pad
             s.IsSwipeNavigationEnabled = false;
-            s.IsBuiltInErrorPageEnabled = true;    // unlike the shell: a dead link needs a page
+            // OFF, and it used to be on. The built-in error page is Chromium's own, and on a
+            // WebView2 runtime that is the EDGE error page - Microsoft wordmark, "Edge",
+            // buttons the pad cannot press. A dead link on this machine must show OUR page,
+            // not Microsoft's, so the failure is reported up to the shell (see the
+            // NavigationCompleted handler) and browser.js draws its own reachable surface.
+            s.IsBuiltInErrorPageEnabled = false;
 
             // Downloads. Every one of them is taken off Chromium and given to the shell page;
             // see the Downloads region below for why a television cannot use the built-in
@@ -3874,11 +4322,32 @@ namespace ArcOs.ShellWeb
                 StartDownload(tab, e);
             };
 
+            // Camera, microphone, location, notifications... Chromium would draw its own bubble
+            // for these, in the child HWND, where the pad cannot reach it. Taken here instead and
+            // asked of the human through the shell's own sheet. See the Permissions region.
+            try
+            {
+                tab.Core.PermissionRequested += delegate(object o, CoreWebView2PermissionRequestedEventArgs e)
+                {
+                    OnPermissionRequested(tab, e);
+                };
+                Log.Write("PERM", "tab " + tab.Id + " permission prompts are the shell's now");
+            }
+            catch (Exception ex)
+            {
+                Log.Write("PERM", "WARN: tab " + tab.Id + " PermissionRequested unavailable on this runtime ("
+                    + ex.Message + ") - Edge's own bubble would be drawn instead");
+            }
+
             tab.Core.NavigationStarting += delegate(object o, CoreWebView2NavigationStartingEventArgs e)
             {
                 tab.Loading = true;
                 tab.Url = e.Uri;
                 tab.Secure = IsSecure(e.Uri);
+                // The page that asked is on its way out. Answering a prompt that belongs to a
+                // document nobody is looking at any more is exactly how a grant ends up on the
+                // wrong origin, so anything outstanding for this tab is denied now.
+                DenyPending(tab, "navigated to " + e.Uri);
                 PushTab(tab);
             };
             tab.Core.NavigationCompleted += delegate(object o, CoreWebView2NavigationCompletedEventArgs e)
@@ -3888,6 +4357,19 @@ namespace ArcOs.ShellWeb
                 try { cb = tab.Core.CanGoBack; cf = tab.Core.CanGoForward; } catch { }
                 Log.Write("BROWSER", "tab " + tab.Id + " navigation " + (e.IsSuccess ? "ok" : "FAILED " + e.WebErrorStatus)
                     + " canBack=" + cb + " canForward=" + cf + " -> " + tab.Url);
+                // With Edge's error page off, a real failure would otherwise leave a blank
+                // content view. Tell the shell page so it can draw its own - but ONLY for the
+                // statuses that mean "the page could not be reached". A download reports as a
+                // failed navigation with ConnectionAborted (the request is handed to the
+                // downloader instead), and OperationCanceled is the human pressing Stop or
+                // walking away; neither is an error and neither gets an error page.
+                if (!e.IsSuccess && tab == _active && IsRealNavError(e.WebErrorStatus))
+                {
+                    Say("{\"type\":\"browser\",\"ev\":\"loaderror\",\"tab\":" + tab.Id
+                        + ",\"status\":\"" + Esc(e.WebErrorStatus.ToString()) + "\""
+                        + ",\"detail\":\"" + Esc(NavErrorText(e.WebErrorStatus)) + "\""
+                        + ",\"url\":\"" + Esc(tab.Url) + "\"}");
+                }
                 PushTab(tab);
             };
             tab.Core.SourceChanged += delegate(object o, CoreWebView2SourceChangedEventArgs e)
@@ -3958,9 +4440,9 @@ namespace ArcOs.ShellWeb
                 if (string.IsNullOrEmpty(raw)) return;
                 // Straight through to the shell page, with the tab stamped on it. The
                 // payload is the injected script's own object; nothing here interprets it,
-                // which is what keeps arcnav.js the single source of truth for its protocol.
+                // which is what keeps mosnav.js the single source of truth for its protocol.
                 if (raw.Length > 1 && raw[0] == '{')
-                    Say("{\"type\":\"browser\",\"ev\":\"arcnav\",\"tab\":" + tab.Id + ",\"msg\":" + raw + "}");
+                    Say("{\"type\":\"browser\",\"ev\":\"mosnav\",\"tab\":" + tab.Id + ",\"msg\":" + raw + "}");
             };
 
             // The native escape hatches, on this controller too. Keyboard focus is never
@@ -3978,9 +4460,9 @@ namespace ArcOs.ShellWeb
             add.ContinueWith(delegate(Task<string> d2)
             {
                 if (d2.IsFaulted)
-                    Log.Write("BROWSER", "tab " + tab.Id + " arcnav injection FAILED: " + d2.Exception.GetBaseException().Message);
+                    Log.Write("BROWSER", "tab " + tab.Id + " mosnav injection FAILED: " + d2.Exception.GetBaseException().Message);
                 else
-                    Log.Write("BROWSER", "tab " + tab.Id + " arcnav injected (id=" + d2.Result + ", "
+                    Log.Write("BROWSER", "tab " + tab.Id + " mosnav injected (id=" + d2.Result + ", "
                         + _script.Length + " bytes)");
                 Activate(tab.Id);
                 if (!string.IsNullOrEmpty(url)) Navigate(url);
@@ -4035,8 +4517,57 @@ namespace ArcOs.ShellWeb
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
+        /// <summary>
+        /// A navigation failure that deserves an error page, as opposed to the two that do
+        /// not: ConnectionAborted (the request became a download) and OperationCanceled (Stop,
+        /// or the human left). Everything else - no such host, refused, timed out, a bad
+        /// certificate - is a page the human tried to reach and could not, and silence there
+        /// is a blank rectangle with no explanation.
+        /// </summary>
+        static bool IsRealNavError(CoreWebView2WebErrorStatus s)
+        {
+            return s != CoreWebView2WebErrorStatus.ConnectionAborted
+                && s != CoreWebView2WebErrorStatus.OperationCanceled
+                && s != CoreWebView2WebErrorStatus.Unknown;
+        }
+
+        /// <summary>The failure as a sentence a human reads, not an enum name.</summary>
+        static string NavErrorText(CoreWebView2WebErrorStatus s)
+        {
+            switch (s)
+            {
+                case CoreWebView2WebErrorStatus.HostNameNotResolved:
+                    return "That address could not be found. Check the spelling, or the connection.";
+                case CoreWebView2WebErrorStatus.CannotConnect:
+                case CoreWebView2WebErrorStatus.ServerUnreachable:
+                    return "The site did not answer. It may be down, or off the network.";
+                case CoreWebView2WebErrorStatus.Timeout:
+                    return "The site took too long to answer.";
+                case CoreWebView2WebErrorStatus.ConnectionReset:
+                case CoreWebView2WebErrorStatus.Disconnected:
+                    return "The connection dropped while the page was loading.";
+                case CoreWebView2WebErrorStatus.CertificateExpired:
+                case CoreWebView2WebErrorStatus.CertificateIsInvalid:
+                case CoreWebView2WebErrorStatus.CertificateRevoked:
+                case CoreWebView2WebErrorStatus.CertificateCommonNameIsIncorrect:
+                    return "The site's security certificate could not be trusted, so it was not opened.";
+                case CoreWebView2WebErrorStatus.ValidAuthenticationCredentialsRequired:
+                case CoreWebView2WebErrorStatus.ValidProxyAuthenticationRequired:
+                    return "The site asked for a sign-in the console could not give it.";
+                case CoreWebView2WebErrorStatus.ErrorHttpInvalidServerResponse:
+                case CoreWebView2WebErrorStatus.RedirectFailed:
+                    return "The site sent something the browser could not make sense of.";
+                default:
+                    return "The page could not be opened.";
+            }
+        }
+
         void Destroy(Tab t)
         {
+            // Before the controller goes: a deferral held on a WebView that is being torn down is
+            // never completed, and an uncompleted deferral is a leak with a prompt on the other
+            // end of it that the human will never be asked.
+            DenyPending(t, "the tab was closed");
             try { if (t.Ctl != null) { t.Ctl.AcceleratorKeyPressed -= _accel; t.Ctl.Close(); } }
             catch (Exception ex) { Log.Write("BROWSER", "closing tab " + t.Id + " threw (swallowed): " + ex.Message); }
             t.Ctl = null; t.Core = null;
@@ -4217,7 +4748,7 @@ namespace ArcOs.ShellWeb
         ///     cannot be operated.
         ///   * IT IS A MOUSE UI. Its buttons (keep, discard, open, "show all downloads")
         ///     are hit-tested targets with no keyboard order that survives our injected
-        ///     navigation layer, and the pad is not a mouse. arcnav.js reaches into the
+        ///     navigation layer, and the pad is not a mouse. mosnav.js reaches into the
         ///     DOCUMENT; the flyout is not in the document.
         ///   * IT DISAPPEARS. It fades after a few seconds, and the only way back to it is
         ///     a toolbar button this browser does not have. A download that failed at 90%
@@ -4574,6 +5105,385 @@ namespace ArcOs.ShellWeb
             Say(b.ToString());
         }
 
+        // ── Permissions ─────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Camera, microphone, location, notifications, clipboard, sensors: the browser's own
+        /// consent prompts, taken away from Chromium and asked through the shell.
+        ///
+        /// WHY. Edge draws these as a bubble anchored inside the content window - the same three
+        /// structural problems as the download flyout, and one more that matters more. It is a
+        /// MOUSE UI inside a child HWND: mosnav.js reaches into the DOCUMENT and the bubble is not
+        /// in the document, so from the sofa it is a dialogue that exists and cannot be answered.
+        /// A permission prompt that cannot be answered is not a safe default either way - Deny by
+        /// timeout looks like the page is broken, and there is no Allow at all.
+        ///
+        /// THE MECHANISM. PermissionRequested gives a deferral. Take it, and the request is parked
+        /// with no UI of any kind on screen; complete it with State set and Chromium never draws
+        /// anything. That is the whole trick, and it is why nothing Microsoft ever appears here:
+        /// the built-in bubble is what an UNHANDLED request produces, and this handler always
+        /// handles it - allow, deny, timeout, tab closed, shell shutting down.
+        ///
+        /// THE ROUND TRIP, over the same channel as loaderror and the download events:
+        ///     host -> shell   {"type":"browser","ev":"permission","id":N,"origin":"https://x",
+        ///                      "uri":"https://x/page","kind":"camera","userInitiated":true}
+        ///     shell -> host   {"type":"browser","cmd":"permission","id":N,"allow":true,"remember":false}
+        /// and, for the settings screen:
+        ///     shell -> host   {"type":"browser","cmd":"permissions.list"}
+        ///     host -> shell   {"type":"browser","ev":"permissions","items":[{origin,kind,allow}]}
+        ///     shell -> host   {"type":"browser","cmd":"permissions.forget","origin":"https://x","kind":"camera"}
+        ///                     (kind omitted = every grant for that origin)
+        ///
+        /// WHO REMEMBERS. Not WebView2. SavesInProfile is turned OFF on every request, so the
+        /// runtime's own per-profile memory never fills in an answer we did not give: this store
+        /// is the only thing that decides, which is what makes "forget" mean something and what
+        /// keeps the list the human is shown the truth. The store is permissions.json in the
+        /// content profile's user-data folder - beside the profile it describes, so wiping the
+        /// browser wipes its grants with it.
+        ///
+        /// 60 SECONDS. A page that asks and is never answered gets Deny. Not remembered: a
+        /// timeout is "nobody was there", not "no".
+        /// </summary>
+        sealed class PermReq
+        {
+            public int Id;
+            public Tab Tab;
+            public string Origin = "";
+            public string Uri = "";
+            public string Kind = "";
+            public CoreWebView2PermissionRequestedEventArgs Args;
+            public CoreWebView2Deferral Deferral;
+            public DateTime Asked = DateTime.UtcNow;
+        }
+
+        const int PermTimeoutMs = 60000;
+
+        readonly Dictionary<string, bool> _perms = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        readonly List<PermReq> _permPending = new List<PermReq>();
+        bool _permsLoaded;
+        int _nextPermId = 1;
+        System.Windows.Forms.Timer _permTimer;
+
+        string PermStorePath()
+        {
+            return Path.Combine(_userData, "permissions.json");
+        }
+
+        static string PermKey(string origin, string kind)
+        {
+            return (origin == null ? "" : origin) + "|" + (kind == null ? "" : kind);
+        }
+
+        /// <summary>
+        /// Load the remembered decisions once per run. The file is written by SavePerms below, so
+        /// the reader is deliberately lenient rather than a parser: three known fields, matched
+        /// wherever they appear, and anything it cannot understand is skipped rather than
+        /// throwing. A corrupt store must cost the human their saved answers, not their browser.
+        /// </summary>
+        void LoadPerms()
+        {
+            if (_permsLoaded) return;
+            _permsLoaded = true;
+            string path = PermStorePath();
+            string text;
+            try
+            {
+                if (!File.Exists(path)) { Log.Write("PERM", "no saved decisions (" + path + ")"); return; }
+                text = File.ReadAllText(path, Encoding.UTF8);
+            }
+            catch (Exception ex) { Log.Write("PERM", "could not read " + path + ": " + ex.Message); return; }
+
+            int n = 0;
+            try
+            {
+                MatchCollection ms = Regex.Matches(text,
+                    "\"origin\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*,\\s*\"kind\"\\s*:\\s*\"([^\"]*)\"\\s*,\\s*\"allow\"\\s*:\\s*(true|false)");
+                foreach (Match m in ms)
+                {
+                    string origin = m.Groups[1].Value.Replace("\\\\", "\\").Replace("\\\"", "\"");
+                    string kind = m.Groups[2].Value;
+                    bool allow = string.Equals(m.Groups[3].Value, "true", StringComparison.OrdinalIgnoreCase);
+                    if (origin.Length == 0 || kind.Length == 0) continue;
+                    _perms[PermKey(origin, kind)] = allow;
+                    n++;
+                }
+            }
+            catch (Exception ex) { Log.Write("PERM", "could not parse " + path + ": " + ex.Message); }
+            Log.Write("PERM", n + " remembered decision(s) loaded from " + path);
+        }
+
+        void SavePerms()
+        {
+            string path = PermStorePath();
+            StringBuilder b = new StringBuilder(256);
+            b.Append("{\"version\":1,\"items\":[");
+            bool first = true;
+            foreach (KeyValuePair<string, bool> kv in _perms)
+            {
+                int bar = kv.Key.LastIndexOf('|');
+                if (bar < 0) continue;
+                if (!first) b.Append(',');
+                first = false;
+                b.Append("{\"origin\":\"").Append(Esc(kv.Key.Substring(0, bar)))
+                 .Append("\",\"kind\":\"").Append(Esc(kv.Key.Substring(bar + 1)))
+                 .Append("\",\"allow\":").Append(kv.Value ? "true" : "false").Append('}');
+            }
+            b.Append("]}");
+            try
+            {
+                Directory.CreateDirectory(_userData);
+                File.WriteAllText(path, b.ToString(), new UTF8Encoding(false));
+            }
+            catch (Exception ex) { Log.Write("PERM", "could not write " + path + ": " + ex.Message); }
+        }
+
+        /// <summary>
+        /// scheme://host[:port] - the unit a grant is given to. A grant belongs to an ORIGIN and
+        /// never to a page: allowing the camera on https://example.com/call must not be a
+        /// different decision from https://example.com/room, and must not extend to
+        /// http://example.com, which is a different origin and a different trust story.
+        /// </summary>
+        static string OriginOf(string uri)
+        {
+            if (string.IsNullOrEmpty(uri)) return "";
+            try
+            {
+                Uri u = new Uri(uri);
+                return u.GetLeftPart(UriPartial.Authority);
+            }
+            catch { return uri; }
+        }
+
+        /// <summary>
+        /// The permission kind as the shell names it: lower camel case, and the two enum names
+        /// that do not translate cleanly spelled out. Written as a switch over the enum's NAME
+        /// rather than over its members so that a runtime or SDK that grows a kind this build has
+        /// never heard of reports "unknown" instead of failing to compile or throwing.
+        /// </summary>
+        static string KindName(CoreWebView2PermissionKind k)
+        {
+            string s;
+            try { s = k.ToString(); }
+            catch { return "unknown"; }
+            switch (s)
+            {
+                case "Microphone": return "microphone";
+                case "Camera": return "camera";
+                case "Geolocation": return "geolocation";
+                case "Notifications": return "notifications";
+                case "OtherSensors": return "otherSensors";
+                case "ClipboardRead": return "clipboardRead";
+                case "MultipleAutomaticDownloads": return "multipleAutomaticDownloads";
+                case "FileReadWrite": return "fileReadWrite";
+                case "Autoplay": return "autoplay";
+                case "LocalFonts": return "localFonts";
+                case "MidiSystemExclusiveMessages": return "midiSystemExclusive";
+                case "WindowManagement": return "windowManagement";
+                default: return "unknown";
+            }
+        }
+
+        void OnPermissionRequested(Tab tab, CoreWebView2PermissionRequestedEventArgs e)
+        {
+            string uri = "";
+            string kind = "unknown";
+            bool userInitiated = false;
+            try { uri = e.Uri == null ? "" : e.Uri; }
+            catch { }
+            try { kind = KindName(e.PermissionKind); }
+            catch { }
+            try { userInitiated = e.IsUserInitiated; }
+            catch { }
+            string origin = OriginOf(uri);
+
+            // WebView2's own memory is switched off deliberately - see the region comment. If the
+            // runtime is too old to have the property, ours still decides; the only cost is that
+            // the runtime may also remember, which can only ever suppress a prompt we would have
+            // answered from the store the same way.
+            try { e.SavesInProfile = false; }
+            catch { }
+
+            CoreWebView2Deferral deferral = null;
+            try { deferral = e.GetDeferral(); }
+            catch (Exception ex)
+            {
+                // No deferral means no time to ask. Deny synchronously rather than let Chromium
+                // draw a bubble the pad cannot answer.
+                Log.Write("PERM", "no deferral available (" + ex.Message + ") - denying " + origin + " " + kind);
+                try { e.State = CoreWebView2PermissionState.Deny; }
+                catch { }
+                return;
+            }
+
+            LoadPerms();
+            bool remembered;
+            if (_perms.TryGetValue(PermKey(origin, kind), out remembered))
+            {
+                Apply(e, deferral, remembered);
+                Log.Write("PERM", origin + " " + kind + " " + (remembered ? "allow" : "deny")
+                    + " remembered (no prompt drawn)");
+                return;
+            }
+
+            PermReq r = new PermReq();
+            r.Id = _nextPermId++;
+            r.Tab = tab;
+            r.Origin = origin;
+            r.Uri = uri;
+            r.Kind = kind;
+            r.Args = e;
+            r.Deferral = deferral;
+            _permPending.Add(r);
+            StartPermTimer();
+
+            Log.Write("PERM", "asking the shell: id=" + r.Id + " tab=" + tab.Id + " " + origin + " " + kind
+                + " userInitiated=" + userInitiated);
+            Say("{\"type\":\"browser\",\"ev\":\"permission\",\"id\":" + r.Id
+                + ",\"tab\":" + tab.Id
+                + ",\"origin\":\"" + Esc(origin) + "\""
+                + ",\"uri\":\"" + Esc(uri) + "\""
+                + ",\"kind\":\"" + Esc(kind) + "\""
+                + ",\"userInitiated\":" + (userInitiated ? "true" : "false") + "}");
+        }
+
+        static void Apply(CoreWebView2PermissionRequestedEventArgs e, CoreWebView2Deferral deferral, bool allow)
+        {
+            try { e.State = allow ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny; }
+            catch (Exception ex) { Log.Write("PERM", "setting the state threw: " + ex.Message); }
+            // ALWAYS, on every path. An uncompleted deferral leaves the page waiting forever and
+            // the request alive inside the browser process.
+            try { if (deferral != null) deferral.Complete(); }
+            catch (Exception ex) { Log.Write("PERM", "completing the deferral threw: " + ex.Message); }
+        }
+
+        /// <summary>The shell's answer. {"type":"browser","cmd":"permission","id":N,"allow":b,"remember":b}</summary>
+        public void PermissionReply(int id, bool allow, bool remember)
+        {
+            PermReq r = null;
+            for (int i = 0; i < _permPending.Count; i++)
+                if (_permPending[i].Id == id) { r = _permPending[i]; _permPending.RemoveAt(i); break; }
+
+            if (r == null)
+            {
+                // Timed out, or the tab went away while the sheet was up. Saying so is worth a
+                // line: from the shell's side the sheet looked answered.
+                Log.Write("PERM", "reply for id=" + id + " arrived too late or twice; ignored");
+                return;
+            }
+
+            Apply(r.Args, r.Deferral, allow);
+            if (remember)
+            {
+                LoadPerms();
+                _perms[PermKey(r.Origin, r.Kind)] = allow;
+                SavePerms();
+            }
+            Log.Write("PERM", r.Origin + " " + r.Kind + " " + (allow ? "allow" : "deny")
+                + " " + (remember ? "remember" : "once"));
+            StopPermTimerIfIdle();
+        }
+
+        public void PermissionsList()
+        {
+            LoadPerms();
+            StringBuilder b = new StringBuilder(128);
+            b.Append("{\"type\":\"browser\",\"ev\":\"permissions\",\"items\":[");
+            bool first = true;
+            foreach (KeyValuePair<string, bool> kv in _perms)
+            {
+                int bar = kv.Key.LastIndexOf('|');
+                if (bar < 0) continue;
+                if (!first) b.Append(',');
+                first = false;
+                b.Append("{\"origin\":\"").Append(Esc(kv.Key.Substring(0, bar)))
+                 .Append("\",\"kind\":\"").Append(Esc(kv.Key.Substring(bar + 1)))
+                 .Append("\",\"allow\":").Append(kv.Value ? "true" : "false").Append('}');
+            }
+            b.Append("],\"store\":\"").Append(Esc(PermStorePath())).Append("\"}");
+            Say(b.ToString());
+        }
+
+        /// <summary>Forget one grant, or every grant for an origin when kind is omitted.</summary>
+        public void PermissionsForget(string origin, string kind)
+        {
+            LoadPerms();
+            if (string.IsNullOrEmpty(origin))
+            {
+                Log.Write("PERM", "permissions.forget with no origin; nothing done");
+                PermissionsList();
+                return;
+            }
+            List<string> dead = new List<string>();
+            foreach (KeyValuePair<string, bool> kv in _perms)
+            {
+                int bar = kv.Key.LastIndexOf('|');
+                if (bar < 0) continue;
+                if (!string.Equals(kv.Key.Substring(0, bar), origin, StringComparison.OrdinalIgnoreCase)) continue;
+                if (!string.IsNullOrEmpty(kind)
+                    && !string.Equals(kv.Key.Substring(bar + 1), kind, StringComparison.OrdinalIgnoreCase)) continue;
+                dead.Add(kv.Key);
+            }
+            for (int i = 0; i < dead.Count; i++) _perms.Remove(dead[i]);
+            SavePerms();
+            Log.Write("PERM", "forgot " + dead.Count + " decision(s) for " + origin
+                + (string.IsNullOrEmpty(kind) ? " (all kinds)" : " " + kind));
+            PermissionsList();
+        }
+
+        /// <summary>
+        /// Deny everything outstanding for one tab (null = every tab). Called when a tab
+        /// navigates, when it is closed, and at shutdown.
+        /// </summary>
+        void DenyPending(Tab tab, string why)
+        {
+            if (_permPending.Count == 0) return;
+            for (int i = _permPending.Count - 1; i >= 0; i--)
+            {
+                PermReq r = _permPending[i];
+                if (tab != null && r.Tab != tab) continue;
+                _permPending.RemoveAt(i);
+                Apply(r.Args, r.Deferral, false);
+                Log.Write("PERM", r.Origin + " " + r.Kind + " deny once (" + why + ")");
+                Say("{\"type\":\"browser\",\"ev\":\"permissiondone\",\"id\":" + r.Id
+                    + ",\"reason\":\"" + Esc(why) + "\"}");
+            }
+            StopPermTimerIfIdle();
+        }
+
+        void StartPermTimer()
+        {
+            if (_permTimer == null)
+            {
+                _permTimer = new System.Windows.Forms.Timer();
+                _permTimer.Interval = 1000;
+                _permTimer.Tick += delegate(object o, EventArgs e) { PermTick(); };
+            }
+            if (!_permTimer.Enabled) _permTimer.Enabled = true;
+        }
+
+        void StopPermTimerIfIdle()
+        {
+            if (_permTimer != null && _permPending.Count == 0) _permTimer.Enabled = false;
+        }
+
+        void PermTick()
+        {
+            DateTime now = DateTime.UtcNow;
+            for (int i = _permPending.Count - 1; i >= 0; i--)
+            {
+                PermReq r = _permPending[i];
+                if ((now - r.Asked).TotalMilliseconds < PermTimeoutMs) continue;
+                _permPending.RemoveAt(i);
+                Apply(r.Args, r.Deferral, false);
+                // NOT remembered. Nobody said no; nobody said anything.
+                Log.Write("PERM", r.Origin + " " + r.Kind + " deny once (no answer in "
+                    + (PermTimeoutMs / 1000) + " s)");
+                Say("{\"type\":\"browser\",\"ev\":\"permissiondone\",\"id\":" + r.Id
+                    + ",\"reason\":\"timeout\"}");
+            }
+            StopPermTimerIfIdle();
+        }
+
         // ── Relay into the page ─────────────────────────────────────────────────────────
 
         public void ToActive(string json)
@@ -4608,7 +5518,7 @@ namespace ArcOs.ShellWeb
         public void Pad(string action, string phase)
         {
             if (_active == null || _active.Core == null) return;
-            string js = "window.__arcnav&&window.__arcnav.act(\"" + Esc(action) + "\",\"" + Esc(phase) + "\")";
+            string js = "window.__mosnav&&window.__mosnav.act(\"" + Esc(action) + "\",\"" + Esc(phase) + "\")";
             try { _active.Core.ExecuteScriptAsync(js); }
             catch (Exception ex)
             {
@@ -4717,10 +5627,10 @@ namespace ArcOs.ShellWeb
         // listens (capture phase) and forwards to the host, plus reports what the Gamepad API sees.
         const string Shim = @"
 (function(){
-  if (window.__arcShim) return;
-  window.__arcShim = true;
+  if (window.__mosShim) return;
+  window.__mosShim = true;
   var post = function(o){ try { window.chrome.webview.postMessage(JSON.stringify(o)); } catch(e){} };
-  window.arcPost = post;
+  window.mosPost = post;
 
   post({type:'ready', target:location.href});
 
@@ -4730,7 +5640,7 @@ namespace ArcOs.ShellWeb
     // listener is on window and therefore runs before the keyboard's own
     // capture handler, so the check has to live here.
     var oskUp = false;
-    try { oskUp = !!(window.ArcOSK && window.ArcOSK.isOpen()); } catch(err){}
+    try { oskUp = !!(window.MarwanOSK && window.MarwanOSK.isOpen()); } catch(err){}
     if (oskUp && (e.key === 'Escape' || e.key === 'Enter')) return;
 
     if (e.key === 'Escape') { post({type:'exit', code:0, target:'Escape'}); return; }
@@ -4739,8 +5649,8 @@ namespace ArcOs.ShellWeb
     // Enter is the page's business once the page has a focus manager: posting
     // launch from here regardless of what is focused would fire the child while
     // the human is three levels deep in a settings panel. Only a page with no
-    // arcPad (the bare probe pages) still gets the old blunt behaviour.
-    if (e.key === 'Enter' && typeof window.arcPad !== 'function') {
+    // mosPad (the bare probe pages) still gets the old blunt behaviour.
+    if (e.key === 'Enter' && typeof window.mosPad !== 'function') {
       post({type:'launch', target:''});
       return;
     }
@@ -4748,8 +5658,8 @@ namespace ArcOs.ShellWeb
 
   var wire = function(){
     var b = document.getElementById('btnLaunch');
-    if (b && !b.__arcWired){
-      b.__arcWired = true;
+    if (b && !b.__mosWired){
+      b.__mosWired = true;
       b.addEventListener('click', function(){ post({type:'launch', target:''}); });
       post({type:'log', target:'shim wired #btnLaunch'});
     }
@@ -4829,9 +5739,9 @@ namespace ArcOs.ShellWeb
     // A page that owns a focus manager takes every action through one entry
     // point; the table below is the fallback for pages that do not have one.
     var r;
-    if (typeof window.arcPad === 'function'){
-      try { r = window.arcPad(m.action, m.phase, m.button); }
-      catch(err){ post({type:'log', target:'arcPad(' + m.action + ') threw: ' + err}); return; }
+    if (typeof window.mosPad === 'function'){
+      try { r = window.mosPad(m.action, m.phase, m.button); }
+      catch(err){ post({type:'log', target:'mosPad(' + m.action + ') threw: ' + err}); return; }
       if (m.phase === 'release' || m.phase === 'repeat') return;   // too chatty for the log
       post({type:'log', target:'pad ' + m.action + ' -> ' + r});
       return;
@@ -4926,6 +5836,10 @@ namespace ArcOs.ShellWeb
             public string Id;          // library entry id, for "is this the same tile?"
             public string Title;
             public string Kind;        // exe | uri | aumid
+            public string EntryKind;   // game | launcher | app - what the LIBRARY calls it,
+                                       // which is a different question from how it was started
+                                       // and the one pointer mode needs: a game reads the pad
+                                       // itself, a launcher expects a mouse.
             public string Target;      // the executable path, for exe launches
             public int Pid;
             public bool Tracked;       // false = URI stub, nothing to wait on
@@ -4937,6 +5851,41 @@ namespace ArcOs.ShellWeb
         // gone: _childRunning stays true so the same tile raises it again instead of starting
         // a second copy.
         bool _shellPulledForward;
+
+        // ── Pointer mode ─────────────────────────────────────────────────────────────────
+        // See the "pointer mode" region below for the rules. These live here because the pad
+        // pump, the foreground gate and the web-message router all touch them.
+        readonly System.Windows.Forms.Timer _ptrTimer = new System.Windows.Forms.Timer();
+        readonly PointerMode _ptr = new PointerMode();
+        bool _ptrOn;
+        string _ptrReason = "";
+        int _ptrManual;                       // 0 = follow the rules, +1 = L3 on, -1 = L3 off
+        int _ptrManualSaved;
+        DateTime _ptrEvalAt = DateTime.MinValue;
+        bool _ptrTyping;                      // the OSK is up on the shell, for a foreign window
+        IntPtr _ptrTypeHwnd = IntPtr.Zero;
+        string _ptrTypeTitle = "";
+        POINT _ptrMoveFrom;
+        bool _ptrMoving;
+        // --walk stick tokens: a synthetic thumbstick, so pointer mode is drivable with
+        // --no-pad on a bench where the live shell owns the real one.
+        double _synthLX, _synthLY, _synthRX, _synthRY;
+        DateTime _synthUntil = DateTime.MinValue;
+
+        // The touchpad, as a trackpad. Contact state lives here rather than in the reader
+        // thread because it is per-gesture, and a gesture spans reports.
+        bool _touchDown, _touchTwo;
+        int _touchLastX, _touchLastY;
+        DateTime _touchStart = DateTime.MinValue;
+        double _touchTravel;
+        // …and its synthetic twin, for --walk.
+        bool _synthTouch, _synthTouchTwo;
+        int _stx0, _sty0, _stx1, _sty1, _stMs;
+        DateTime _stStart = DateTime.MinValue;
+
+        // Windows refusing the input (UIPI). See PointerRefused.
+        int _ptrRefusals;
+        IntPtr _ptrBlockedFor = IntPtr.Zero;
 
         int _ownPid;
         bool _padGateClosed;
@@ -5026,6 +5975,12 @@ namespace ArcOs.ShellWeb
         int _selfTestAt;
         DateTime _selfTestNext = DateTime.MaxValue;
 
+        // A walk step that is still holding a button down. See the hold:/press:/release:
+        // vocabulary in OnTick - a press with no release is how a HOLD is expressed, and
+        // this is the timer that eventually lets go of it.
+        DateTime _walkRelAt = DateTime.MaxValue;
+        string _walkRelAction, _walkRelButton;
+
         // The Settings screen's channel into SystemApi. Runs on its own thread; see SysWorker.
         SysWorker _sys;
 
@@ -5057,7 +6012,7 @@ namespace ArcOs.ShellWeb
             TopMost = false;                    // hard requirement: never fight games
             ShowInTaskbar = true;               // needed so restore-from-minimized behaves
             KeyPreview = true;
-            Text = "ARC OS";
+            Text = "MarwanOS";
             DoubleBuffered = true;
 
             Rectangle b = Screen.PrimaryScreen.Bounds;
@@ -5098,6 +6053,166 @@ namespace ArcOs.ShellWeb
             FormClosing += OnClosingForm;
         }
 
+        #region external URL handoff  (MarwanOS as the machine's browser)
+
+        // Set once the shell page - not boot.html - has finished loading. Nothing can be
+        // asked of the page before that, and a URL handed to the shell during the boot
+        // sequence is normal: the console autologs in, and a queued link from the last
+        // session arrives while the boot animation is still playing.
+        bool _shellPageUp;
+
+        // The URL an outside process handed us that the page has not been told about yet.
+        // One slot, last-wins, same reasoning as the on-disk queue in OpenUrl.cs.
+        string _openUrlPending;
+
+        // The on-disk queue is read exactly once per shell start.
+        bool _openUrlFileRead;
+
+        const int WM_COPYDATA_MSG = 0x004A;
+        const int OpenUrlMagic = 0x4D4F5355;   // 'MOSU' - the tag MarwanOpenUrl.exe sends
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct COPYDATASTRUCT
+        {
+            public IntPtr dwData;
+            public int cbData;
+            public IntPtr lpData;
+        }
+
+        /// <summary>
+        /// The receiving end of MarwanOpenUrl.exe.
+        ///
+        /// This is how a link clicked anywhere on the machine - in a game's launcher, in
+        /// Riot's client, in a file explorer - ends up in the console's own browser instead
+        /// of starting a second copy of the shell. See the header of OpenUrl.cs for why the
+        /// registered handler is a separate program and this is only its inbox.
+        ///
+        /// The message is trusted no further than any other local caller: anything running
+        /// in this session can post it, so the URL is re-validated here rather than on the
+        /// sender's word. Returning 1 tells the sender it was accepted; returning 0 makes
+        /// the sender fall through to its queue, which is the honest answer when the page
+        /// is not up yet - except that we hold it ourselves, so we return 1 either way and
+        /// deliver when the page arrives.
+        /// </summary>
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_COPYDATA_MSG && m.LParam != IntPtr.Zero)
+            {
+                COPYDATASTRUCT cds = (COPYDATASTRUCT)Marshal.PtrToStructure(m.LParam, typeof(COPYDATASTRUCT));
+                if (cds.dwData.ToInt64() == OpenUrlMagic)
+                {
+                    string url = null;
+                    try
+                    {
+                        if (cds.cbData > 0 && cds.cbData <= 8192 && cds.lpData != IntPtr.Zero)
+                            url = Marshal.PtrToStringUni(cds.lpData, cds.cbData / 2).TrimEnd('\0');
+                    }
+                    catch (Exception ex) { Log.Write("OPENURL", "unreadable WM_COPYDATA: " + ex.Message); }
+
+                    m.Result = AcceptOpenUrl(url, "WM_COPYDATA") ? new IntPtr(1) : IntPtr.Zero;
+                    return;
+                }
+            }
+            base.WndProc(ref m);
+        }
+
+        /// <summary>
+        /// http, https and file only, 2048 characters, no control characters - the same rule
+        /// the sender applies, applied again because this end is the one that matters.
+        /// </summary>
+        static bool UrlIsOpenable(string url)
+        {
+            if (string.IsNullOrEmpty(url) || url.Length > 2048) return false;
+            for (int i = 0; i < url.Length; i++) if (char.IsControl(url[i])) return false;
+
+            Uri u;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out u)) return false;
+            string s = u.Scheme.ToLowerInvariant();
+            return s == "http" || s == "https" || s == "file";
+        }
+
+        bool AcceptOpenUrl(string url, string via)
+        {
+            if (!UrlIsOpenable(url))
+            {
+                Log.Write("OPENURL", "REFUSED (" + via + "): '"
+                    + (url == null ? "(null)" : (url.Length > 160 ? url.Substring(0, 160) + "..." : url)) + "'");
+                return false;
+            }
+
+            Log.Write("OPENURL", "accepted (" + via + "): " + url);
+            _openUrlPending = url;
+            DrainOpenUrl();
+            return true;
+        }
+
+        /// <summary>
+        /// Hand whatever is waiting to the page, once the page exists.
+        ///
+        /// It goes through the same {"type":"browse"} message --browse uses, for the same
+        /// reason: calling BrowserHost.OpenBrowser directly would show a content view with
+        /// no chrome around it and no bounds set. The page opens the browser the way Cross
+        /// opens it.
+        ///
+        /// The shell is also pulled to the foreground. A link is only ever clicked by
+        /// something the person is looking at, and if that something was a game running in
+        /// front of the shell, opening a tab behind it would look like nothing happened.
+        /// </summary>
+        void DrainOpenUrl()
+        {
+            if (!_shellPageUp) return;
+
+            // The queue file is read on the first drain after the page comes up, whether or
+            // not something live is already waiting - reading it only when the live slot is
+            // empty would leave a queued URL unread forever on any start where a link was
+            // clicked during the boot sequence, and leave the file on disk to reopen at the
+            // next boot instead.
+            if (!_openUrlFileRead)
+            {
+                _openUrlFileRead = true;
+                string queued = ReadQueuedUrl();
+                if (!string.IsNullOrEmpty(queued))
+                {
+                    if (string.IsNullOrEmpty(_openUrlPending)) _openUrlPending = queued;
+                    else Log.Write("OPENURL", "dropping the queued URL in favour of the live one: " + queued);
+                }
+            }
+
+            if (string.IsNullOrEmpty(_openUrlPending)) return;
+
+            string url = _openUrlPending;
+            _openUrlPending = null;
+
+            Log.Write("OPENURL", "asking the page to open " + url);
+            PostToPage("{\"type\":\"browse\",\"url\":\"" + JsonEsc(url) + "\"}");
+
+            string how = Foreground.ForceForeground(Handle);
+            Log.Write("OPENURL", "foreground for the shell: " + (how == null ? "FAILED" : how));
+        }
+
+        /// <summary>
+        /// The one-slot queue MarwanOpenUrl.exe writes when no shell was running. Read once
+        /// and deleted, so a link clicked yesterday does not reopen on every boot from now on.
+        /// </summary>
+        string ReadQueuedUrl()
+        {
+            string path = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                OnDisk.Brand + "\\openurl\\pending.url");
+            try
+            {
+                if (!File.Exists(path)) return null;
+                string url = File.ReadAllText(path).Trim();
+                File.Delete(path);
+                if (!UrlIsOpenable(url)) { Log.Write("OPENURL", "queued URL refused: " + url); return null; }
+                Log.Write("OPENURL", "picked up a URL queued while the shell was down: " + url);
+                return url;
+            }
+            catch (Exception ex) { Log.Write("OPENURL", "could not read " + path + ": " + ex.Message); return null; }
+        }
+
+        #endregion
+
         #region startup
 
         void OnLoadForm(object sender, EventArgs e)
@@ -5125,6 +6240,22 @@ namespace ArcOs.ShellWeb
             _timer.Interval = 200;
             _timer.Tick += OnTick;
             _timer.Start();
+
+            // Pointer mode runs on its own 60 Hz timer rather than on the pad's, because it
+            // must work with --no-pad (the bench drives it from --walk tokens while the live
+            // shell owns the real DualSense) and because it has to keep evaluating what is in
+            // the foreground even when nobody is touching anything.
+            _ptrTimer.Interval = 16;
+            _ptrTimer.Tick += PointerTimerTick;
+            _ptrTimer.Start();
+            Log.Write("PTR", _opt.PtrDisabled
+                ? "pointer mode DISABLED by --ptr=off"
+                : "pointer mode armed" + (_opt.PtrForce ? " and FORCED ON by --ptr=on" : "")
+                  + ": touchpad surface and left stick both move the cursor, d-pad steps "
+                  + PtrStepPx + " px, Cross and the touchpad button = left, Square = right,"
+                  + " two fingers or the right stick = wheel, a touchpad tap = a click,"
+                  + " L1/R1=PageUp/PageDown, Options=Enter, Circle=Escape, Triangle=keyboard,"
+                  + " L3 toggles. Off whenever this shell's own window is in front.");
 
             if (_opt.NoPad)
             {
@@ -5277,32 +6408,32 @@ namespace ArcOs.ShellWeb
             {
                 try
                 {
-                    core.AddHostObjectToScript("arcFiles", new FileApiBridge());
-                    Log.Write("FS", "host object 'arcFiles' registered (--file-host-object). "
+                    core.AddHostObjectToScript("mosFiles", new FileApiBridge());
+                    Log.Write("FS", "host object 'mosFiles' registered (--file-host-object). "
                         + "WARNING: FileApi will run on the UI thread for every call the explorer makes.");
                 }
                 catch (Exception ex)
                 {
-                    Log.Write("FS", "AddHostObjectToScript('arcFiles') failed: " + ex.Message
+                    Log.Write("FS", "AddHostObjectToScript('mosFiles') failed: " + ex.Message
                         + " - the explorer will fall back to the {type:\"fs\"} message channel");
                 }
             }
             else
             {
-                Log.Write("FS", "host object 'arcFiles' NOT registered; the explorer will select the "
+                Log.Write("FS", "host object 'mosFiles' NOT registered; the explorer will select the "
                     + "{type:\"fs\"} message channel, which is answered on the FileApi worker thread");
             }
 
             // The browser. Its injected navigation layer is read off disk rather than being
-            // a string constant in here: ui/arcnav.js is real, checkable JavaScript, and the
+            // a string constant in here: ui/mosnav.js is real, checkable JavaScript, and the
             // host is only its courier. A missing file disables the browser and says so; it
             // does not stop the shell.
             try
             {
-                string navPath = Path.Combine(_opt.AssetFolder, "arcnav.js");
+                string navPath = Path.Combine(_opt.AssetFolder, "mosnav.js");
                 if (!File.Exists(navPath))
                 {
-                    Log.Write("BROWSER", "arcnav.js is not next to index.html (" + navPath
+                    Log.Write("BROWSER", "mosnav.js is not next to index.html (" + navPath
                         + ") - the browser will refuse to open rather than load pages it cannot navigate");
                 }
                 else
@@ -5310,7 +6441,7 @@ namespace ArcOs.ShellWeb
                     string nav = File.ReadAllText(navPath);
                     _browser = new BrowserHost(_contentPanel, PostToPage, nav,
                         _opt.UserDataFolder + "-content", OnAcceleratorKey);
-                    Log.Write("BROWSER", "browser host ready; arcnav.js is " + nav.Length
+                    Log.Write("BROWSER", "browser host ready; mosnav.js is " + nav.Length
                         + " bytes, cap " + BrowserHost.MaxTabs + " tabs");
                 }
             }
@@ -5347,6 +6478,7 @@ namespace ArcOs.ShellWeb
         void NavigateToStart()
         {
             string url = _opt.ResolveStartUrl();
+            Log.Write("NAV", "start url decided: " + _opt.StartUrlReason);
             Log.Write("NAV", "navigating to " + url);
             try
             {
@@ -5381,6 +6513,15 @@ namespace ArcOs.ShellWeb
             if (qmark >= 0) src = src.Substring(0, qmark);
 
             bool onShell = src.EndsWith("index.html", StringComparison.OrdinalIgnoreCase);
+
+            // The page can be asked for things from here on. Anything an outside process
+            // handed us during the boot sequence - or left in the queue file while the shell
+            // was down - is delivered now. See the external URL handoff region.
+            if (e.IsSuccess && onShell && !_shellPageUp)
+            {
+                _shellPageUp = true;
+                DrainOpenUrl();
+            }
 
             if (_opt.PadSelfTest && e.IsSuccess && _selfTestNext == DateTime.MaxValue && onShell)
             {
@@ -5707,6 +6848,17 @@ namespace ArcOs.ShellWeb
                     HandleAppMessage(raw, Json.Str(raw, "cmd"));
                     break;
 
+                // Pointer mode's one page-facing channel, and it exists for one thing: typing.
+                //   host->page {"type":"ptr","ev":"type","title":"<window>"}   open the keyboard
+                //   page->host {"type":"ptr","cmd":"text","text":"…","enter":1} type it and go back
+                //   page->host {"type":"ptr","cmd":"cancel"}                    go back, type nothing
+                //   page->host {"type":"ptr","cmd":"state"}                     where is the cursor
+                // Everything else about the pointer is host-side; the page is never asked to
+                // draw it, because over a foreign window it could not.
+                case "ptr":
+                    HandlePointerMessage(raw, Json.Str(raw, "cmd"));
+                    break;
+
                 // Battery and transport for the pad the host itself is reading over raw HID.
                 // The page's Gamepad API view cannot see either.
                 case "padinfo":
@@ -5747,7 +6899,7 @@ namespace ArcOs.ShellWeb
             {
                 Log.Write("BROWSER", "browser command '" + cmd + "' but the browser host never started");
                 PostToPage("{\"type\":\"browser\",\"ev\":\"unavailable\",\"detail\":\"this host build "
-                    + "could not load arcnav.js, so it will not open pages it cannot navigate\"}");
+                    + "could not load mosnav.js, so it will not open pages it cannot navigate\"}");
                 return;
             }
 
@@ -5781,6 +6933,21 @@ namespace ArcOs.ShellWeb
                 // only carries the verb to the operation the host is holding.
                 case "download":
                     _browser.DownloadCommand(Json.Str(raw, "do"), Json.Int(raw, "id", 0));
+                    break;
+
+                // Permissions. The answer to one {"ev":"permission"} the host asked, and the two
+                // management verbs behind the settings list. See the Permissions region in
+                // BrowserHost for the whole round trip.
+                case "permission":
+                    _browser.PermissionReply(Json.Int(raw, "id", 0),
+                                             Json.Bool(raw, "allow", false),
+                                             Json.Bool(raw, "remember", false));
+                    break;
+                case "permissions.list":
+                    _browser.PermissionsList();
+                    break;
+                case "permissions.forget":
+                    _browser.PermissionsForget(Json.Str(raw, "origin"), Json.Str(raw, "kind"));
                     break;
 
                 // Extensions: list, install from a file or folder, enable, disable, remove.
@@ -6280,6 +7447,12 @@ namespace ArcOs.ShellWeb
         {
             _timer.Stop();
             _padTimer.Stop();
+            // A mouse button this process pressed and never released would be held down by
+            // the SESSION, not by this process, and would survive it. Nothing else in the
+            // system can undo that.
+            _ptrTimer.Stop();
+            try { _ptr.ReleaseButtons(); }
+            catch { }
             // Haptics first: it must get its zero-write in while the pad is still open.
             try { if (_haptics != null) _haptics.Stop(); }
             catch { }
@@ -6343,7 +7516,9 @@ namespace ArcOs.ShellWeb
             // through the shell page: a cursor being pushed around by a thumbstick is 30
             // messages a second and there is nothing for index.html to decide about any of
             // them. BrowserHost.Axes() no-ops unless the content pane actually owns input.
-            if (_browser != null && _browser.Open && s.Connected && !PadInputGated())
+            // …unless the pointer owns the sticks. The two must never both act on one push:
+            // the browser's cursor would drift behind a window nobody can see it through.
+            if (_browser != null && _browser.Open && s.Connected && !PadInputGated() && !_ptrOn)
             {
                 _browser.Axes(
                     ((int)s.LX - 128) / 127.0, ((int)s.LY - 128) / 127.0,
@@ -6614,6 +7789,758 @@ namespace ArcOs.ShellWeb
             return _gateClosedCache;
         }
 
+        #region pointer mode  (the pad as a mouse, over a window this shell did not draw)
+
+        // ── Why this exists ──────────────────────────────────────────────────────────────
+        //
+        // The foreground gate above is correct and it leaves a hole. When the foreground is
+        // NOT the shell, every pad press is dropped - which is right for a game, because the
+        // game is reading the pad itself, and wrong for everything that is not a game. An
+        // elevated installer opened by the install broker, a launcher's sign-in window, a
+        // client that is not in Big Picture: those are mouse UIs on a console with no mouse,
+        // and until now the pad simply could not touch them.
+        //
+        // It has to be done at the host, not in the page: nothing this process DRAWS can
+        // appear over another process's window, so a pointer painted by the shell would be
+        // invisible exactly where it is needed. Windows draws the cursor; this drives it.
+        //
+        // ── When it turns itself on ──────────────────────────────────────────────────────
+        // In order, first match wins:
+        //   1. the shell's own window is in front            -> OFF (the page navigates itself)
+        //   2. the human pressed L3 out here                  -> whatever they chose, until (1)
+        //   3. --ptr=on                                       -> ON (test instances)
+        //   4. the front window belongs to the tree we launched, and that entry is a GAME
+        //                                                     -> OFF (it reads the pad itself)
+        //   5. the front process is a known launcher          -> ON
+        //   6. the entry we launched calls itself launcher/app-> ON
+        //   7. the front window covers the whole screen and is nothing we recognise
+        //                                                     -> OFF (assume a game)
+        //   8. the front process refuses to open              -> ON (elevated / SYSTEM: the
+        //      install broker's interactive installers landed here until 2026-08-16, and
+        //      anything running as a different user still does - which by definition cannot
+        //      be reading this pad)
+        //   8b. it opens, but runs on an ELEVATED token       -> ON (the install broker's
+        //      interactive installers land here NOW: started under the console user's own
+        //      admin token at the desktop's integrity, so that SendInput actually reaches
+        //      them - a SYSTEM or High window swallows it, see PointerRefused)
+        //   9. anything else                                  -> OFF
+        //
+        // Rule 8 is a permission test used as an identity test, and that is deliberate: a
+        // standard user cannot OpenProcess a SYSTEM process for anything, so the failure is
+        // stable, needs no privilege of its own, and is exactly the class of window the pad
+        // could not reach. Rule 8b is the same idea one notch down: a window of ours that
+        // carries an elevated token was put there by something privileged on our behalf.
+        // Rule 4 and rule 7 stand in front of both so that an anti-cheat that seals its own
+        // game process (Vanguard does) cannot be mistaken for an installer.
+
+        void PointerTimerTick(object sender, EventArgs e)
+        {
+            try { PointerPump(); }
+            catch (Exception ex) { Log.Write("PTR", "pointer tick caught (swallowed): " + ex.Message); }
+        }
+
+        const double PtrSpeed = 15.0;      // px per 16 ms tick at full deflection == ui/mosnav.js
+        const double PtrScroll = 22.0;     // px per tick of wheel intent, likewise
+        const int PtrStepPx = 8;           // one d-pad press
+
+        void PointerPump()
+        {
+            DateTime now = DateTime.Now;
+            if ((now - _ptrEvalAt).TotalMilliseconds >= 250)
+            {
+                _ptrEvalAt = now;
+                PointerEvaluate();
+            }
+            if (!_ptrOn) return;
+
+            double lx, ly, rx, ry;
+            PointerSticks(out lx, out ly, out rx, out ry);
+
+            double vx = StickCurve(lx), vy = StickCurve(ly);
+            double sy = StickCurve(ry), sx = StickCurve(rx) * 0.6;
+
+            if (vx != 0 || vy != 0)
+            {
+                if (!_ptrMoving) { _ptrMoving = true; _ptrMoveFrom = PointerMode.Cursor(); }
+                PointerRefused(_ptr.MoveBy(vx * PtrSpeed, vy * PtrSpeed));
+            }
+            else if (_ptrMoving)
+            {
+                _ptrMoving = false;
+                POINT to = PointerMode.Cursor();
+                Log.Write("PTR", "stick move (" + _ptrMoveFrom.X + "," + _ptrMoveFrom.Y + ") -> ("
+                    + to.X + "," + to.Y + ")  d=(" + (to.X - _ptrMoveFrom.X) + "," + (to.Y - _ptrMoveFrom.Y) + ")");
+                _ptr.ResetFraction();
+            }
+
+            if (sx != 0 || sy != 0) _ptr.WheelPixels(-sy * PtrScroll, sx * PtrScroll);
+
+            PointerTouchPump();
+        }
+
+        // ── The touchpad, as a trackpad ──────────────────────────────────────────────────
+        //
+        // The DualSense has a 52 x 23 mm glass surface reporting 1920 x 1080 units, and until
+        // now this shell used only the BUTTON under it. As a pointer source it is the thing
+        // on the pad that is already a mouse: relative motion, no dead zone, no acceleration
+        // curve to fight, and a human already knows how to use one.
+        //
+        // Relative, never absolute. Landing the cursor wherever the thumb happens to touch
+        // down would move it a screenful on every contact; a trackpad that does that is
+        // unusable, which is why first contact only seeds the reference point.
+        //
+        // The gains: 0.55 px per unit across, and 0.55 * (36.9/47) down, because the surface
+        // reports 36.9 units per mm across and 47 per mm down. Without that correction a
+        // circle drawn with the thumb comes out as an ellipse.
+        //
+        // 0.55 was measured, not chosen: the first bench run used 1.6 and a single drag
+        // across the glass threw the cursor into the far edge of a 3440 px screen and stayed
+        // there. At 0.55, with the acceleration below, a full sweep of the pad is a little
+        // more than half the screen at thumb speed and about two thirds of it at a flick,
+        // which is the ratio a laptop trackpad has.
+        const double TouchGain = 0.55;
+        const double TouchGainY = TouchGain * 36.9 / 47.0;
+        const double TouchScroll = 0.9;      // units -> wheel pixels, two fingers
+        const int TapMs = 150;               // a contact shorter than this…
+        const int TapTravel = 10;            // …that moved less than this, is a tap
+
+        void PointerTouchPump()
+        {
+            bool down, two;
+            int tx, ty;
+            PointerTouchSample(out down, out tx, out ty, out two);
+
+            if (down && !_touchDown)
+            {
+                _touchDown = true;
+                _touchTwo = two;
+                _touchLastX = tx; _touchLastY = ty;
+                _touchStart = DateTime.Now;
+                _touchTravel = 0;
+                Log.Write("PTR", "touch down at " + tx + "," + ty + (two ? " (two fingers)" : ""));
+                return;                        // no motion on the contact itself
+            }
+
+            if (down && _touchDown)
+            {
+                int dx = tx - _touchLastX, dy = ty - _touchLastY;
+                _touchLastX = tx; _touchLastY = ty;
+                if (dx == 0 && dy == 0) return;
+                _touchTravel += Math.Abs(dx) + Math.Abs(dy);
+                if (two && !_touchTwo) { _touchTwo = true; Log.Write("PTR", "touch: second finger down, scrolling"); }
+
+                if (_touchTwo)
+                {
+                    // Two fingers scroll, in the direction the fingers move (content follows
+                    // the fingers), which is what every trackpad on this machine does.
+                    _ptr.WheelPixels(-dy * TouchScroll, dx * TouchScroll);
+                    return;
+                }
+
+                // Light acceleration: a slow drag is 1:1-ish for placing the cursor on a
+                // small control, a fast flick crosses a 3440 px screen without lifting.
+                double speed = Math.Sqrt((double)dx * dx + (double)dy * dy);
+                double accel = 1.0 + Math.Min(1.2, speed / 30.0);
+                PointerRefused(_ptr.MoveBy(dx * TouchGain * accel, dy * TouchGainY * accel));
+                return;
+            }
+
+            if (!down && _touchDown)
+            {
+                _touchDown = false;
+                double ms = (DateTime.Now - _touchStart).TotalMilliseconds;
+                bool tap = !_touchTwo && ms < TapMs && _touchTravel < TapTravel;
+                _touchTwo = false;
+                _ptr.ResetFraction();
+                if (tap)
+                {
+                    POINT p = PointerMode.Cursor();
+                    _ptr.Button(false, true);
+                    _ptr.Button(false, false);
+                    Log.Write("PTR", "touch tap -> left click at (" + p.X + "," + p.Y + ")"
+                        + "  [" + (int)ms + " ms, " + (int)_touchTravel + " units]");
+                }
+                else
+                {
+                    Log.Write("PTR", "touch up after " + (int)ms + " ms, " + (int)_touchTravel + " units");
+                }
+            }
+        }
+
+        /// <summary>
+        /// One finger, from whichever source is real: the synthetic drag a --walk token is
+        /// playing, or the pad's own touch surface.
+        /// </summary>
+        void PointerTouchSample(out bool down, out int x, out int y, out bool two)
+        {
+            down = false; x = 0; y = 0; two = false;
+            if (_synthTouch)
+            {
+                double ms = (DateTime.Now - _stStart).TotalMilliseconds;
+                if (ms > _stMs) { _synthTouch = false; return; }
+                double t = _stMs <= 0 ? 1.0 : ms / _stMs;
+                down = true;
+                two = _synthTouchTwo;
+                x = (int)(_stx0 + (_stx1 - _stx0) * t);
+                y = (int)(_sty0 + (_sty1 - _sty0) * t);
+                return;
+            }
+            if (_opt.NoPad || _ds == null) return;
+            PadSnapshot s = _ds.Snapshot;
+            if (s == null || !s.Connected || !s.TouchKnown) return;
+            down = s.T1Down; x = s.T1X; y = s.T1Y; two = s.T1Down && s.T2Down;
+        }
+
+        /// <summary>
+        /// Windows says no.
+        ///
+        /// SendInput is subject to UIPI: a process may inject input only into applications at
+        /// its own integrity level or lower, and when it refuses it does so SILENTLY - the
+        /// call succeeds and the input is dropped. Measured on the bench 2026-08-16 against
+        /// the install broker's own installer window, which runs as SYSTEM: pointer mode
+        /// engaged correctly, and every move and click went nowhere.
+        ///
+        /// A pointer that is drawn as "on" and cannot move is worse than no pointer, so
+        /// after three refused moves against the same window it turns itself off and says
+        /// why. It will engage again for any other window.
+        /// </summary>
+        void PointerRefused(int moveResult)
+        {
+            if (moveResult == 0) return;
+            if (moveResult > 0) { _ptrRefusals = 0; return; }
+            _ptrRefusals++;
+            if (_ptrRefusals < 3) return;
+            IntPtr fg = Native.GetForegroundWindow();
+            _ptrBlockedFor = fg;
+            _ptrRefusals = 0;
+            Log.Write("PTR", "Windows REFUSED the injected input three times for "
+                + Foreground.Describe(fg) + ". SendInput is subject to UIPI: this shell runs at"
+                + " medium integrity and cannot drive a window owned by an elevated or SYSTEM"
+                + " process. The pointer cannot operate this window - turning it off.");
+            PointerSet(false, "Windows refuses synthetic input to this window (it is elevated"
+                + " or SYSTEM, and this shell is not)", fg);
+        }
+
+        /// <summary>
+        /// The stick, from whichever source is real: the synthetic vector a --walk token set,
+        /// or the pad the HID reader is holding. Same normalisation the browser's analog
+        /// channel uses (-1..1 from the raw byte), so the feel is the same in both.
+        /// </summary>
+        void PointerSticks(out double lx, out double ly, out double rx, out double ry)
+        {
+            lx = ly = rx = ry = 0;
+            if (_synthUntil != DateTime.MinValue)
+            {
+                if (DateTime.Now < _synthUntil)
+                {
+                    lx = _synthLX; ly = _synthLY; rx = _synthRX; ry = _synthRY;
+                    return;
+                }
+                _synthUntil = DateTime.MinValue;
+                _synthLX = _synthLY = _synthRX = _synthRY = 0;
+                Log.Write("PTR", "synthetic stick expired, back to centre");
+            }
+            if (_opt.NoPad || _ds == null) return;
+            PadSnapshot s = _ds.Snapshot;
+            if (s == null || !s.Connected) return;
+            lx = ((int)s.LX - 128) / 127.0; ly = ((int)s.LY - 128) / 127.0;
+            rx = ((int)s.RX - 128) / 127.0; ry = ((int)s.RY - 128) / 127.0;
+        }
+
+        /// <summary>
+        /// ui/mosnav.js's curve(), to the digit: dead zone 0.16, then the magnitude squared.
+        /// Squaring is what makes a thumbstick usable as a pointer at all - it keeps a small
+        /// deflection genuinely slow - and the browser's pointer and this one must not feel
+        /// like two different devices.
+        /// </summary>
+        static double StickCurve(double v)
+        {
+            const double dead = 0.16;
+            double m = Math.Abs(v);
+            if (m < dead) return 0;
+            double t = (m - dead) / (1 - dead);
+            return (v < 0 ? -1 : 1) * t * t;
+        }
+
+        void PointerEvaluate()
+        {
+            if (_ptrTyping) return;              // suspended by hand; PointerFinishTyping resumes
+            if (_opt.PtrDisabled) { PointerSet(false, "--ptr=off", IntPtr.Zero); return; }
+
+            IntPtr fg = Native.GetForegroundWindow();
+
+            if (ShellIsForeground())
+            {
+                if (_ptrManual != 0)
+                {
+                    Log.Write("PTR", "manual choice cleared - the shell is in the foreground again");
+                    _ptrManual = 0;
+                }
+                PointerSet(false, "the shell is in the foreground", fg);
+                return;
+            }
+            if (_ptrBlockedFor != IntPtr.Zero)
+            {
+                // Already found out the hard way that this window will not take injected
+                // input. Stay off for it, and clear the moment anything else comes forward.
+                if (fg == _ptrBlockedFor) { PointerSet(false, "Windows refuses synthetic input to this window", fg); return; }
+                _ptrBlockedFor = IntPtr.Zero;
+            }
+            if (_ptrManual > 0) { PointerSet(true, "L3 (turned on by hand)", fg); return; }
+            if (_ptrManual < 0) { PointerSet(false, "L3 (turned off by hand)", fg); return; }
+            if (_opt.PtrForce) { PointerSet(true, "--ptr=on", fg); return; }
+
+            string why = PointerRule(fg);
+            PointerSet(why != null, why == null ? "nothing in front asks for a pointer" : why, fg);
+        }
+
+        /// <summary>Null = leave it off. Non-null = the reason to turn it on.</summary>
+        string PointerRule(IntPtr fg)
+        {
+            if (fg == IntPtr.Zero) return null;
+            int pid = Foreground.PidOf(fg);
+            if (pid == 0 || pid == _ownPid) return null;
+
+            string proc = "";
+            try { proc = Process.GetProcessById(pid).ProcessName.ToLowerInvariant(); }
+            catch { }
+
+            string category = null, friendly = null;
+            for (int i = 0; i < BackgroundTable.GetLength(0); i++)
+            {
+                if (!string.Equals(proc, BackgroundTable[i, 0], StringComparison.Ordinal)) continue;
+                friendly = BackgroundTable[i, 1];
+                category = BackgroundTable[i, 2];
+                break;
+            }
+
+            // 4. something we launched, and the library calls it a game.
+            bool ours = false;
+            if (_tracker != null)
+            {
+                try { ours = _tracker.GetTrackedPids().Contains(pid); }
+                catch { }
+            }
+            if (_running != null && _running.Pid == pid) ours = true;
+            if (ours)
+            {
+                string ek = _running == null || _running.EntryKind == null ? "" : _running.EntryKind;
+                if (category == "game" || ek == "game" || (ek == "" && category == null))
+                    return null;
+            }
+
+            // 5 / 6. a launcher, either by name or by what the tile said it was.
+            if (category == "launcher") return "a launcher window is in front (" + friendly + ")";
+            if (ours && _running != null
+                && (_running.EntryKind == "launcher" || _running.EntryKind == "app"))
+                return "the entry we launched is a " + _running.EntryKind + " ('" + _running.Title + "')";
+
+            // 7. full screen and unrecognised: assume a game rather than poke a mouse at it.
+            RECT r;
+            if (Native.GetWindowRect(fg, out r))
+            {
+                RECT v = PointerMode.VirtualScreen();
+                if (r.Right - r.Left >= (v.Right - v.Left) - 2 && r.Bottom - r.Top >= (v.Bottom - v.Top) - 2)
+                    return null;
+            }
+
+            // 8. a process this shell cannot open at all: elevated, or another user's.
+            IntPtr h = Native.OpenProcess(Native.PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+            if (h == IntPtr.Zero)
+                return "the front window belongs to a process this shell cannot open"
+                     + " (elevated or SYSTEM: '" + proc + "')";
+            Native.CloseHandle(h);
+
+            // 8b. opens fine, but runs on an ELEVATED token: the install broker's interactive
+            //     installer, started under this user's admin token at this desktop's own
+            //     integrity so that the pad can reach it (see PointerMode.TokenElevated). A
+            //     program the user elevated through UAC lands here too; if it is really at
+            //     High, the three-refusals rule turns the pointer off again for it.
+            if (PointerMode.TokenElevated(pid) == 1)
+                return "the front window runs on an elevated token as this user"
+                     + " (an interactive installer from the install broker, or something"
+                     + " elevated by hand: '" + proc + "')";
+
+            return null;
+        }
+
+        void PointerSet(bool on, string reason, IntPtr fg)
+        {
+            if (on == _ptrOn && reason == _ptrReason) return;
+            _ptrReason = reason;
+            if (on == _ptrOn) return;
+            _ptrOn = on;
+            if (!on)
+            {
+                _ptr.ReleaseButtons();
+                _ptr.ResetFraction();
+                _ptrMoving = false;
+            }
+            else
+            {
+                _ptr.ResetFraction();
+            }
+            POINT c = PointerMode.Cursor();
+            Log.Write("PTR", (on ? "on" : "off") + " reason=" + reason
+                + " fg=" + Foreground.PidOf(fg) + " '" + Foreground.Title(fg) + "'"
+                + " cursor=(" + c.X + "," + c.Y + ")");
+        }
+
+        // ── The bindings ─────────────────────────────────────────────────────────────────
+        //
+        // Deliberately the browser's pointer mode (ui/browser.js renderHints), moved onto a
+        // real cursor: left stick moves, d-pad steps, Cross clicks, right stick scrolls,
+        // L1/R1 page, Circle goes back, Options accepts, Triangle types, L3 leaves. A human
+        // who learned it inside the browser already knows it out here.
+        //
+        // Called from SendPad BEFORE the foreground gate, because "the shell is not in front"
+        // is the whole precondition for this mode. Returns true when the press was consumed
+        // and must not also reach the page.
+        bool PointerTake(string action, string button, string phase)
+        {
+            if (!_ptrOn) return false;
+            string b = (string.IsNullOrEmpty(button) ? action : button).ToLowerInvariant();
+            if (b.StartsWith("dpad")) b = b.Substring(4);
+            // A real press always carries the physical button. The --walk vocabulary carries
+            // the SHELL ACTION instead ("launch", not "cross"), because that is what the page
+            // is asked to do, so both spellings have to arrive at the same binding or every
+            // token in a walkthrough would land on the default and silently do nothing.
+            switch (b)
+            {
+                case "launch":   b = "cross"; break;
+                case "back":     b = "circle"; break;
+                case "tabplay":  b = "l1"; break;
+                case "tabmedia": b = "r1"; break;
+                case "cc":       b = "options"; break;
+            }
+            bool press = phase != "release";
+
+            switch (b)
+            {
+                case "up":    if (press) PointerStep(0, -1); return true;
+                case "down":  if (press) PointerStep(0, 1); return true;
+                case "left":  if (press) PointerStep(-1, 0); return true;
+                case "right": if (press) PointerStep(1, 0); return true;
+
+                // Down on press and up on release, so a HOLD is a drag rather than a click
+                // that guessed at its own duration. Everything a mouse can do on a window
+                // this shell cannot see depends on that distinction.
+                case "cross":
+                    _ptr.Button(false, press);
+                    if (press) { POINT p = PointerMode.Cursor(); Log.Write("PTR", "left down at (" + p.X + "," + p.Y + ")"); }
+                    else Log.Write("PTR", "left up");
+                    return true;
+                case "square":
+                    _ptr.Button(true, press);
+                    if (press) { POINT p2 = PointerMode.Cursor(); Log.Write("PTR", "right down at (" + p2.X + "," + p2.Y + ")"); }
+                    else Log.Write("PTR", "right up");
+                    return true;
+
+                // The touchpad BUTTON is the click that belongs with the touchpad SURFACE:
+                // press to hold, release to let go, so a drag works exactly as it does on a
+                // laptop. Options keeps Enter for itself - the two used to share it, and once
+                // the surface drives the cursor, clicking the thing under your thumb is the
+                // only thing that button can sensibly mean.
+                case "touchpad":
+                    _ptr.Button(false, press);
+                    if (press) { POINT tp = PointerMode.Cursor(); Log.Write("PTR", "touchpad click: left down at (" + tp.X + "," + tp.Y + ")"); }
+                    else Log.Write("PTR", "touchpad click: left up");
+                    return true;
+
+                case "l1": if (press) { _ptr.KeyTap(Native.VK_PRIOR); Log.Write("PTR", "PageUp"); } return true;
+                case "r1": if (press) { _ptr.KeyTap(Native.VK_NEXT); Log.Write("PTR", "PageDown"); } return true;
+                case "options": if (press) { _ptr.KeyTap(Native.VK_RETURN); Log.Write("PTR", "Enter"); } return true;
+                case "circle": if (press) { _ptr.KeyTap(Native.VK_ESCAPE); Log.Write("PTR", "Escape"); } return true;
+
+                case "triangle": if (press) PointerBeginTyping(); return true;
+
+                case "l3":
+                    if (press)
+                    {
+                        _ptrManual = -1;
+                        Log.Write("PTR", "L3: the human turned the pointer off");
+                        PointerEvaluate();
+                    }
+                    return true;
+
+                default:
+                    // Everything else is swallowed rather than passed on. With the shell behind
+                    // a foreign window the gate would drop it anyway; consuming it here keeps
+                    // one rule ("while the pointer is up, the pad is a mouse") instead of two.
+                    return true;
+            }
+        }
+
+        void PointerStep(int dx, int dy)
+        {
+            POINT p = PointerMode.Cursor();
+            bool ok = _ptr.MoveTo(p.X + dx * PtrStepPx, p.Y + dy * PtrStepPx);
+            POINT q = PointerMode.Cursor();
+            Log.Write("PTR", "d-pad step (" + p.X + "," + p.Y + ") -> (" + q.X + "," + q.Y + ")");
+            PointerRefused(ok ? 1 : -1);
+        }
+
+        /// <summary>
+        /// L3 when the pointer is NOT up and the shell is not in front. The only way back in
+        /// after turning it off by hand, and the way to force it on over a window none of the
+        /// rules recognise. Called from SendPad ahead of the gate, like PointerTake.
+        /// </summary>
+        bool PointerL3(string button, string phase)
+        {
+            if (_ptrOn || phase == "release") return false;
+            if (string.IsNullOrEmpty(button) || button.ToLowerInvariant() != "l3") return false;
+            if (ShellIsForeground()) return false;      // the page's own cursor mode owns L3 there
+            if (_opt.PtrDisabled) return false;
+            _ptrManual = 1;
+            Log.Write("PTR", "L3: the human turned the pointer on");
+            PointerEvaluate();
+            return true;
+        }
+
+        // ── Typing into a window the shell cannot draw on ────────────────────────────────
+        //
+        // Triangle. The host remembers the target, brings the SHELL forward with its own
+        // on-screen keyboard open (the only keyboard on this machine), and when the human is
+        // done it puts the target back in front and types the text as Unicode. The text is
+        // never logged - a sign-in field is the obvious use and the count is all the log needs.
+        void PointerBeginTyping()
+        {
+            IntPtr t = Native.GetForegroundWindow();
+            if (t == IntPtr.Zero) { Log.Write("PTR", "Triangle: nothing is in the foreground to type into"); return; }
+            _ptrTypeHwnd = t;
+            _ptrTypeTitle = Foreground.Title(t);
+            _ptrManualSaved = _ptrManual;
+            _ptrTyping = true;
+            PointerSet(false, "typing: the shell comes forward with the keyboard", t);
+            Log.Write("PTR", "Triangle: keyboard requested for " + Foreground.Describe(t));
+
+            BringShellForward("pointer typing");
+            PostToPage("{\"type\":\"ptr\",\"ev\":\"type\",\"title\":\"" + JsonEsc(_ptrTypeTitle) + "\"}");
+        }
+
+        void HandlePointerMessage(string raw, string cmd)
+        {
+            if (cmd == "text" || cmd == "cancel")
+            {
+                if (!_ptrTyping) { Log.Write("PTR", "page sent ptr." + cmd + " but nothing was waiting for it"); return; }
+                IntPtr t = _ptrTypeHwnd;
+                int pid = Foreground.PidOf(t);
+                string text = cmd == "text" ? Json.Str(raw, "text") : null;
+                bool enter = cmd == "text" && Json.Int(raw, "enter", 0) != 0;
+
+                string path = Foreground.ForceForeground(t);
+                Log.Write("PTR", "returning to " + Foreground.Describe(t) + " via " + (path == null ? "FAILED" : path));
+
+                if (cmd == "cancel")
+                {
+                    Log.Write("PTR", "typing cancelled - nothing was typed");
+                }
+                else if (Native.GetForegroundWindow() != t)
+                {
+                    Log.Write("PTR", "REFUSING to type: '" + _ptrTypeTitle + "' did not come back to the"
+                        + " foreground, and the keystrokes would land in whatever did");
+                }
+                else
+                {
+                    Thread.Sleep(250);          // let the window settle its own focus first
+                    int n = _ptr.TypeText(text == null ? "" : text);
+                    if (enter) _ptr.KeyTap(Native.VK_RETURN);
+                    Log.Write("PTR", "typed " + n + " chars into " + pid + " (enter=" + (enter ? "yes" : "no") + ")");
+                }
+
+                _ptrTyping = false;
+                _ptrTypeHwnd = IntPtr.Zero;
+                _ptrManual = _ptrManualSaved;
+                _ptrEvalAt = DateTime.MinValue;
+                PointerEvaluate();
+                return;
+            }
+            if (cmd == "state")
+            {
+                POINT c = PointerMode.Cursor();
+                PostToPage("{\"type\":\"ptr\",\"ev\":\"state\",\"on\":" + (_ptrOn ? "true" : "false")
+                    + ",\"reason\":\"" + JsonEsc(_ptrReason) + "\",\"x\":" + c.X + ",\"y\":" + c.Y + "}");
+                return;
+            }
+            Log.Write("PTR", "unknown ptr command from the page: " + Trim(raw, 160));
+        }
+
+        /// <summary>
+        /// The two --walk tokens that move a thumbstick nobody is holding:
+        ///
+        ///   lstick:&lt;x&gt;/&lt;y&gt;[:&lt;ms&gt;]     left stick, -1..1, for ms (default 500)
+        ///   rstick:&lt;x&gt;/&lt;y&gt;[:&lt;ms&gt;]     right stick (the wheel)
+        ///
+        /// The vector is SLASH-separated, not comma-separated, because --walk itself is a
+        /// comma-separated list: a comma inside a token is eaten by the outer split before
+        /// this is ever called, and the first bench run of this feature spent its whole
+        /// sequence on the halves of torn tokens. A comma is still accepted for the case
+        /// where the vector arrives whole from somewhere else.
+        ///
+        /// Without these, pointer mode could only ever be tested by a human thumb: the live
+        /// shell owns the real pad over raw HID, so a test instance runs --no-pad and has no
+        /// analog input at all. They feed exactly the vector the HID decode would produce, so
+        /// what they exercise is the real curve, the real dead zone and the real speed.
+        /// </summary>
+        bool WalkStickStep(string step, string why)
+        {
+            if (string.IsNullOrEmpty(step)) return false;
+            string[] p = step.Split(':');
+            string head = p[0].Trim().ToLowerInvariant();
+            if (head != "lstick" && head != "rstick") return false;
+            if (p.Length < 2) { Log.Write("WALK", "step '" + step + "' ignored: wants " + head + ":<x>/<y>[:<ms>]"); return true; }
+
+            string[] xy = p[1].Split('/', ',');
+            double x = 0, y = 0;
+            if (xy.Length < 2
+                || !double.TryParse(xy[0].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out x)
+                || !double.TryParse(xy[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out y))
+            {
+                Log.Write("WALK", "step '" + step + "' ignored: could not read the vector");
+                return true;
+            }
+            int ms = 500;
+            if (p.Length > 2) int.TryParse(p[2].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ms);
+
+            if (head == "lstick") { _synthLX = x; _synthLY = y; }
+            else { _synthRX = x; _synthRY = y; }
+            _synthUntil = DateTime.Now.AddMilliseconds(ms);
+            POINT c = PointerMode.Cursor();
+            Log.Write("WALK", head + " " + x.ToString("0.##", CultureInfo.InvariantCulture) + ","
+                + y.ToString("0.##", CultureInfo.InvariantCulture) + " for " + ms + " ms (" + why + ")"
+                + " pointer=" + (_ptrOn ? "on" : "OFF") + " cursor=(" + c.X + "," + c.Y + ")");
+            return true;
+        }
+
+        /// <summary>
+        /// The touchpad's --walk tokens: a finger nobody is putting on the glass.
+        ///
+        ///   touch:&lt;x0&gt;/&lt;y0&gt;&gt;&lt;x1&gt;/&lt;y1&gt;[:&lt;ms&gt;]   drag finger 1 in a straight line
+        ///   touch2:… same, with a second finger down: the scroll gesture
+        ///   tap:&lt;x&gt;/&lt;y&gt;                            touch and lift in one place
+        ///
+        /// Coordinates are the surface's own units, 0-1919 across and 0-1079 down. Slash
+        /// separated for the same reason the stick tokens are: --walk splits on commas.
+        /// The synthetic finger is sampled by the same PointerTouchSample the real one goes
+        /// through, so a walk exercises the real gesture machine - the gain, the
+        /// acceleration, the tap threshold - and not a shortcut past it.
+        /// </summary>
+        bool WalkTouchStep(string step, string why)
+        {
+            if (string.IsNullOrEmpty(step)) return false;
+            string[] p = step.Split(':');
+            string head = p[0].Trim().ToLowerInvariant();
+            if (head != "touch" && head != "tap" && head != "touch2") return false;
+            if (p.Length < 2) { Log.Write("WALK", "step '" + step + "' ignored: wants " + head + ":<x>/<y>…"); return true; }
+
+            int ms = 400;
+            if (p.Length > 2) int.TryParse(p[2].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ms);
+
+            string body = p[1].Trim();
+            string from = body, to = body;
+            int arrow = body.IndexOf('>');
+            if (arrow > 0) { from = body.Substring(0, arrow); to = body.Substring(arrow + 1); }
+
+            int x0, y0, x1, y1;
+            if (!TouchPoint(from, out x0, out y0) || !TouchPoint(to, out x1, out y1))
+            {
+                Log.Write("WALK", "step '" + step + "' ignored: could not read the coordinates");
+                return true;
+            }
+
+            if (head == "tap") { x1 = x0; y1 = y0; ms = 90; }      // inside the 150 ms tap window
+            _stx0 = x0; _sty0 = y0; _stx1 = x1; _sty1 = y1; _stMs = ms;
+            _stStart = DateTime.Now;
+            _synthTouch = true;
+            _synthTouchTwo = head == "touch2";
+            POINT c = PointerMode.Cursor();
+            Log.Write("WALK", head + " " + x0 + "," + y0 + " -> " + x1 + "," + y1 + " over " + ms + " ms ("
+                + why + ") pointer=" + (_ptrOn ? "on" : "OFF") + " cursor=(" + c.X + "," + c.Y + ")");
+            return true;
+        }
+
+        static bool TouchPoint(string s, out int x, out int y)
+        {
+            x = 0; y = 0;
+            string[] a = s.Trim().Split('/', ',');
+            return a.Length >= 2
+                && int.TryParse(a[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out x)
+                && int.TryParse(a[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out y);
+        }
+
+        #endregion
+
+        /// <summary>
+        /// The three --walk steps that carry a PHASE rather than just an action:
+        ///
+        ///   hold:&lt;ms&gt;:&lt;action&gt;[:&lt;button&gt;]   press now, release &lt;ms&gt; later
+        ///   press:&lt;action&gt;[:&lt;button&gt;]         press and do not let go
+        ///   release:&lt;action&gt;[:&lt;button&gt;]       let go
+        ///
+        /// Same vocabulary as .stage/serve.mjs's ?pad= tokens, so a walkthrough written against
+        /// the staged page reads the same against the real host.
+        ///
+        /// Why this had to exist. The consent sheet (Grant.ask) deliberately refuses a tap and
+        /// requires Cross HELD for ~800 ms - that gesture is the whole security argument, it
+        /// stands in for a UAC dialog on a screen no controller can reach. A walk of bare action
+        /// tokens could not express it in either direction: every step was a press with no
+        /// release, so a "tap" was indistinguishable from an infinite hold, and the one thing
+        /// worth proving - that a press on its own does NOTHING - could not be driven at all.
+        /// Returns false for anything that is not one of the three, so ordinary steps fall
+        /// through to the old path untouched.
+        /// </summary>
+        bool WalkPhaseStep(string step, string why)
+        {
+            if (string.IsNullOrEmpty(step)) return false;
+            string[] p = step.Split(':');
+            string head = p[0].Trim().ToLowerInvariant();
+            if (head != "hold" && head != "press" && head != "release") return false;
+
+            int at = 1;
+            int ms = 0;
+            if (head == "hold")
+            {
+                if (p.Length < 3
+                    || !int.TryParse(p[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out ms)
+                    || ms < 0)
+                {
+                    Log.Write("WALK", "step '" + step + "' ignored: hold wants hold:<ms>:<action>[:<button>]");
+                    return true;                      // consumed, and said why
+                }
+                at = 2;
+            }
+            if (p.Length <= at || p[at].Trim().Length == 0)
+            {
+                Log.Write("WALK", "step '" + step + "' ignored: no action");
+                return true;
+            }
+            string action = p[at].Trim();
+            string button = (p.Length > at + 1 && p[at + 1].Trim().Length > 0) ? p[at + 1].Trim() : action;
+
+            if (head == "release")
+            {
+                _walkRelAt = DateTime.MaxValue; _walkRelAction = null; _walkRelButton = null;
+                SendPad(action, why + " [release]", button, "release");
+                return true;
+            }
+
+            // Any earlier hold is let go of first: two buttons stuck down at once is a state a
+            // thumb cannot produce and the page has never been asked to handle.
+            if (_walkRelAt != DateTime.MaxValue)
+            {
+                SendPad(_walkRelAction, "--walk release (superseded)", _walkRelButton, "release");
+                _walkRelAt = DateTime.MaxValue; _walkRelAction = null; _walkRelButton = null;
+            }
+
+            SendPad(action, why + (head == "hold" ? " [hold " + ms + " ms]" : " [press]"), button, "press");
+            if (head == "hold")
+            {
+                _walkRelAction = action; _walkRelButton = button;
+                _walkRelAt = DateTime.Now.AddMilliseconds(ms);
+            }
+            return true;
+        }
+
         void SendPad(string action, string why)
         {
             SendPad(action, why, action, "press");
@@ -6621,6 +8548,13 @@ namespace ArcOs.ShellWeb
 
         void SendPad(string action, string why, string button, string phase)
         {
+            // Pointer mode, before the gate and for the same reason the guide button is: the
+            // gate's whole job is to drop input when the shell is not in front, and "the shell
+            // is not in front" is the precondition for the pointer existing at all. See the
+            // pointer-mode region. PointerL3 is the way back IN after it was turned off.
+            if (PointerTake(action, button, phase)) return;
+            if (PointerL3(button, phase)) return;
+
             bool gated = PadInputGated();
             if (gated != _padGateClosed)
             {
@@ -6809,6 +8743,11 @@ namespace ArcOs.ShellWeb
             _running.Id = id;
             _running.Title = string.IsNullOrEmpty(title) ? "(untitled)" : title;
             _running.Kind = kind;
+            // What the LIBRARY calls this tile - game, launcher or app. Pointer mode is the
+            // only consumer: a game reads the pad itself and must never have a mouse pushed
+            // at it, a launcher is a mouse UI and must. Absent on an older page, and absence
+            // is treated as "assume a game", which is the safe direction.
+            _running.EntryKind = Json.Str(raw, "entryKind");
             _running.Target = target;
             _running.Pid = pid;
             _running.Tracked = false;
@@ -6945,11 +8884,34 @@ namespace ArcOs.ShellWeb
 
             if (_running != null)
             {
-                Log.Write("GUIDE", "short press (" + why + ") with '" + _running.Title
+                // Snapshot BEFORE coming forward. BringShellForward ends an UNTRACKED yield
+                // outright - it has to, because nothing will ever tell the shell that app
+                // exited - and that clears _running. Reading it afterwards posted a menu with
+                // "app":null, which the page can only answer with "Nothing is running" one
+                // instant after the log said Hollow Knight was. Bench-observed 2026-08-16.
+                bool tracked = _running.Tracked;
+                string title = _running.Title;
+                string appJson = RunningAppJson(_running);
+
+                if (!tracked)
+                {
+                    // A URI launch the host could not attach to. Coming forward IS the whole
+                    // action: there is no tree to Close and no window the shell can promise to
+                    // Resume, so offering a menu of three things that cannot be honoured is
+                    // worse than offering none. The app is left running.
+                    Log.Write("GUIDE", "short press (" + why + ") with untracked '" + title
+                        + "' on screen -> shell forward, no menu (nothing about it can be acted on:"
+                        + " the shell never attached to it)");
+                    if (!ShellIsForeground()) BringShellForward("guide");
+                    PublishAppState(true);
+                    return;
+                }
+
+                Log.Write("GUIDE", "short press (" + why + ") with '" + title
                     + "' running -> shell forward + guide menu");
                 if (!ShellIsForeground()) BringShellForward("guide");
                 PublishAppState(true);
-                PostToPage("{\"type\":\"guide\",\"ev\":\"menu\",\"app\":" + RunningAppJson(_running) + "}");
+                PostToPage("{\"type\":\"guide\",\"ev\":\"menu\",\"app\":" + appJson + "}");
                 return;
             }
 
@@ -7503,8 +9465,37 @@ namespace ArcOs.ShellWeb
             {
                 string step = _selfSeq[_selfTestAt];
                 _selfTestAt++;
-                SendPad(step, "self-test step " + _selfTestAt + "/" + _selfSeq.Length);
+                string why = "self-test step " + _selfTestAt + "/" + _selfSeq.Length;
+
+                // Two pseudo-steps that are NOT pad actions and must not go through SendPad.
+                //
+                // The guide button is the one control this host handles itself, ahead of the
+                // foreground gate, so it never reaches the page as an action and a walk step
+                // called "guide" would exercise the control centre instead. Without these two
+                // the entire app-lifecycle control is only reachable by a human thumb, and the
+                // rule in this file is that anything reachable with the pad is verifiable with
+                // nobody present. They enter at exactly the point a real press does - the same
+                // GuideShort/GuideHold the HID decode calls - so what they prove is the real
+                // behaviour and not a parallel test path.
+                //
+                //   ps        the short press: shell forward + guide menu
+                //   ps-hold   the hold: straight to the shell, no menu
+                if (step == "ps") GuideShort("--walk step 'ps' (" + why + ")");
+                else if (step == "ps-hold") GuideHold("--walk step 'ps-hold' (" + why + ")");
+                else if (WalkStickStep(step, why)) { /* analog: lstick:/rstick: */ }
+                else if (WalkTouchStep(step, why)) { /* the touch surface: touch:/tap: */ }
+                else if (!WalkPhaseStep(step, why)) SendPad(step, why);
                 _selfTestNext = now.AddMilliseconds(_selfGapMs);
+            }
+
+            // Let go of whatever the last hold: step pressed. Deliberately here and not on a
+            // one-shot timer: this is the same 200 ms tick everything else in the walk runs on,
+            // so the release is ordered against the walk's own steps rather than racing them.
+            if (_walkRelAt != DateTime.MaxValue && now >= _walkRelAt)
+            {
+                string a = _walkRelAction, b = _walkRelButton;
+                _walkRelAt = DateTime.MaxValue; _walkRelAction = null; _walkRelButton = null;
+                SendPad(a, "--walk release", b, "release");
             }
 
             if (_opt.AutoLaunchMs >= 0 && !_childRunning && _launchCount < _opt.Cycles)
@@ -7590,11 +9581,21 @@ namespace ArcOs.ShellWeb
         public string RawArgs = "";
         public string AssetFolder;
         public string UserDataFolder;
-        public string VirtualHost = "arcos.local";
+        public string VirtualHost = "marwanos.local";
         public string StartUrl = null;              // explicit override
         public int BootDuration = 6400;
         public bool UseFileUrls;
         public bool NoBoot;
+        // --boot forces the sequence whatever the uptime says, and
+        // --cold-window=<ms> moves the line between a cold start and a
+        // relaunch. Both exist so both branches of ResolveStartUrl can be
+        // exercised on a machine nobody is allowed to reboot.
+        public bool ForceBoot;
+        public int ColdWindowMs = 120000;
+        // --print-url resolves the start URL, logs why, and exits without a
+        // window — the same family as --haptic-test, and for the same reason:
+        // the answer has to be readable over SSH on a machine that is in use.
+        public bool PrintUrl;
         public bool NoJob;
         public bool NoPad;
         // Diagnostic, in the same family as --no-job and --no-pad: turn the foreground gate off
@@ -7602,6 +9603,12 @@ namespace ArcOs.ShellWeb
         // useful for an unattended run sitting behind a live shell; never for a real session,
         // where a shell that acts on the pad from behind a game is the bug this gate fixes.
         public bool NoFgGate;
+        // --ptr=on forces pointer mode for any foreground window that is not this instance's
+        // own, which is the only way to test it in a WINDOWED host: a windowed test instance
+        // sitting behind the live shell is never the foreground window, and none of the
+        // engagement rules would fire for whatever is. --ptr=off disables it outright.
+        public bool PtrForce;
+        public bool PtrDisabled;
         public bool PadSelfTest;
         public string HapticTest;     // --haptic-test[=a,b,c]: exercise the write path, no UI
         public bool SysSelfTest;
@@ -7611,7 +9618,7 @@ namespace ArcOs.ShellWeb
         public string Browse;               // --browse=<url>: unattended entry into the browser
         public bool Windowed;
         public bool DevTools;
-        // Register the arcFiles COM host object. Off by default: its calls run on the UI thread
+        // Register the mosFiles COM host object. Off by default: its calls run on the UI thread
         // and FileApi blocks. See FileApiBridge for the whole argument.
         public bool FileHostObject;
         public int AutoLaunchMs = -1;
@@ -7621,18 +9628,62 @@ namespace ArcOs.ShellWeb
         public int Cycles = 1;
         public string LogPath = null;
 
+        // ── Cold start, or just this process starting again? ──────────────
+        // The boot sequence belongs to a MACHINE starting, not to this exe
+        // starting. Shell Launcher relaunches the shell every time it exits —
+        // that is the redeploy path, and it is also the crash-recovery path —
+        // and each of those relaunches used to replay the whole 6.4 s sequence.
+        // A console that has just recovered from a crash should be back on the
+        // home screen, not re-introducing itself.
+        //
+        // The page cannot make this call. boot.html has no host bridge, and the
+        // one thing it could persist for itself (localStorage) survives a reboot
+        // exactly as well as it survives a relaunch, so it cannot tell the two
+        // apart. The host can, from one number: how long the OS has been up.
+        // GetTickCount64 is milliseconds since the machine started — it counts
+        // time spent asleep, so it tracks LastBootUpTime rather than drifting
+        // away from it — and this process only exists after autologon, so a
+        // small value can only mean the machine has just come up.
+        //
+        // 120 s, and the two failure modes are why it is generous. Too wide and
+        // a redeploy done inside two minutes of a reboot plays the sequence,
+        // which is what the machine was going to look like anyway. Too tight and
+        // a slow cold start — an update pass, a cold disk cache, a profile that
+        // takes its time — silently loses the one screen the machine has, on the
+        // one occasion it is meant to appear. On this bench the shell's first
+        // [HOST] line lands about a second after Shell Launcher runs it, and the
+        // whole autologon path is comfortably inside the window; 120 s is
+        // headroom on a measured number, not a guess about hardware.
+        public string StartUrlReason = "";
+
         public string ResolveStartUrl()
         {
-            if (!string.IsNullOrEmpty(StartUrl)) return StartUrl;
+            // An explicitly requested URL always wins, so a forced boot stays
+            // one flag away for testing: --url, or --boot below.
+            if (!string.IsNullOrEmpty(StartUrl)){ StartUrlReason = "--url was given"; return StartUrl; }
+
+            long upMs = (long)MarwanOs.Sys.N.GetTickCount64();
+            bool cold;
+            if (NoBoot){ cold = false; StartUrlReason = "--no-boot"; }
+            else if (ForceBoot){ cold = true; StartUrlReason = "--boot"; }
+            else
+            {
+                cold = upMs <= ColdWindowMs;
+                StartUrlReason = "os up " + upMs.ToString(CultureInfo.InvariantCulture) + " ms, cold-start window "
+                               + ColdWindowMs.ToString(CultureInfo.InvariantCulture) + " ms -> "
+                               + (cold ? "COLD START, playing the boot sequence"
+                                       : "SHELL RELAUNCH on a machine that is already up, straight to the shell");
+            }
+
             if (UseFileUrls)
             {
-                string f = Path.Combine(AssetFolder, NoBoot ? "index.html" : "boot.html");
+                string f = Path.Combine(AssetFolder, cold ? "boot.html" : "index.html");
                 string u = new Uri(f).AbsoluteUri;
-                if (NoBoot) return u;
+                if (!cold) return u;
                 return u + "?duration=" + BootDuration.ToString(CultureInfo.InvariantCulture) + "&next=index.html";
             }
             string b = "https://" + VirtualHost + "/";
-            if (NoBoot) return b + "index.html";
+            if (!cold) return b + "index.html";
             return b + "boot.html?duration=" + BootDuration.ToString(CultureInfo.InvariantCulture) + "&next=index.html";
         }
 
@@ -7641,9 +9692,12 @@ namespace ArcOs.ShellWeb
             Options o = new Options();
             o.RawArgs = string.Join(" ", args);
             o.AssetFolder = Path.GetDirectoryName(Application.ExecutablePath);
+            // OnDisk.Brand, not "MarwanOS": this folder holds the browser profile, the pinned
+            // sites, the cookies and every installed extension. Renaming it does not move any
+            // of that - it abandons it and starts empty.
             o.UserDataFolder = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "ArcOS\\WebView2");
+                OnDisk.Brand + "\\WebView2");
 
             foreach (string a in args)
             {
@@ -7663,9 +9717,16 @@ namespace ArcOs.ShellWeb
                     case "--duration": o.BootDuration = int.Parse(val, CultureInfo.InvariantCulture); break;
                     case "--file-urls": o.UseFileUrls = true; break;
                     case "--no-boot": o.NoBoot = true; break;
+                    case "--boot": o.ForceBoot = true; break;
+                    case "--print-url": o.PrintUrl = true; break;
+                    case "--cold-window": o.ColdWindowMs = int.Parse(val, CultureInfo.InvariantCulture); break;
                     case "--no-job": o.NoJob = true; break;
                     case "--no-fg-gate": o.NoFgGate = true; break;
                     case "--no-pad": o.NoPad = true; break;
+                    case "--ptr":
+                        o.PtrDisabled = (val == "off" || val == "0" || val == "no");
+                        o.PtrForce = !o.PtrDisabled;
+                        break;
                     case "--pad-selftest": o.PadSelfTest = true; break;
                     case "--haptic-test": o.HapticTest = string.IsNullOrEmpty(val) ? "*" : val; break;
                     case "--sys-selftest": o.SysSelfTest = true; break;
@@ -7709,6 +9770,15 @@ namespace ArcOs.ShellWeb
             };
 
             if (!string.IsNullOrEmpty(opt.HapticTest)) return HapticTest(opt);
+
+            if (opt.PrintUrl)
+            {
+                string u0 = opt.ResolveStartUrl();
+                Log.Write("NAV", "start url decided: " + opt.StartUrlReason);
+                Log.Write("NAV", "would navigate to " + u0);
+                try { Console.Out.WriteLine(opt.StartUrlReason); Console.Out.WriteLine(u0); } catch { }
+                return 0;
+            }
 
             HostForm f = new HostForm(opt);
             try

@@ -1,4 +1,4 @@
-# ARC OS — ShellHost spike
+# MarwanOS — ShellHost spike
 
 Minimal native host that proves the two highest-risk mechanics for a Windows console-shell
 project:
@@ -9,7 +9,7 @@ project:
    `XInputGetStateEx` (ordinal #100) needed for the Guide button.
 
 The window is currently just a solid `#04060B` rectangle with a status readout. It is the
-future native host for the ARC OS HTML shell (`index.html` / `boot.html`); no HTML is
+future native host for the MarwanOS HTML shell (`index.html` / `boot.html`); no HTML is
 loaded yet.
 
 ## Build
@@ -21,7 +21,7 @@ with Windows, so nothing has to be installed.
 spike\ShellHost\build.cmd
 ```
 
-Produces `spike\ShellHost\bin\ArcShellHost.exe` (x64, WinForms, .NET Framework 4.x).
+Produces `spike\ShellHost\bin\MarwanShellHost.exe` (x64, WinForms, .NET Framework 4.x).
 
 Compiler: `C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe` (version 4.8, **C# 5
 language level** — no string interpolation, `nameof`, expression-bodied members, etc.).
@@ -33,9 +33,9 @@ language level** — no string interpolation, `nameof`, expression-bodied member
 ## Run
 
 ```
-ArcShellHost.exe                                   # default child: notepad.exe
-ArcShellHost.exe --child="cmd.exe /c start notepad.exe"
-ArcShellHost.exe notepad.exe                       # positional form also works
+MarwanShellHost.exe                                   # default child: notepad.exe
+MarwanShellHost.exe --child="cmd.exe /c start notepad.exe"
+MarwanShellHost.exe notepad.exe                       # positional form also works
 ```
 
 The window is borderless, covers the full primary screen, and is **never topmost** (it must
@@ -124,5 +124,9 @@ system-settings change.
   path and verification result.
 * `spike\run-tests.ps1` — unattended test suite. It observes the host from *outside* the
   process (foreground window, minimized state, child liveness) so results are not just the
-  host's self-report, and it cleans up any leftover notepad processes.
+  host's self-report, and it cleans up any leftover notepad processes. It expects the
+  binary `build.cmd` produces (`ShellHost\bin\MarwanShellHost.exe`; `-Exe <path>` overrides)
+  and refuses to start if it is missing — `bin\` is gitignored, so build first. **It takes
+  over the interactive desktop** (full-screen host, notepad spawns, foreground changes):
+  run it on the bench/test account, never on a desktop someone is using.
 * `spike\SPIKE-RESULTS.md` — observed results on the target machine.

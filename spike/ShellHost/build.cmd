@@ -1,8 +1,8 @@
 @echo off
-REM ARC OS ShellHost spike - build with the inbox .NET Framework compiler.
+REM MarwanOS ShellHost spike - build with the inbox .NET Framework compiler.
 REM No SDK install required; csc.exe ships with Windows.
 
-REM Optional first argument = output file name, e.g.  build.cmd ArcShellHost-v2.exe
+REM Optional first argument = output file name, e.g.  build.cmd MarwanShellHost-v2.exe
 REM Deploying under a NEW name avoids overwriting the binary a running shell holds open.
 
 setlocal
@@ -10,7 +10,7 @@ set CSC=C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe
 set HERE=%~dp0
 set OUTDIR=%HERE%bin
 set OUTNAME=%~1
-if "%OUTNAME%"=="" set OUTNAME=ArcShellHost.exe
+if "%OUTNAME%"=="" set OUTNAME=MarwanShellHost.exe
 
 if not exist "%CSC%" (
   echo ERROR: inbox csc.exe not found at %CSC%

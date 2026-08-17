@@ -1,10 +1,33 @@
-# ARC OS ShellHost spike - unattended test runner.
+# MarwanOS ShellHost spike - unattended test runner.
 # Observes the host from OUTSIDE the process (foreground window, minimized state,
 # child process liveness) so the results are not just the host's own self-report.
+#
+# WARNING: this suite drives the INTERACTIVE desktop it runs on. Every test launches
+# the host full-screen, spawns notepad.exe and takes the foreground, then kills any
+# leftover notepad. Run it on the bench / test account, not on a desktop you are using.
+#
+# The host binary is whatever spike\ShellHost\build.cmd produced (default name
+# MarwanShellHost.exe; build.cmd <name> writes a different one). Pass -Exe to point at
+# a specific build. bin\ is gitignored, so a fresh checkout has no binary until you build.
+
+param(
+    [string]$Exe = (Join-Path $PSScriptRoot 'ShellHost\bin\MarwanShellHost.exe')
+)
 
 $ErrorActionPreference = 'Stop'
-$exe = "C:\Users\brain\Documents\repos\PC1\spike\ShellHost\bin\ArcShellHost.exe"
-$log = "C:\Users\brain\Documents\repos\PC1\spike\handoff-log.txt"
+$exe = $Exe
+$log = Join-Path $PSScriptRoot 'handoff-log.txt'
+
+if (-not (Test-Path -LiteralPath $exe)) {
+    $bin = Join-Path $PSScriptRoot 'ShellHost\bin'
+    $have = @(Get-ChildItem -LiteralPath $bin -Filter '*.exe' -ErrorAction SilentlyContinue | ForEach-Object Name)
+    $msg = "Host binary not found: $exe`n" +
+           "Build it first:  $(Join-Path $PSScriptRoot 'ShellHost\build.cmd')`n" +
+           "or pass -Exe <path> to an existing build."
+    if ($have.Count -gt 0) { $msg += "`nBinaries currently in ${bin}: $($have -join ', ')" }
+    throw $msg
+}
+$exeName = [System.IO.Path]::GetFileNameWithoutExtension($exe)
 
 Add-Type -Namespace Spy -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -114,7 +137,7 @@ foreach ($r in $results) {
 }
 
 Write-Host "`nStray processes check:"
-@('notepad','cmd','ArcShellHost') | ForEach-Object {
+@('notepad','cmd',$exeName) | ForEach-Object {
     $c = @(Get-Process $_ -ErrorAction SilentlyContinue).Count
     Write-Host "  $_ = $c"
 }

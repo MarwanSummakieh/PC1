@@ -2,7 +2,7 @@
 <title>ARC Files — harness</title>
 
 <!-- Real same-origin stylesheets and scripts. The page is served over
-     https://arcos.local/ from the host's virtual host mapping, and the CSP
+     https://marwanos.local/ from the host's virtual host mapping, and the CSP
      there rejects injected style elements — so files.css and osk.css are
      linked, never built at runtime. -->
 <link rel="stylesheet" href="osk.css">
@@ -123,7 +123,7 @@ pre.out .hd{color:var(--beam-hot)}
 .pill.warn{color:var(--warn);border-color:rgba(255,180,87,.4)}
 </style>
 
-<div class="eyebrow">ARC OS</div>
+<div class="eyebrow">MarwanOS</div>
 <h1>File explorer harness</h1>
 <p class="sub">
   Drives <b>ui/files.js</b> against either the real <b>FileApi</b> (when the host exposes one) or the
@@ -197,9 +197,9 @@ pre.out .hd{color:var(--beam-hot)}
 "use strict";
 /* ═══════════════════════════════════════════════════════════════════════
    Harness. Two jobs: a mock FileApi so the UI can be exercised without a
-   host, and a test suite that drives ArcFiles the way a controller would.
+   host, and a test suite that drives MarwanFiles the way a controller would.
 
-   Everything printed here also goes to the host log through window.arcPost,
+   Everything printed here also goes to the host log through window.mosPost,
    which is how the bench transcript gets it: the ShellHostWeb shim turns
    {type:"log"} into a [PAGE] line in the host's log file.
    ═══════════════════════════════════════════════════════════════════════ */
@@ -209,7 +209,7 @@ var logEl = $("#log");
 var PASS = 0, FAIL = 0;
 
 function hostLog(s) {
-  try { if (typeof window.arcPost === "function") window.arcPost({ type: "log", target: "[files-test] " + s }); } catch (e) {}
+  try { if (typeof window.mosPost === "function") window.mosPost({ type: "log", target: "[files-test] " + s }); } catch (e) {}
   try { console.log("[files-test] " + s); } catch (e) {}
 }
 function line(text, cls) {
@@ -254,13 +254,13 @@ var MOCK = (function () {
   var tree = {
     "C:": D({
       "Users": D({
-        "arcshell": D({
+        "marwanshell": D({
           "Documents": D({
             "notes.txt": F(1843, 1),
             "budget.xlsx": F(28442, 12),
             "ARC handover.pdf": F(1244221, 30),
             "Projects": D({
-              "arcos": D({ "README.md": F(9821, 2), "plan.md": F(31022, 4) }),
+              "marwanos": D({ "README.md": F(9821, 2), "plan.md": F(31022, 4) }),
               "old": D({ "scratch.log": F(220144, 140) })
             }),
             "desktop.ini": F(282, 300, { hidden: true, system: true })
@@ -280,7 +280,7 @@ var MOCK = (function () {
           "Desktop": D({ "shortcut.lnk": F(1102, 20) })
         })
       }),
-      "ArcOS": D({
+      "MarwanOS": D({
         "web": D({ "index.html": F(112780, 0), "osk.js": F(38498, 0), "files.js": F(64000, 0) }),
         "provisioning": D({ "repoint-shell.ps1": F(4211, 40) })
       }),
@@ -309,7 +309,7 @@ var MOCK = (function () {
            total: 0, free: 0, recycleBin: false, note: "There is no disc in the drive." }
   };
 
-  var REMOVABLE = { letter: "E", path: "E:\\", label: "ARCSTICK", display: "ARCSTICK", fileSystem: "exFAT",
+  var REMOVABLE = { letter: "E", path: "E:\\", label: "MOSSTICK", display: "MOSSTICK", fileSystem: "exFAT",
                     driveType: "removable", busType: "USB", removable: true, ready: true,
                     total: 61505273856, free: 41203441664, recycleBin: false };
 
@@ -427,7 +427,7 @@ var MOCK = (function () {
   function handle(cmd) {
     var c = String(cmd.cmd || "").toLowerCase();
 
-    if (c === "api.version") return okd({ apiVersion: "1.0-mock", api: "FileApi(mock)", elevated: false, user: "arcshell", machine: "MOCK" });
+    if (c === "api.version") return okd({ apiVersion: "1.0-mock", api: "FileApi(mock)", elevated: false, user: "marwanshell", machine: "MOCK" });
 
     if (c === "fs.drives") {
       var arr = [];
@@ -445,12 +445,12 @@ var MOCK = (function () {
 
     if (c === "fs.home") {
       var places = [
-        { label: "Home", path: "C:\\Users\\arcshell", icon: "home" },
-        { label: "Desktop", path: "C:\\Users\\arcshell\\Desktop", icon: "desktop" },
-        { label: "Documents", path: "C:\\Users\\arcshell\\Documents", icon: "doc" },
-        { label: "Downloads", path: "C:\\Users\\arcshell\\Downloads", icon: "dl" },
-        { label: "Pictures", path: "C:\\Users\\arcshell\\Pictures", icon: "photo" },
-        { label: "Music", path: "C:\\Users\\arcshell\\Music", icon: "music" }
+        { label: "Home", path: "C:\\Users\\marwanshell", icon: "home" },
+        { label: "Desktop", path: "C:\\Users\\marwanshell\\Desktop", icon: "desktop" },
+        { label: "Documents", path: "C:\\Users\\marwanshell\\Documents", icon: "doc" },
+        { label: "Downloads", path: "C:\\Users\\marwanshell\\Downloads", icon: "dl" },
+        { label: "Pictures", path: "C:\\Users\\marwanshell\\Pictures", icon: "photo" },
+        { label: "Music", path: "C:\\Users\\marwanshell\\Music", icon: "music" }
       ];
       return okd({ places: places, count: places.length });
     }
@@ -677,12 +677,12 @@ var MOCK = (function () {
    The mock proves the UI works. It does not prove the UI works against the
    thing it will actually be talking to — a mock is written by the same person
    as the code it feeds, and agrees with it by construction. So the suite also
-   replays envelopes captured verbatim from ArcOs.Files.FileApi.Handle() on the
+   replays envelopes captured verbatim from MarwanOs.Files.FileApi.Handle() on the
    bench, as the standard user, and drives the same screens off those.
    ═══════════════════════════════════════════════════════════════════════ */
 
 var FIXTURE = (function () {
-  var F = window.ARC_FILES_FIXTURE || null;
+  var F = window.MOS_FILES_FIXTURE || null;
 
   function key(cmd) {
     var c = String(cmd.cmd || "");
@@ -720,18 +720,18 @@ var FIXTURE = (function () {
 
 /* ═══ Wiring ═══════════════════════════════════════════════════════════ */
 
-function useMock() { ArcFiles.setTransport(MOCK.transport); }
-function useFixture() { ArcFiles.setTransport(FIXTURE.transport); }
+function useMock() { MarwanFiles.setTransport(MOCK.transport); }
+function useFixture() { MarwanFiles.setTransport(FIXTURE.transport); }
 
 function paintBridge() {
-  var p = ArcFiles.probe();
-  var host = (typeof window.arcFileApi === "function") ? "window.arcFileApi"
-           : (window.chrome && window.chrome.webview && window.chrome.webview.hostObjects && window.chrome.webview.hostObjects.arcFiles) ? "hostObjects.arcFiles"
+  var p = MarwanFiles.probe();
+  var host = (typeof window.mosFileApi === "function") ? "window.mosFileApi"
+           : (window.chrome && window.chrome.webview && window.chrome.webview.hostObjects && window.chrome.webview.hostObjects.mosFiles) ? "hostObjects.mosFiles"
            : (window.chrome && window.chrome.webview) ? "postMessage (host must answer {type:\"fs.reply\"})"
            : "none";
   $("#bridge").innerHTML = "";
-  [["ArcFiles", ArcFiles.version],
-   ["ArcOSK", window.ArcOSK ? window.ArcOSK.version : "NOT LOADED"],
+  [["MarwanFiles", MarwanFiles.version],
+   ["MarwanOSK", window.MarwanOSK ? window.MarwanOSK.version : "NOT LOADED"],
    ["files.css", cssLoaded() ? "linked" : "MISSING"],
    ["captured data", FIXTURE.available ? (Object.keys(FIXTURE.data).length + " real FileApi replies") : "files-fixture.js MISSING"],
    ["host bridge", host],
@@ -746,7 +746,7 @@ function paintBridge() {
 
 function cssLoaded() {
   var probe = document.createElement("div");
-  probe.className = "arc-files-probe";
+  probe.className = "mos-files-probe";
   document.body.appendChild(probe);
   var v = getComputedStyle(probe).getPropertyValue("--fx-loaded").indexOf("1") >= 0;
   document.body.removeChild(probe);
@@ -754,7 +754,7 @@ function cssLoaded() {
 }
 
 function paintState() {
-  var s = ArcFiles.debugState() || {};
+  var s = MarwanFiles.debugState() || {};
   $("#state").innerHTML = "";
   Object.keys(s).forEach(function (k) {
     var a = document.createElement("span"); a.textContent = k;
@@ -764,23 +764,23 @@ function paintState() {
 }
 setInterval(paintState, 400);
 
-$("#bOpen").onclick = function () { useMock(); ArcFiles.open({ title: "Files (mock)" }); };
+$("#bOpen").onclick = function () { useMock(); MarwanFiles.open({ title: "Files (mock)" }); };
 $("#bOpenFixture").onclick = function () {
   if (!FIXTURE.available) { line("files-fixture.js is not loaded", "bad"); return; }
   useFixture();
-  ArcFiles.open({ title: "Files (real capture)" });
+  MarwanFiles.open({ title: "Files (real capture)" });
 };
 $("#bOpenLive").onclick = function () {
-  ArcFiles.setTransport(null);
-  var p = ArcFiles.probe();
+  MarwanFiles.setTransport(null);
+  var p = MarwanFiles.probe();
   if (!p.connected) { line("no host bridge is present — nothing to open against", "bad"); return; }
-  ArcFiles.open({ title: "Files" });
+  MarwanFiles.open({ title: "Files" });
 };
-$("#bClose").onclick = function () { ArcFiles.close(); };
-$("#bHuge").onclick = function () { useMock(); if (!ArcFiles.isOpen()) ArcFiles.open({}); ArcFiles.goTo("C:\\Users\\arcshell\\Downloads\\huge"); };
+$("#bClose").onclick = function () { MarwanFiles.close(); };
+$("#bHuge").onclick = function () { useMock(); if (!MarwanFiles.isOpen()) MarwanFiles.open({}); MarwanFiles.goTo("C:\\Users\\marwanshell\\Downloads\\huge"); };
 $("#bPlug").onclick = function () { MOCK.plug(true); line("mock: USB stick E: plugged in", "warn"); };
 $("#bUnplug").onclick = function () { MOCK.plug(false); line("mock: USB stick E: pulled out", "warn"); };
-$("#bState").onclick = function () { line(JSON.stringify(ArcFiles.debugState())); };
+$("#bState").onclick = function () { line(JSON.stringify(MarwanFiles.debugState())); };
 $("#bClear").onclick = function () { logEl.innerHTML = ""; PASS = FAIL = 0; $("#verdict").className = "pill"; $("#verdict").textContent = "not run"; };
 $("#bRun").onclick = function () { runSuite(); };
 
@@ -788,18 +788,18 @@ $("#bRun").onclick = function () { runSuite(); };
 document.querySelectorAll("[data-a]").forEach(function (b) {
   var a = b.dataset.a;
   b.addEventListener("mousedown", function () {
-    if (window.ArcOSK && ArcOSK.isOpen()) { ArcOSK.beginRepeat(a === "cross" ? "cross" : a); return; }
-    ArcFiles.beginRepeat(a);
+    if (window.MarwanOSK && MarwanOSK.isOpen()) { MarwanOSK.beginRepeat(a === "cross" ? "cross" : a); return; }
+    MarwanFiles.beginRepeat(a);
   });
   b.addEventListener("mouseup", function () {
-    if (window.ArcOSK && ArcOSK.isOpen()) { ArcOSK.endRepeat(); return; }
-    ArcFiles.endRepeat();
+    if (window.MarwanOSK && MarwanOSK.isOpen()) { MarwanOSK.endRepeat(); return; }
+    MarwanFiles.endRepeat();
   });
-  b.addEventListener("mouseleave", function () { ArcFiles.endRepeat(); });
+  b.addEventListener("mouseleave", function () { MarwanFiles.endRepeat(); });
 });
 /* face-button glyphs, so the simulator reads like the hint bar */
 (function () {
-  var G = ArcFiles._model.PAD_GLYPH;
+  var G = MarwanFiles._model.PAD_GLYPH;
   document.querySelectorAll(".faces [data-a]").forEach(function (b) {
     b.innerHTML = '<svg viewBox="0 0 24 24">' + (G[b.dataset.a] || "") + "</svg>";
   });
@@ -807,16 +807,16 @@ document.querySelectorAll("[data-a]").forEach(function (b) {
 
 /* The host's pad channel, if there is one. index.html routes through
    Nav.action; this page has no shell, so it wires the pad straight in. */
-window.arcPad = function (action, phase, button) {
+window.mosPad = function (action, phase, button) {
   var a = button || action;
-  if (window.ArcOSK && ArcOSK.isOpen()) {
-    if (phase === "release") { ArcOSK.endRepeat(); return "osk release"; }
-    ArcOSK.handleAction(a);
+  if (window.MarwanOSK && MarwanOSK.isOpen()) {
+    if (phase === "release") { MarwanOSK.endRepeat(); return "osk release"; }
+    MarwanOSK.handleAction(a);
     return "osk " + a;
   }
-  if (phase === "release") { ArcFiles.endRepeat(); return "release"; }
-  if (phase === "press") { ArcFiles.beginRepeat(a); return "press " + a; }
-  ArcFiles.handleAction(a);
+  if (phase === "release") { MarwanFiles.endRepeat(); return "release"; }
+  if (phase === "press") { MarwanFiles.beginRepeat(a); return "press " + a; }
+  MarwanFiles.handleAction(a);
   return "files " + a;
 };
 
@@ -826,8 +826,8 @@ paintBridge();
    THE SUITE
    ═══════════════════════════════════════════════════════════════════════ */
 
-function act(a) { ArcFiles.handleAction(a); }
-function stt() { return ArcFiles.debugState(); }
+function act(a) { MarwanFiles.handleAction(a); }
+function stt() { return MarwanFiles.debugState(); }
 
 /* Wait until a predicate is true or the budget runs out. Polling beats a
    fixed sleep: the mock has real latency and a fixed wait would either be
@@ -869,7 +869,7 @@ function runSuite() {
     .then(partReal)
     .catch(function (e) { bad("the suite threw: " + (e && e.message ? e.message : e)); })
     .then(function () {
-      try { ArcFiles.close(); } catch (e) {}
+      try { MarwanFiles.close(); } catch (e) {}
       var ms = Math.round(performance.now() - t0);
       line("");
       var v = $("#verdict");
@@ -882,13 +882,13 @@ function runSuite() {
 /* ── 1. assets and CSP discipline ─────────────────────────────────── */
 function partAssets() {
   head("assets — a strict CSP allows a linked sheet and refuses an injected one");
-  assert(!!window.ArcFiles, "ArcFiles is loaded (" + (window.ArcFiles && ArcFiles.version) + ")");
-  assert(!!window.ArcOSK, "ArcOSK is loaded (" + (window.ArcOSK && ArcOSK.version) + ")");
+  assert(!!window.MarwanFiles, "MarwanFiles is loaded (" + (window.MarwanFiles && MarwanFiles.version) + ")");
+  assert(!!window.MarwanOSK, "MarwanOSK is loaded (" + (window.MarwanOSK && MarwanOSK.version) + ")");
   assert(cssLoaded(), "files.css resolved --fx-loaded, so the sheet is really applied");
 
   var injected = 0, sheets = 0;
   document.querySelectorAll("style").forEach(function (s) {
-    if (s.dataset && (s.dataset.arcFiles || s.dataset.arcOsk)) injected++;
+    if (s.dataset && (s.dataset.mosFiles || s.dataset.mosOsk)) injected++;
   });
   document.querySelectorAll('link[rel="stylesheet"]').forEach(function () { sheets++; });
   assert(injected === 0, "files.js injected no <style> element (" + sheets + " linked stylesheets)");
@@ -901,7 +901,7 @@ function partAssets() {
 /* ── 2. pure helpers ──────────────────────────────────────────────── */
 function partPure() {
   head("pure helpers — formatting, path arithmetic and the alias table");
-  var M = ArcFiles._model;
+  var M = MarwanFiles._model;
 
   assert(M.bytes(0) === "0 bytes", "bytes(0) = " + M.bytes(0));
   assert(M.bytes(1) === "1 byte", "bytes(1) = " + M.bytes(1));
@@ -920,10 +920,10 @@ function partPure() {
   assert(M.when(null) === "—", "when(null) = " + M.when(null));
   assert(M.when("not a date") === "—", "an unparseable date does not become NaN on screen");
 
-  var cp = M.crumbParts("C:\\Users\\arcshell\\Documents");
+  var cp = M.crumbParts("C:\\Users\\marwanshell\\Documents");
   assert(cp.length === 4, "crumbParts split 4 ways, got " + cp.length);
   assert(cp[0].path === "C:\\", "the first crumb is the drive root, got " + cp[0].path);
-  assert(cp[3].path === "C:\\Users\\arcshell\\Documents", "the last crumb is the full path");
+  assert(cp[3].path === "C:\\Users\\marwanshell\\Documents", "the last crumb is the full path");
   assert(M.crumbParts("C:\\").length === 1, "a drive root is one crumb");
 
   assert(M.kindOf({ isDirectory: true }) === "dir", "a folder is a folder");
@@ -952,7 +952,7 @@ function partPure() {
 /* ── 3. the virtual window, without a DOM ─────────────────────────── */
 function partVirtual() {
   head("virtualisation — the window arithmetic, asserted without touching the DOM");
-  var M = ArcFiles._model;
+  var M = MarwanFiles._model;
 
   var heights = [];
   for (var i = 0; i < 10000; i++) heights.push(54);
@@ -990,14 +990,14 @@ function partDrives() {
   head("drive picker — the root view");
   useMock();
   MOCK.plug(false);
-  ArcFiles.close();
-  ArcFiles.open({ title: "Files (test)" });
+  MarwanFiles.close();
+  MarwanFiles.open({ title: "Files (test)" });
   return until(function () { return stt().rows > 0; }, "the drive list to load")
     .then(function () {
       var s = stt();
       assert(s.view === "drives", "the root view is the drive picker");
       assert(s.rows >= 8, "the picker has " + s.rows + " rows (places + drives + headers)");
-      var wrap = document.querySelector(".arc-files");
+      var wrap = document.querySelector(".mos-files");
       assert(!!wrap && wrap.classList.contains("is-open"), "the explorer surface is open");
       assert(document.querySelector(".fx-hdr-row") !== null, "section headers render inside the list");
       assert(!!document.querySelector(".fx-row .fx-name"), "place rows render");
@@ -1030,7 +1030,7 @@ function partDrives() {
 
       /* Now plug one in and prove the removable path exists. */
       MOCK.plug(true);
-      ArcFiles.refresh();
+      MarwanFiles.refresh();
       return until(function () { return stt().rows > 0 && stt().view === "drives"; }, "the picker to reload")
         .then(function () { return sleep(60); });
     })
@@ -1051,11 +1051,11 @@ function partDrives() {
 /* ── 5. navigation ────────────────────────────────────────────────── */
 function partNavigate() {
   head("navigation — d-pad, Cross, Circle, and the cursor memory");
-  return ArcFiles.goTo("C:\\Users\\arcshell\\Documents")
+  return MarwanFiles.goTo("C:\\Users\\marwanshell\\Documents")
     .then(function () {
       var s = stt();
       assert(s.view === "dir", "Cross into a folder switches to the directory view");
-      assert(s.path === "C:\\Users\\arcshell\\Documents", "path is " + s.path);
+      assert(s.path === "C:\\Users\\marwanshell\\Documents", "path is " + s.path);
       assert(s.rows === 4, "4 visible rows (one hidden desktop.ini is filtered), got " + s.rows);
       var first = s.focused;
       act("down");
@@ -1078,9 +1078,9 @@ function partNavigate() {
       return until(function () { return stt().path.indexOf("Projects") > 0; }, "Projects to open");
     })
     .then(function () {
-      assert(stt().path === "C:\\Users\\arcshell\\Documents\\Projects", "opened " + stt().path);
+      assert(stt().path === "C:\\Users\\marwanshell\\Documents\\Projects", "opened " + stt().path);
       act("circle");
-      return until(function () { return stt().path === "C:\\Users\\arcshell\\Documents"; }, "Circle to go up");
+      return until(function () { return stt().path === "C:\\Users\\marwanshell\\Documents"; }, "Circle to go up");
     })
     .then(function () {
       assert(stt().focused === "Projects", "backing out landed on Projects again — the cursor memory works");
@@ -1088,7 +1088,7 @@ function partNavigate() {
       assert(det && det.textContent === "Projects", "the details strip follows the cursor (" + (det && det.textContent) + ")");
 
       /* Circle at the root of the tree leaves the explorer entirely. */
-      return ArcFiles.goTo("C:\\").then(function () {
+      return MarwanFiles.goTo("C:\\").then(function () {
         act("circle");
         return until(function () { return stt().view === "drives"; }, "Circle at a drive root to reach the picker");
       });
@@ -1096,12 +1096,12 @@ function partNavigate() {
     .then(function () {
       ok("Circle at a drive root returns to the drive picker");
       var exited = false;
-      ArcFiles.close();
-      ArcFiles.open({ title: "Files (test)", onExit: function () { exited = true; } });
+      MarwanFiles.close();
+      MarwanFiles.open({ title: "Files (test)", onExit: function () { exited = true; } });
       return until(function () { return stt().rows > 0; }, "reopen").then(function () {
         act("circle");
-        assert(exited && !ArcFiles.isOpen(), "Circle at the picker pops out of the explorer and fires onExit");
-        ArcFiles.open({ title: "Files (test)" });
+        assert(exited && !MarwanFiles.isOpen(), "Circle at the picker pops out of the explorer and fires onExit");
+        MarwanFiles.open({ title: "Files (test)" });
         return until(function () { return stt().rows > 0; }, "reopen again");
       });
     });
@@ -1111,7 +1111,7 @@ function partNavigate() {
 function partHuge() {
   head("a folder with 10,000 files — the whole point of virtualising");
   var t0 = performance.now();
-  return ArcFiles.goTo("C:\\Users\\arcshell\\Downloads\\huge")
+  return MarwanFiles.goTo("C:\\Users\\marwanshell\\Downloads\\huge")
     .then(function () { return until(function () { return stt().rows >= 10000; }, "10,000 rows"); })
     .then(function () {
       var load = Math.round(performance.now() - t0);
@@ -1120,7 +1120,7 @@ function partHuge() {
       assert(s.rendered < 40, "only " + s.rendered + " of them exist in the DOM");
       line("        first paint of 10,000 entries: " + load + " ms (mock latency included)");
 
-      var domRows = document.querySelectorAll(".arc-files .fx-row").length;
+      var domRows = document.querySelectorAll(".mos-files .fx-row").length;
       assert(domRows < 40, "the DOM really does hold " + domRows + " row elements, not 10,000");
 
       /* 300 cursor steps, timed. This is the hold-to-repeat case: on a TV the
@@ -1157,7 +1157,7 @@ function partHuge() {
 /* ── 7. selection and the context menu ────────────────────────────── */
 function partSelectAndMenu() {
   head("Square multi-selects; Triangle opens the context menu");
-  return ArcFiles.goTo("C:\\Users\\arcshell\\Documents")
+  return MarwanFiles.goTo("C:\\Users\\marwanshell\\Documents")
     .then(function () {
       act("square");
       assert(stt().selected === 1, "Square marked one item");
@@ -1196,7 +1196,7 @@ function partSelectAndMenu() {
 /* ── 8. destructive confirmations ─────────────────────────────────── */
 function partConfirm() {
   head("destructive operations always confirm, with Cancel focused");
-  return ArcFiles.goTo("C:\\Users\\arcshell\\Documents")
+  return MarwanFiles.goTo("C:\\Users\\marwanshell\\Documents")
     .then(function () {
       act("square");                 // mark one
       act("triangle");
@@ -1287,7 +1287,7 @@ function clickMenu(label) {
 function partProgress() {
   head("copy with progress, then a cancel that genuinely stops it");
   MOCK.plug(true);
-  return ArcFiles.goTo("C:\\Users\\arcshell\\Downloads")
+  return MarwanFiles.goTo("C:\\Users\\marwanshell\\Downloads")
     .then(function () {
       /* movie.mkv is 8.9 GB in the mock and copies at 180 MB/s, so there is
          about fifty seconds of transfer to interrupt. */
@@ -1306,7 +1306,7 @@ function partProgress() {
       assert(true, "Copy marked the file: clipboard is " + stt().clip);
       var chip = document.querySelector(".fx-head-side .fx-chip.is-warn");
       assert(!!chip, "the head shows a chip saying something is waiting to be pasted");
-      return ArcFiles.goTo("E:\\");
+      return MarwanFiles.goTo("E:\\");
     })
     .then(function () {
       act("triangle");
@@ -1348,9 +1348,9 @@ function partProgress() {
       return sleep(300);
     })
     .then(function () {
-      return ArcFiles.goTo("E:\\").then(function () {
+      return MarwanFiles.goTo("E:\\").then(function () {
         var names = [];
-        document.querySelectorAll(".arc-files .fx-name").forEach(function (n) { names.push(n.textContent); });
+        document.querySelectorAll(".mos-files .fx-name").forEach(function (n) { names.push(n.textContent); });
         assert(names.indexOf("movie.mkv") < 0, "the cancelled copy left nothing behind on E:");
         var toast = document.querySelector(".fx-toast");
         assert(/cancelled/i.test(toast.textContent), "the toast says it was cancelled: “" + toast.textContent + "”");
@@ -1360,7 +1360,7 @@ function partProgress() {
       /* And now one that is allowed to finish, so "cancel" is not the only
          path that has ever been exercised. */
       head("a copy that is allowed to finish");
-      return ArcFiles.goTo("C:\\Users\\arcshell\\Documents").then(function () {
+      return MarwanFiles.goTo("C:\\Users\\marwanshell\\Documents").then(function () {
         var i = 0;
         while (stt().focused !== "notes.txt" && i++ < 20) act("down");
         assert(stt().focused === "notes.txt", "cursor is on notes.txt");
@@ -1373,7 +1373,7 @@ function partProgress() {
       clickMenu("Copy");
       return until(function () { return !!stt().clip; }, "clipboard");
     })
-    .then(function () { return ArcFiles.goTo("E:\\"); })
+    .then(function () { return MarwanFiles.goTo("E:\\"); })
     .then(function () {
       act("triangle");
       return until(function () { return stt().scope === "menu"; }, "menu");
@@ -1387,7 +1387,7 @@ function partProgress() {
          for the file to actually turn up rather than for a fixed interval. */
       return until(function () {
         var names = [];
-        document.querySelectorAll(".arc-files .fx-name").forEach(function (n) { names.push(n.textContent); });
+        document.querySelectorAll(".mos-files .fx-name").forEach(function (n) { names.push(n.textContent); });
         return names.indexOf("notes.txt") >= 0;
       }, "notes.txt to appear on E:", 12000);
     })
@@ -1397,7 +1397,7 @@ function partProgress() {
 /* ── 10. errors read as English ───────────────────────────────────── */
 function partErrors() {
   head("every failure surfaces as readable text, never a bare code");
-  return ArcFiles.goTo("C:\\Windows\\System32\\config")
+  return MarwanFiles.goTo("C:\\Windows\\System32\\config")
     .then(function () {
       var empty = document.querySelector(".fx-empty");
       assert(!!empty, "an error state replaced the list");
@@ -1406,17 +1406,17 @@ function partErrors() {
       assert(!/0x[0-9A-F]{8}/.test(text), "no raw hex error code reached the screen");
       var sub = document.querySelector(".fx-det-sub");
       assert(sub.classList.contains("is-error"), "the details strip is in its error state too");
-      return ArcFiles.goTo("C:\\Users\\arcshell\\nowhere-at-all");
+      return MarwanFiles.goTo("C:\\Users\\marwanshell\\nowhere-at-all");
     })
     .then(function () {
       var text = document.querySelector(".fx-empty").textContent;
       assert(/no longer exists/i.test(text), "a missing folder says so: “" + text.trim().slice(0, 70) + "”");
-      return ArcFiles.goTo("C:\\Users\\arcshell\\Documents");
+      return MarwanFiles.goTo("C:\\Users\\marwanshell\\Documents");
     })
     .then(function () {
       assert(stt().rows === 4, "and the explorer recovered — back to a working folder");
       /* A refused system path, end to end through the mock's guard. */
-      return ArcFiles.goTo("C:\\Windows").then(function () {
+      return MarwanFiles.goTo("C:\\Windows").then(function () {
         act("square");
         act("triangle");
         return until(function () { return stt().scope === "menu"; }, "the menu");
@@ -1437,7 +1437,7 @@ function partErrors() {
       var t = document.querySelector(".fx-toast").textContent;
       ok("deleting inside C:\\Windows is refused in words: “" + t.slice(0, 90) + "”");
       assert(!/error|0x/i.test(t.split(" ")[0]), "the message opens with prose, not a code");
-      return ArcFiles.goTo("C:\\Users\\arcshell\\Documents");
+      return MarwanFiles.goTo("C:\\Users\\marwanshell\\Documents");
     });
 }
 
@@ -1448,8 +1448,8 @@ function partEject() {
   /* Reopening is the shortest way back to the picker; walking up with Circle
      would pop out of the explorer at the drive root, which is the correct
      behaviour and the wrong thing for this test to be doing. */
-  ArcFiles.close();
-  ArcFiles.open({ title: "Files (test)" });
+  MarwanFiles.close();
+  MarwanFiles.open({ title: "Files (test)" });
   return until(function () { return stt().view === "drives" && stt().rows > 0; }, "the picker with a USB stick")
     .then(function () {
       assert(walkTo("E"), "cursor is on the removable drive");
@@ -1511,8 +1511,8 @@ function partReal() {
        (v.data.elevated ? " (elevated)" : " (standard user)")) : "?"));
 
   useFixture();
-  ArcFiles.close();
-  ArcFiles.open({ title: "Files (real capture)" });
+  MarwanFiles.close();
+  MarwanFiles.open({ title: "Files (real capture)" });
 
   return until(function () { return stt().view === "drives" && stt().rows > 0; }, "the real drive list")
     .then(function () {
@@ -1538,7 +1538,7 @@ function partReal() {
       var det = document.querySelector(".fx-det-sub").textContent;
       assert(/has a Recycle Bin/.test(det), "the details strip reports the real recycleBin flag");
 
-      return ArcFiles.goTo("C:\\");
+      return MarwanFiles.goTo("C:\\");
     })
     .then(function () {
       var s = stt();
@@ -1549,29 +1549,29 @@ function partReal() {
       assert(real.hiddenPresent > 0, "the real C:\\ has " + real.hiddenPresent + " hidden/system items, filtered by default");
 
       var names = [];
-      document.querySelectorAll(".arc-files .fx-name").forEach(function (n) { names.push(n.textContent); });
+      document.querySelectorAll(".mos-files .fx-name").forEach(function (n) { names.push(n.textContent); });
       assert(names.indexOf("Windows") >= 0, "C:\\Windows is on screen");
       assert(names.indexOf("Users") >= 0, "C:\\Users is on screen");
 
       var whens = [];
-      document.querySelectorAll(".arc-files .fx-when").forEach(function (n) { whens.push(n.textContent); });
+      document.querySelectorAll(".mos-files .fx-when").forEach(function (n) { whens.push(n.textContent); });
       var badDate = whens.filter(function (t) { return /NaN|Invalid/.test(t); }).length;
       assert(badDate === 0, "no real timestamp rendered as NaN (" + whens.length + " checked)");
       line("        first real row reads: " + names[0] + "   " + whens[0]);
 
-      return ArcFiles.goTo("C:\\ArcOS\\web");
+      return MarwanFiles.goTo("C:\\MarwanOS\\web");
     })
     .then(function () {
       var names = [];
-      document.querySelectorAll(".arc-files .fx-name").forEach(function (n) { names.push(n.textContent); });
+      document.querySelectorAll(".mos-files .fx-name").forEach(function (n) { names.push(n.textContent); });
       assert(names.indexOf("files.js") >= 0 || names.indexOf("index.html") >= 0,
              "a real folder of real files listed (" + stt().rows + " rows)");
       var sizes = [];
-      document.querySelectorAll(".arc-files .fx-size").forEach(function (n) { if (n.textContent) sizes.push(n.textContent); });
+      document.querySelectorAll(".mos-files .fx-size").forEach(function (n) { if (n.textContent) sizes.push(n.textContent); });
       assert(sizes.length > 0 && !/NaN|undefined/.test(sizes.join(" ")), "real sizes render: " + sizes.slice(0, 3).join(", "));
 
       /* The real access-denied path, verbatim from the native layer. */
-      return ArcFiles.goTo("C:\\Windows\\System32\\config");
+      return MarwanFiles.goTo("C:\\Windows\\System32\\config");
     })
     .then(function () {
       var e = document.querySelector(".fx-empty");
@@ -1584,7 +1584,7 @@ function partReal() {
                "the native layer's own words reached the screen: “" + raw.detail + "”");
         assert(!/0x[0-9A-F]{8}/.test(e.textContent), "and the raw code stayed out of the UI");
       }
-      return ArcFiles.goTo("C:\\nope-nothing-here");
+      return MarwanFiles.goTo("C:\\nope-nothing-here");
     })
     .then(function () {
       var e = document.querySelector(".fx-empty");
@@ -1599,11 +1599,11 @@ function partReal() {
       var ejz = FIXTURE.handle({ cmd: "fs.eject", drive: "Z" });
       assert(!ejz.ok && ejz.error === "no_such_drive", "a letter that is not there: “" + ejz.detail + "”");
 
-      var props = FIXTURE.data["fs.properties|C:\\ArcOS\\web\\index.html"];
+      var props = FIXTURE.data["fs.properties|C:\\MarwanOS\\web\\index.html"];
       assert(props && props.ok, "real fs.properties captured");
       assert(props.data.sizeOnDisk >= props.data.size,
-             "size on disk (" + ArcFiles._model.bytes(props.data.sizeOnDisk) + ") is at least the logical size (" +
-             ArcFiles._model.bytes(props.data.size) + ")");
+             "size on disk (" + MarwanFiles._model.bytes(props.data.sizeOnDisk) + ") is at least the logical size (" +
+             MarwanFiles._model.bytes(props.data.size) + ")");
     });
 }
 
@@ -1611,12 +1611,12 @@ function partReal() {
 
 (function () {
   var q = location.search;
-  hostLog("harness loaded — ArcFiles " + (window.ArcFiles ? ArcFiles.version : "MISSING") +
-          ", ArcOSK " + (window.ArcOSK ? ArcOSK.version : "MISSING") +
+  hostLog("harness loaded — MarwanFiles " + (window.MarwanFiles ? MarwanFiles.version : "MISSING") +
+          ", MarwanOSK " + (window.MarwanOSK ? MarwanOSK.version : "MISSING") +
           ", " + innerWidth + "x" + innerHeight +
           ", root " + getComputedStyle(document.documentElement).fontSize +
           ", css " + (cssLoaded() ? "linked" : "MISSING"));
   if (q.indexOf("auto=1") >= 0) setTimeout(runSuite, 300);
-  if (q.indexOf("show=1") >= 0) { useMock(); MOCK.plug(true); setTimeout(function () { ArcFiles.open({ title: "Files (mock)" }); }, 200); }
+  if (q.indexOf("show=1") >= 0) { useMock(); MOCK.plug(true); setTimeout(function () { MarwanFiles.open({ title: "Files (mock)" }); }, 200); }
 })();
 </script>

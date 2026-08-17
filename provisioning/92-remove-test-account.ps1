@@ -1,17 +1,17 @@
 <#
 .SYNOPSIS
-    UNDO for 02-create-test-account.ps1 -- deletes the 'arcshell' local account and its profile.
+    UNDO for 02-create-test-account.ps1 -- deletes the 'marwanshell' local account and its profile.
 
 .DESCRIPTION
     Removes:
-      1. The Win32_UserProfile for the account's SID (deletes C:\Users\arcshell
+      1. The Win32_UserProfile for the account's SID (deletes C:\Users\marwanshell
          and the registry ProfileList entry) via Remove-CimInstance.
       2. The local user account itself via Remove-LocalUser.
 
     Profile is removed FIRST, because the profile lookup is keyed on the SID and
     the SID is easiest to resolve while the account still exists.
 
-    THIS IS DESTRUCTIVE AND IRREVERSIBLE for anything stored in C:\Users\arcshell.
+    THIS IS DESTRUCTIVE AND IRREVERSIBLE for anything stored in C:\Users\marwanshell.
     That directory is expected to hold nothing of value -- it is a throwaway test
     profile. Confirm that before running.
 
@@ -46,8 +46,15 @@
 
 [CmdletBinding()]
 param(
+    # The account 02-create-test-account.ps1 makes.
+    #
+    # LEGACY: before the MarwanOS rename this account was called 'arcshell', and
+    # a machine provisioned back then still has it under that name — renaming
+    # this script did not rename what it already created. Pass
+    # `-UserName arcshell` to clean that one up. The guard below still applies,
+    # so this cannot be pointed at a real account either way.
     [ValidateNotNullOrEmpty()]
-    [string]$UserName = 'arcshell',
+    [string]$UserName = 'marwanshell',
 
     # Skip the interactive confirmation prompt (for scripted teardown).
     [switch]$Confirm,

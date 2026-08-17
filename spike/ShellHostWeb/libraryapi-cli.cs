@@ -1,4 +1,4 @@
-// ARC OS - LibraryApi console harness
+// MarwanOS - LibraryApi console harness
 //
 // Exercises LibraryApi.Handle() from the command line so the installed-software scan can be
 // tested without going anywhere near the live shell.
@@ -35,9 +35,9 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
-using ArcOs.Library;
+using MarwanOs.Library;
 
-namespace ArcOs.Library.Cli
+namespace MarwanOs.Library.Cli
 {
     public static class LibCliProgram
     {
@@ -103,7 +103,7 @@ namespace ArcOs.Library.Cli
 
         static void Usage()
         {
-            Console.WriteLine("ARC OS LibraryApi harness");
+            Console.WriteLine("MarwanOS LibraryApi harness");
             Console.WriteLine();
             Console.WriteLine("  libraryapi-cli --scan [--icons]      scan and print the entry table");
             Console.WriteLine("  libraryapi-cli <cmd> [key=value ...] [--wait[=ms]] [--raw] [--quiet] [--trim]");
@@ -138,7 +138,7 @@ namespace ArcOs.Library.Cli
             }
             LJ d = env.Get("data");
 
-            Console.WriteLine("ARC OS library scan");
+            Console.WriteLine("MarwanOS library scan");
             Console.WriteLine("  machine   " + d.S("machine", "?") + "   user " + d.S("user", "?") +
                               "   elevated " + (d.B("elevated", false) ? "yes" : "no"));
             Console.WriteLine("  scanned   " + d.S("scannedUtc", "?") + "   in " +

@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   PC1 — file explorer  (ui/files.css)
+   MarwanOS — file explorer  (ui/files.css)
 
    A separate sheet rather than an injected <style> block: a strict CSP
    (`style-src 'self'`) blocks an inline style element but allows a
@@ -19,27 +19,28 @@
    in px except hairlines and shadows.
    ═══════════════════════════════════════════════════════════════════════ */
 
-.arc-files-probe{ --fx-loaded:1 }
+.mos-files-probe{ --fx-loaded:1 }
 
-.arc-files{
-  --fx-void:     var(--void, #0b0b0d);
-  --fx-deep:     var(--deep, #141417);
-  --fx-haze:     var(--haze, #1c1c21);
-  --fx-line:     var(--line, #2b2b32);
-  --fx-ice:      var(--ice, #f4f5f7);
-  --fx-steel:    var(--steel, #9c9da5);
-  --fx-dim:      var(--dim, #6a6b73);
-  --fx-beam:     var(--beam, #1a86ff);
-  --fx-beam-hot: var(--beam-hot, #57a6ff);
-  --fx-beam-deep:var(--beam-deep, #0b4fa8);
-  --fx-good:     var(--good, #3fd18b);
-  --fx-warn:     var(--warn, #ffb457);
-  --fx-bad:      var(--bad, #ff5c68);
+.mos-files{
+  --fx-void:     var(--void, #070707);
+  --fx-deep:     var(--deep, #17181a);
+  --fx-haze:     var(--haze, #202124);
+  --fx-line:     var(--line, #34353a);
+  --fx-ice:      var(--ice, #efe9d6);
+  --fx-steel:    var(--steel, #cdc7b4);
+  --fx-dim:      var(--dim, #9d998c);
+  --fx-beam:     var(--beam, #50e380);
+  --fx-beam-hot: var(--beam-hot, #7cee9f);
+  --fx-beam-deep:var(--beam-deep, #1fb85a);
+  --fx-good:     var(--good, #7cee9f);
+  --fx-warn:     var(--warn, #ffb27a);
+  --fx-bad:      var(--bad, #ff4d8d);
   --fx-sel:      var(--sel, #ffffff);
 
-  --fx-sans:    var(--sans,    Inter,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
-  --fx-display: var(--display, "Inter Tight",Inter,"Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif);
+  --fx-sans:    var(--sans,    "Geist",Inter,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
+  --fx-display: var(--display, "Geist",Inter,"Segoe UI Variable Display","Segoe UI","Segoe UI Light",system-ui,-apple-system,sans-serif);
   --fx-e-out:   var(--e-out,   cubic-bezier(.16,.84,.24,1));
+  --fx-poster:  var(--poster,  Bangers,Impact,"Arial Black",sans-serif);
   --fx-e-in:    cubic-bezier(.6,0,.9,.4);
 
   --fx-edge:    var(--edge, max(2.5rem, 2.6vw));
@@ -55,26 +56,26 @@
   font-size:1rem;
   color:var(--fx-ice);
   background:
-    radial-gradient(120% 90% at 16% 4%,  #17171d 0%, rgba(11,11,13,0) 56%),
-    radial-gradient(90% 70% at 86% 96%,  #121217 0%, rgba(11,11,13,0) 58%),
+    radial-gradient(120% 90% at 16% 4%,  #17171d 0%, rgba(7,7,7,0) 56%),
+    radial-gradient(90% 70% at 86% 96%,  #121217 0%, rgba(7,7,7,0) 58%),
     var(--fx-void);
   opacity:0; pointer-events:none;
   transition:opacity .28s var(--fx-e-out);
   overflow:hidden;
   -webkit-font-smoothing:antialiased;
 }
-.arc-files.is-open{ opacity:1; pointer-events:auto }
+.mos-files.is-open{ opacity:1; pointer-events:auto }
 
-.arc-files *{ box-sizing:border-box }
-.arc-files button{
+.mos-files *{ box-sizing:border-box }
+.mos-files button{
   font-family:inherit; font-size:inherit;
   color:inherit; background:none; border:0; cursor:pointer; text-align:left;
 }
-.arc-files svg{ fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round }
+.mos-files svg{ fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round }
 
 /* Reduced motion: the shell honours the OS setting, so this does too. */
-.arc-files.is-still,
-.arc-files.is-still *{ transition-duration:.12s !important; animation:none !important }
+.mos-files.is-still,
+.mos-files.is-still *{ transition-duration:.12s !important; animation:none !important }
 
 /* ═══ Head — breadcrumb ══════════════════════════════════════════════ */
 
@@ -92,13 +93,13 @@
 .fx-crumbs{
   display:flex; align-items:center; gap:.15rem;
   min-width:0; flex-wrap:nowrap; overflow:hidden;
-  font-family:var(--fx-display); font-weight:700; letter-spacing:-.03em;
-  font-size:1.9rem; line-height:1.18;
+  font-family:var(--fx-poster); font-weight:400; letter-spacing:.02em;
+  font-size:2.3rem; line-height:1;
 }
 .fx-crumb{
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   max-width:22ch; color:var(--fx-steel);
-  padding:.05rem .25rem; border-radius:.35rem;
+  padding:.05rem .25rem; border-radius:.0625rem;
 }
 .fx-crumb.is-last{ color:var(--fx-ice) }
 .fx-crumb-sep{ color:var(--fx-dim); opacity:.7; flex:0 0 auto; padding:0 .1rem }
@@ -108,7 +109,7 @@
 .fx-head-side{ flex:0 0 auto; display:flex; align-items:center; gap:.7rem }
 .fx-chip{
   display:inline-flex; align-items:center; gap:.45rem;
-  padding:.3rem .625rem; border-radius:.25rem;
+  padding:.3rem .625rem; border-radius:.0625rem;
   border:1px solid var(--fx-line); background:var(--fx-deep);
   font-size:.78rem; font-weight:500; letter-spacing:0; color:var(--fx-steel);
   white-space:nowrap;
@@ -141,7 +142,7 @@
   grid-template-columns: 2.6rem 1fr auto 11rem;
   align-items:center; gap:.9rem;
   padding:0 1rem 0 .7rem;
-  border-radius:.7rem;
+  border-radius:.125rem;
   border:1px solid transparent;
   color:var(--fx-steel);
   transition:background .18s var(--fx-e-out), border-color .18s var(--fx-e-out), color .18s var(--fx-e-out);
@@ -166,7 +167,7 @@
 .fx-when{ text-align:right }
 
 .fx-row[data-focus="on"]{
-  background:#26262e;
+  background:#2b2c30;
   border-color:transparent;
   box-shadow:inset 0 0 0 2px var(--fx-sel);
   color:var(--fx-ice);
@@ -182,7 +183,7 @@
 }
 .fx-tick{
   position:absolute; left:.15rem; top:50%; translate:0 -50%;
-  width:.28rem; height:52%; border-radius:99px; background:var(--fx-good);
+  width:.28rem; height:52%; border-radius:.0625rem; background:var(--fx-good);
   opacity:0; transition:opacity .18s var(--fx-e-out);
 }
 .fx-row.is-sel .fx-tick{ opacity:1 }
@@ -205,7 +206,7 @@
   margin-bottom:1.6rem;
 }
 .fx-card{
-  border:1px solid var(--fx-line); border-radius:1rem;
+  border:1px solid var(--fx-line); border-radius:.125rem;
   background:linear-gradient(180deg, rgba(28,28,33,.55), rgba(20,20,24,.72));
   padding:.85rem 1.1rem;
   display:flex; flex-direction:column; justify-content:center; gap:.1rem;
@@ -227,18 +228,18 @@
 }
 .fx-badge{
   font-size:.6875rem; font-weight:500; letter-spacing:0;
-  padding:.16rem .45rem; border-radius:.25rem;
+  padding:.16rem .45rem; border-radius:.0625rem;
   border:1px solid rgba(255,180,87,.45); color:var(--fx-warn);
   white-space:nowrap;
 }
 .fx-card-sub{ font-size:.78rem; color:var(--fx-dim); margin:.1rem 0 .6rem;
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 .fx-bar{
-  height:.38rem; border-radius:99px; background:rgba(11,11,13,.75);
+  height:.38rem; border-radius:.0625rem; background:rgba(7,7,7,.75);
   overflow:hidden; border:1px solid rgba(43,43,50,.7);
 }
 .fx-bar-fill{
-  height:100%; border-radius:99px;
+  height:100%; border-radius:.0625rem;
   background:linear-gradient(90deg, var(--fx-beam-deep), var(--fx-beam));
   transition:width .5s var(--fx-e-out);
 }
@@ -256,7 +257,7 @@
   gap:.6rem; text-align:center; padding:2rem;
 }
 .fx-empty svg{ width:3rem; height:3rem; color:var(--fx-line) }
-.fx-empty b{ font-family:var(--fx-display); font-weight:700; letter-spacing:-.03em; font-size:1.5rem; color:var(--fx-steel) }
+.fx-empty b{ font-family:var(--fx-poster); font-weight:400; letter-spacing:.02em; font-size:1.9rem; color:var(--fx-steel) }
 .fx-empty span{ font-size:.9rem; color:var(--fx-dim); max-width:52ch; line-height:1.55 }
 .fx-empty.is-error b{ color:var(--fx-warn) }
 
@@ -266,14 +267,14 @@
   flex:0 0 auto;
   padding:.8rem var(--fx-edge);
   border-top:1px solid rgba(43,43,50,.6);
-  background:rgba(11,11,13,.5);
+  background:rgba(7,7,7,.5);
   display:flex; align-items:center; gap:1.4rem;
   min-height:3.6rem;
 }
 .fx-det-ico{
   width:2.4rem; height:2.4rem; flex:0 0 auto;
   display:grid; place-items:center; color:var(--fx-beam);
-  border:1px solid var(--fx-line); border-radius:.6rem;
+  border:1px solid var(--fx-line); border-radius:.125rem;
   background:rgba(20,20,24,.7);
 }
 .fx-det-ico svg{ width:1.3rem; height:1.3rem }
@@ -313,17 +314,16 @@
 .fx-hint-glyphs{ display:inline-flex; align-items:center; gap:.18rem }
 .fx-hints .glyph{ width:1.15rem; height:1.15rem; fill:none; stroke:currentColor; stroke-width:1.5;
                   stroke-linecap:round; stroke-linejoin:round }
-/* The four face symbols carry Sony's heavier absolute stroke, square-cut
-   ends and sharp corners — see the note beside PAD_GLYPH in index.html. */
-.fx-hints .glyph .face{ stroke-width:1.9; stroke-linecap:butt; stroke-linejoin:miter }
-.fx-hints .glyph .tri{ stroke-linejoin:miter }
+/* The pad prompts are filled PromptFont outlines, not stroked symbols —
+   see the note beside PAD_GLYPH in index.html. The .lbl rules that used to
+   sit here styled <text> elements inside L1/R1; those labels are outlines
+   in the glyph now, so the explorer's hint bar no longer needs a font to
+   have loaded before it can tell you which trigger it means. */
+.fx-hints .glyph{ fill:currentColor; stroke:none }
 .fx-hints .glyph .solid{ fill:currentColor; stroke:none }
-.fx-hints .glyph .lbl{ font-size:8px; fill:currentColor; stroke:none; font-family:var(--fx-sans);
-                       font-weight:600; letter-spacing:.04em }
-.fx-hints .glyph .lbl.sm{ font-size:7.2px }
 .fx-key{
   display:inline-grid; place-items:center; min-width:1.5rem; height:1.25rem;
-  padding:0 .3rem; border:1px solid var(--fx-line); border-radius:.28rem;
+  padding:0 .3rem; border:1px solid var(--fx-line); border-radius:.0625rem;
   background:rgba(20,20,24,.8); font-size:.66rem; color:var(--fx-steel);
 }
 
@@ -345,7 +345,7 @@
 .fx-panel{
   width:min(46rem, 92vw);
   max-height:82vh; overflow:auto;
-  border:1px solid var(--fx-line); border-radius:1.1rem;
+  border:1px solid var(--fx-line); border-radius:.125rem;
   background:linear-gradient(180deg, rgba(28,28,33,.92), rgba(9,15,26,.96));
   box-shadow:0 1.6rem 4rem rgba(1,3,8,.7);
   padding:1.5rem 1.6rem 1.4rem;
@@ -362,7 +362,7 @@
   color:var(--fx-dim); margin-bottom:.4rem;
 }
 .fx-panel-title{
-  font-family:var(--fx-display); font-weight:700; letter-spacing:-.03em; font-size:1.6rem;
+  font-family:var(--fx-poster); font-weight:400; letter-spacing:.02em; font-size:2rem;
   margin:0 0 .35rem; line-height:1.2;
 }
 .fx-panel-sub{
@@ -374,7 +374,7 @@
 
 .fx-item{
   display:grid; grid-template-columns:2.2rem 1fr auto; align-items:center; gap:.7rem;
-  width:100%; padding:.62rem .7rem; border-radius:.6rem;
+  width:100%; padding:.62rem .7rem; border-radius:.125rem;
   border:1px solid transparent; color:var(--fx-ice);
   transition:background .18s var(--fx-e-out), border-color .18s var(--fx-e-out);
 }
@@ -382,7 +382,7 @@
 .fx-item small{ display:block; font-size:.72rem; color:var(--fx-dim); margin-top:.1rem }
 .fx-item .fx-item-tail{ font-size:.76rem; color:var(--fx-dim) }
 .fx-item[data-focus="on"]{
-  background:#26262e;
+  background:#2b2c30;
   border-color:transparent;
   box-shadow:inset 0 0 0 2px var(--fx-sel);
 }
@@ -411,7 +411,7 @@
 
 .fx-actions{ display:flex; gap:.7rem; margin-top:1.2rem; flex-wrap:wrap }
 .fx-btn{
-  padding:.6rem 1.25rem; border-radius:6px;
+  padding:.6rem 1.25rem; border-radius:2px;
   border:1px solid var(--fx-line); background:var(--fx-haze);
   color:var(--fx-ice); font-size:.92rem; font-weight:600; letter-spacing:0;
   transition:border-color .2s var(--fx-e-out), background .2s var(--fx-e-out), transform .18s var(--fx-e-out);
@@ -420,6 +420,15 @@
   border-color:transparent;
   background:var(--fx-beam); color:#fff;
   box-shadow:0 0 0 2px var(--fx-sel);
+}
+/* Matches .fx-item: a button that cannot be pressed must not look pressable.
+   The focus ring is suppressed too — a panel whose only button is disabled
+   still lands the cursor somewhere, and a dimmed beam-filled button reads as
+   "press me and wait" rather than as "this one is not available". */
+.fx-btn[aria-disabled="true"]{ opacity:.38 }
+.fx-btn[aria-disabled="true"][data-focus="on"]{
+  background:var(--fx-haze); color:var(--fx-ice);
+  border-color:var(--fx-line); box-shadow:none;
 }
 .fx-btn.is-danger[data-focus="on"]{
   background:var(--warn); color:#1a1205; border-color:var(--warn);
@@ -431,7 +440,7 @@
 /* ── progress ─────────────────────────────────────────────────────── */
 .fx-prog{ margin:.4rem 0 .2rem }
 .fx-prog-bar{
-  height:.5rem; border-radius:99px; background:rgba(11,11,13,.8);
+  height:.5rem; border-radius:.0625rem; background:rgba(7,7,7,.8);
   border:1px solid rgba(43,43,50,.8); overflow:hidden;
 }
 .fx-prog-fill{
@@ -455,7 +464,7 @@
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left;
 }
 .fx-problems{
-  margin-top:.9rem; padding:.6rem .8rem; border-radius:.6rem;
+  margin-top:.9rem; padding:.6rem .8rem; border-radius:.125rem;
   border:1px solid rgba(255,180,87,.35); background:rgba(42,20,6,.4);
   font-size:.76rem; color:var(--fx-warn); max-height:9rem; overflow:auto;
 }
@@ -466,7 +475,7 @@
 .fx-toast{
   position:absolute; left:50%; bottom:7.5rem; translate:-50% .6rem; z-index:9;
   max-width:min(60rem, 88vw);
-  padding:.7rem 1.2rem; border-radius:99px;
+  padding:.7rem 1.2rem; border-radius:.0625rem;
   border:1px solid var(--fx-line); background:rgba(9,15,26,.95);
   box-shadow:0 .8rem 2rem rgba(1,3,8,.6);
   font-size:.88rem; color:var(--fx-ice);

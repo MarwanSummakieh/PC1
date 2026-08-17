@@ -1,8 +1,8 @@
-# PLAN.md — ARC OS engineering decision record
+# PLAN.md — MarwanOS engineering decision record
 
 **Machine:** Acer Predator PT314-51s, Windows 11 IoT Enterprise LTSC 2024, build 26100.9168, x64.
 **Date:** 2026-08-13. **Status of the machine:** unmodified. No provisioning script has been run;
-Shell Launcher is not enabled; the `arcshell` account does not exist.
+Shell Launcher is not enabled; the `marwanshell` account does not exist.
 
 Evidence base, all in this repo:
 [`README.md`](README.md) (design spec) ·
@@ -35,7 +35,7 @@ Picture's "Exit to Desktop" is a no-op, its shutdown/log-off actions do nothing 
 boot race where Steam comes up before the network can deadlock a machine with no shell to fall
 back to (§3.3). Those are all recoverable by owning the surfaces ourselves — our own volume UI,
 our own notifications, our own power actions through the Shell Launcher exit-code policy — which
-the ARC OS design already assumes, since the control centre is a first-class screen rather than a
+the MarwanOS design already assumes, since the control centre is a first-class screen rather than a
 shim over Windows' own ([`README.md` — Interaction](README.md)). **The pragmatic posture is
 therefore: replace the shell, own every surface we need, and treat "start a hidden background
 explorer after our first frame" as a documented, pre-written fallback lever rather than part of
@@ -79,9 +79,9 @@ Supporting notes on the verdict:
 ## 2. Stack recommendation
 
 **Build a native Win32/C# host process that owns window management, process lifecycle, input and
-Shell Launcher integration, and render the existing ARC OS HTML design inside it in WebView2.**
+Shell Launcher integration, and render the existing MarwanOS HTML design inside it in WebView2.**
 The decision is made on window-handoff evidence, and that evidence already exists as a working
-binary on this machine: `spike/ShellHost/bin/ArcShellHost.exe` was compiled with nothing but the
+binary on this machine: `spike/ShellHost/bin/MarwanShellHost.exe` was compiled with nothing but the
 inbox `csc.exe` (4.8.9232.0, C# 5 language level — there is no .NET SDK, no MSVC and no Windows
 SDK on this box) and it demonstrably does the three hard things. Job-object process-tree tracking
 survives the launcher-spawns-game-then-exits case that every polling implementation fails,
@@ -96,7 +96,7 @@ synthetic-ALT `keybd_event` workaround 11/11 (§7) — so that workaround is loa
 defensive dead code. Exit codes 0/2/3/99 come out distinct and correct end-to-end, which is exactly
 the contract a Shell Launcher return-code policy consumes (§5). Discarding that in favour of a
 different runtime means re-proving all of it. On the UI side the argument is just as concrete: the
-ARC OS design is *already* HTML/CSS and self-contained with no build step and no fetched fonts
+MarwanOS design is *already* HTML/CSS and self-contained with no build step and no fetched fonts
 ([`README.md` — Files](README.md)); the WebView2 Evergreen runtime 151.0.4129.78 is already
 installed on this machine; and WebView2's one serious weakness for a couch UI — input latency and
 the browser event pipeline — is mitigated because the host owns the controller and feeds discrete,
@@ -110,7 +110,7 @@ Honest weighing of the alternatives:
 |---|---|---|---|
 | **Win32/C# host + WebView2** (recommended) | All handoff mechanics already proven here; design already HTML; runtime already installed; buildable today with zero installs | WebView2 interop assemblies are not inbox — needs vendoring or an SDK; +150–250 MB RSS; cold-start of the browser process adds to first frame; WebView2's child HWNDs must not break the proven foreground paths (untested) | **Adopt** |
 | **Pure Win32/GDI+ host** (extend the spike as-is) | Zero new dependencies; fastest first frame; already compiles | The design is blur, layered gradients, variable-weight type, staggered motion — reimplementing it in GDI+ is months, and `backdrop-filter`-style blur has no cheap equivalent | Fallback only, with a visibly reduced UI |
-| **Godot 4** | Self-contained export, no SDK needed; SDL-based controller stack for free; low input latency | Entire ARC OS design would be rebuilt from scratch in a different layout model; the proven job-object/foreground/exit-code code becomes GDExtension or an out-of-process helper; new toolchain to install | Reject unless WebView2 fails under a replaced shell |
+| **Godot 4** | Self-contained export, no SDK needed; SDL-based controller stack for free; low input latency | Entire MarwanOS design would be rebuilt from scratch in a different layout model; the proven job-object/foreground/exit-code code becomes GDExtension or an out-of-process helper; new toolchain to install | Reject unless WebView2 fails under a replaced shell |
 | **WPF / Avalonia** | WPF's `PresentationFramework` is inbox on .NET FX 4.8, so `csc.exe` can build code-only WPF (no XAML compile step without MSBuild); rich enough for the design | Code-only WPF is a hostile authoring model for this much visual design; Avalonia needs NuGet + SDK; still a full redesign of an HTML artefact | Reject |
 | **WinUI 3 / UWP shell** | The one path Shell Launcher V2 is explicitly built for | Squarely in the KB5072911 blast radius — XAML-dependent shell components failing to start after cumulative updates, Microsoft-confirmed, fixed only from 2026-06-23 ([research §1.5.4](notes/research-handoff-and-priors.md)) — and needs an SDK we do not have | Reject |
 
@@ -197,22 +197,22 @@ started by an unattended session.
 recovery key. Run `provisioning/01`, then `02`, then `03` in order, each with `-WhatIfOnly` first,
 recording every row in `provisioning/MACHINE-CHANGES.md`. Discover and write down the real registry
 path of the Shell Launcher config while the machine is healthy (RECOVERY.md path (e) says to do
-this and it is not documented by Microsoft). Verify the recovery paths **on `arcshell` before any
+this and it is not documented by Microsoft). Verify the recovery paths **on `marwanshell` before any
 shell replacement is trusted** — per the standing guardrail that `brain` is never reconfigured.
 **Done when:** the machine boots from the USB stick to the Windows Setup screen and `Shift`+`F10`
 opens a command prompt; `Get-BitLockerVolume` output and the recovery key are recorded outside this
-machine; `WESL_UserSetting.IsEnabled()` returns true; `arcshell` exists as a non-admin local user;
-and, signed into `arcshell` with the custom shell active, `Ctrl`+`Shift`+`Esc` opens Task Manager
+machine; `WESL_UserSetting.IsEnabled()` returns true; `marwanshell` exists as a non-admin local user;
+and, signed into `marwanshell` with the custom shell active, `Ctrl`+`Shift`+`Esc` opens Task Manager
 **and** `Ctrl`+`Alt`+`Del` → Switch user returns to a live `brain` desktop — both confirmed by
 doing them, closing the two UNVERIFIED items in `RECOVERY.md` and rows in `MACHINE-CHANGES.md`.
 
 ### M1 — The spike, for real, under a replaced shell **[ELEVATED]**
-**Scope:** Run the existing four-test kickoff suite (`spike/run-tests.ps1`) with `ArcShellHost.exe`
-as `arcshell`'s actual Shell Launcher shell rather than as an app under explorer. Observe the
+**Scope:** Run the existing four-test kickoff suite (`spike/run-tests.ps1`) with `MarwanShellHost.exe`
+as `marwanshell`'s actual Shell Launcher shell rather than as an app under explorer. Observe the
 return-code policy end to end. Time the black gap from credentials-entered to first host frame.
 Run bench tests #1 (background explorer), #3 (toasts) and #4 (startup latency) from
 [research §6](notes/research-handoff-and-priors.md).
-**Done when:** signing into `arcshell` shows the host's window with no taskbar and no desktop;
+**Done when:** signing into `marwanshell` shows the host's window with no taskbar and no desktop;
 pressing X powers the machine off and pressing "2" reboots it, matching the
 `0→RestartShell, 2→RestartDevice, 3→ShutdownDevice` map; the black gap is measured with a number
 written into `MACHINE-CHANGES.md`; and we can state from observation whether `explorer.exe` started
@@ -231,11 +231,11 @@ observed for both the direct-exe and the `steam://` route, and repeated three ti
 foreground path won is in the log.
 
 ### M3 — WebView2 shell UI
-**Scope:** Host `index.html` inside `ArcShellHost.exe` via WebView2 (vendored interop assemblies,
+**Scope:** Host `index.html` inside `MarwanShellHost.exe` via WebView2 (vendored interop assemblies,
 no SDK install). Wire the host's input layer to the page over `PostWebMessage` so the rail, tabs
 and control centre respond to the DualSense; keep keyboard working. Boot sequence handled by
 `boot.html?next=index.html` or by the same page's boot phase.
-**Done when:** signing into `arcshell` produces the ARC OS boot sequence resolving into the home
+**Done when:** signing into `marwanshell` produces the MarwanOS boot sequence resolving into the home
 screen at full screen, and both DualSense pads move the rail, open the control centre and launch
 the focused tile — and M2's handoff behaviour is re-observed unchanged with the WebView2-backed
 window, since that is the regression this milestone risks.
@@ -268,7 +268,7 @@ mixer to fall back on, §3.1), display/audio device state, controller battery fr
 and the three power actions. Sleep is an in-process `SetSuspendState`, **not** an exit. Restart and
 shutdown exit with codes 2 and 3 and let Shell Launcher act, keeping us inside the ≤4 custom-code
 budget and leaving exit 1 free as a "drop me to a repair state" `DoNothing` code (research §1.3).
-**Done when:** from the control centre on `arcshell`, Sleep suspends the machine and the power
+**Done when:** from the control centre on `marwanshell`, Sleep suspends the machine and the power
 button resumes it back into the shell with the pads reconnecting; Restart reboots into the shell;
 Shut down powers the machine off; and the volume slider changes system volume with no explorer
 running.
@@ -282,8 +282,8 @@ restarting it rather than a black screen, and that a *repeated* crash cannot bec
 exit/restart loop (Microsoft's own warning, research §1.3). Update-in-place strategy: the shell
 binary cannot be overwritten while it is the running shell, so updates stage to a side directory
 and swap on next sign-in.
-**Done when:** killing `ArcShellHost.exe` from a `brain` session over Switch-user brings the shell
-straight back on `arcshell`; killing the WebView2 process leaves the host alive and the UI
+**Done when:** killing `MarwanShellHost.exe` from a `brain` session over Switch-user brings the shell
+straight back on `marwanshell`; killing the WebView2 process leaves the host alive and the UI
 returning within a few seconds; a deliberately crash-looping build is escapable without WinRE; and
 a staged binary update applies on the next sign-in without any elevated step.
 

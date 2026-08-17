@@ -1,16 +1,16 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ARC OS — the sensory layer.   ui/sfx.js
+   MarwanOS — the sensory layer.   ui/sfx.js
 
    Two objects live here and nothing else touches the page:
 
-     ArcSfx    a Web Audio synthesiser. Every cue is built from oscillators
+     MarwanSfx    a Web Audio synthesiser. Every cue is built from oscillators
                and filtered noise at play time — there are no audio files,
                because a strict CSP applies, the shell has to stay
                self-contained, and synthesis is the only way to control the
                attack and the decay to the millisecond. That control is the
                whole difference between "crafted" and "stock".
 
-     ArcFeel   the glue. It wraps Nav.action(), works out what just happened
+     MarwanFeel   the glue. It wraps Nav.action(), works out what just happened
                from the focus depth and the action's own return string, and
                fires the matching sound AND the matching haptic so the two
                are never out of step. It knows nothing about the shell's
@@ -60,9 +60,9 @@
 
   var STORE_KEY = "arc.sfx.v1";
 
-  /* ═══ ArcSfx — the synthesiser ═══════════════════════════════════════════ */
+  /* ═══ MarwanSfx — the synthesiser ═══════════════════════════════════════════ */
 
-  var ArcSfx = (function () {
+  var MarwanSfx = (function () {
 
     var ctx = null;               // the live AudioContext (lazy)
     var chain = null;             // { master, limiter } for the live context
@@ -621,7 +621,7 @@
     };
   })();
 
-  /* ═══ ArcFeel — sound + haptics, driven off the shell's own return values ══
+  /* ═══ MarwanFeel — sound + haptics, driven off the shell's own return values ══
 
      One wrapper, on Nav.action. Every pad action, every keyboard action and
      every synthetic action from the host shim passes through that function
@@ -631,7 +631,7 @@
      event in the palette apart without the shell having to announce
      anything — which is what keeps this file removable.                    */
 
-  var ArcFeel = (function () {
+  var MarwanFeel = (function () {
 
     var HAPTIC_KEY = "arc.haptic.v1";
 
@@ -655,7 +655,7 @@
 
     function post(o) {
       try {
-        if (typeof global.arcPost === "function") { global.arcPost(o); return true; }
+        if (typeof global.mosPost === "function") { global.mosPost(o); return true; }
         if (global.chrome && global.chrome.webview && global.chrome.webview.postMessage) {
           global.chrome.webview.postMessage(JSON.stringify(o));
           return true;
@@ -678,15 +678,15 @@
       boot: null, bootDone: "bootDone"
     };
 
-    /* When the shell speaks for itself — ArcFeel.play("launch") at the actual
-       launch site, ArcFeel.toggle() on a switch — the wrapper around
+    /* When the shell speaks for itself — MarwanFeel.play("launch") at the actual
+       launch site, MarwanFeel.toggle() on a switch — the wrapper around
        Nav.action must not then add its own guess on the way out. A short
        claim window is enough: the two always happen inside the same turn. */
     var claimedAt = -1e9;
     function nowMs() { return (global.performance && performance.now) ? performance.now() : Date.now(); }
 
     function fire(cue, opt) {
-      ArcSfx.play(cue, opt);
+      MarwanSfx.play(cue, opt);
       if (FEEL[cue] !== undefined && FEEL[cue] !== null) haptic(FEEL[cue]);
     }
     function fireClaimed(cue, opt) { claimedAt = nowMs(); fire(cue, opt); }
@@ -730,12 +730,18 @@
          osk: <key> / osk: ignored <key> (modal, not passed through)
          files: <a> / files: ignored <a>
          browser: <a> / browser: passed <a>
+         grant: hold to allow / grant: denied / grant: ignored <a> (…)
 
        Anything unrecognised is treated as "something happened" rather than as
-       a failure. A false error cue is far worse than a missing one. */
+       a failure. A false error cue is far worse than a missing one.
+
+       The grant sheet speaks for itself at the two moments that matter —
+       MarwanFeel.play("launch") the instant a hold completes,
+       MarwanFeel.play("back") on a Deny — and those claim the action, so
+       what is classified here is only the walking around on it. */
     var REFUSED = /^(no target|no scope|nothing focused|no action bound|focused item is disabled|unknown action|tabs are|options is|already |release )/i;
     var FAILED  = /(failed|unsupported|refused|cannot |could not)/i;
-    var MODAL   = /^(osk|files|browser):/i;
+    var MODAL   = /^(osk|files|browser|grant):/i;
     var UNTAKEN = /\b(ignored|passed)\b/i;
 
     function judge(name, phase, result, d0, d1) {
@@ -812,7 +818,7 @@
         return r;
       };
       attached = true;
-      log("feel: attached to Nav.action (sfx " + ArcSfx.version
+      log("feel: attached to Nav.action (sfx " + MarwanSfx.version
           + ", haptics " + (hapticOn ? Math.round(hapticLevel * 100) + "%" : "off") + ")");
       return true;
     }
@@ -843,11 +849,11 @@
         return hapticLevel;
       },
       testHaptic: function (effect) { return haptic(effect || "activate"); },
-      setLogger: function (fn) { if (typeof fn === "function") { log = fn; ArcSfx.setLogger(fn); } }
+      setLogger: function (fn) { if (typeof fn === "function") { log = fn; MarwanSfx.setLogger(fn); } }
     };
   })();
 
-  global.ArcSfx = ArcSfx;
-  global.ArcFeel = ArcFeel;
+  global.MarwanSfx = MarwanSfx;
+  global.MarwanFeel = MarwanFeel;
 
 })(typeof window !== "undefined" ? window : this);

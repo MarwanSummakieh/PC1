@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   PC1 — browser chrome  (ui/browser.js)
+   MarwanOS — browser chrome  (ui/browser.js)
 
    This is the browser everything EXCEPT the web page. The tab strip, the
    address bar, the TLS indicator, the start page of pinned tiles, the
@@ -7,7 +7,7 @@
    here, in the shell's own WebView, as ordinary DOM.
 
    The page itself is drawn by a second WebView2 that the host owns and
-   positions over the rectangle this module reserves (.arcbw-stage). Read
+   positions over the rectangle this module reserves (.mosbw-stage). Read
    the BrowserHost comment in ShellHostWeb.cs for why it has to be that way;
    the consequence for this file is one rule, applied everywhere:
 
@@ -22,24 +22,30 @@
 
    Public API
    ──────────
-     ArcBrowser.attach(bridge)          once, from index.html
-     ArcBrowser.open({ url, onExit })
-     ArcBrowser.close()
-     ArcBrowser.isOpen()
-     ArcBrowser.handleAction(a, phase)  the pad channel; true if consumed
-     ArcBrowser.hostMessage(m)          {type:"browser", ev:…} from the host
-     ArcBrowser.debugState()
+     MarwanBrowser.attach(bridge)          once, from index.html
+     MarwanBrowser.open({ url, onExit })
+     MarwanBrowser.close()
+     MarwanBrowser.isOpen()
+     MarwanBrowser.handleAction(a, phase)  the pad channel; true if consumed
+     MarwanBrowser.hostMessage(m)          {type:"browser", ev:…} from the host
+     MarwanBrowser.shellHold(on)           step aside for a shell overlay
+     MarwanBrowser.debugState()
 
    The bridge index.html supplies
    ──────────────────────────────
      post(o)        send a message to the host
-     osk(cfg)       open the on-screen keyboard (same cfg as ArcOSK.open)
+     osk(cfg)       open the on-screen keyboard (same cfg as MarwanOSK.open)
      oskIsOpen()
      log(text)      host log
      toast(text)    the shell's own toast, for things the browser is not up
      files(folder, path)   optional — show a finished download in the
                     console's file explorer. Return false if it could not,
                     and the browser falls back to naming the path.
+     grant(opts)    optional — the shell's consent sheet, for the
+                    permissions a page asks for. Promise<{allow,remember}>.
+                    Absent means every request is denied.
+     grantDrop(tok) optional — withdraw a sheet raised with that token,
+                    for when the host says the request is over.
    ═══════════════════════════════════════════════════════════════════════ */
 
 (function (root) {
@@ -61,12 +67,20 @@ var bridge = {
   /* Optional. The shell supplies it so a finished download can be shown where
      it landed, in the console's own file explorer. Without it the browser says
      the path in a toast rather than pretending the file is unreachable. */
-  files: null
+  files: null,
+  /* Optional. grant(opts) -> Promise<{allow, remember}>: the shell's one
+     consent sheet, used for the permissions a web page asks for. Without
+     it every such request is DENIED — a browser that cannot ask must not
+     answer yes on the human's behalf. */
+  grant: null,
+  /* Optional. grantDrop(token): take a sheet back off the screen when
+     the host says the request behind it is over. */
+  grantDrop: null
 };
 
-function say(what) { try { bridge.log("ArcBrowser " + what); } catch (e) {} }
+function say(what) { try { bridge.log("MarwanBrowser " + what); } catch (e) {} }
 function report(where, err) {
-  var m = "ArcBrowser[" + where + "] " + (err && err.stack ? err.stack : err);
+  var m = "MarwanBrowser[" + where + "] " + (err && err.stack ? err.stack : err);
   try { if (root.console && console.error) console.error(m); } catch (e) {}
   try { bridge.log(m); } catch (e) {}
 }
@@ -151,9 +165,18 @@ var st = {
   rates: {},              // id -> { got, at, bps }
   downSeen: {},           // id -> last state a toast was raised for
 
-  navMode: "spatial",     // what arcnav.js reports it is doing
+  navMode: "spatial",     // what mosnav.js reports it is doing
   focusKind: null,        // kind of the element the page's ring is on
   media: null,
+
+  /* The host's remembered permission decisions, as they last arrived, and
+     where it keeps them. Drawn by the Site permissions sheet. */
+  permissions: [],
+  permStore: "",
+
+  /* True while a shell overlay (the control centre) is up over the browser.
+     See shellHold(). */
+  shellHeld: false,
   pendingEdit: null,      // a text field inside the page is waiting for the OSK
   pendingSelect: null,
 
@@ -178,21 +201,19 @@ var G = {
   menu:   '<path d="M4.5 7.5h15M4.5 12h15M4.5 16.5h15"/>',
   clock:  '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.2V12l3.2 2"/>',
   plus:   '<path d="M12 5.5v13M5.5 12h13"/>',
-  /* The pad glyphs, kept identical to index.html's PAD_GLYPH — read the
-     long note beside it for where each shape comes from. Three files now
-     carry this vocabulary (here, ui/files.js and index.html); they have to
-     stay in step, because a browser whose Cross is a different Cross from
-     the home screen's is worse than either drawing on its own. */
-  cross:  '<path class="face" d="M5.7 5.7 18.3 18.3M18.3 5.7 5.7 18.3"/>',
-  circle: '<circle class="face" cx="12" cy="12" r="6.15"/>',
-  square: '<rect class="face" x="6.45" y="6.45" width="11.1" height="11.1"/>',
-  tri:    '<path class="face tri" d="M12 3.7 20 17.9H4z"/>',
-  dpad:   '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z"/>'
-        + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z"/>'
-        + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z"/>'
-        + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z"/>',
-  stick:  '<circle cx="12" cy="12" r="6.55"/><circle class="solid" cx="12" cy="12" r="4.7"/>',
-  opts:   '<path class="solid" d="M3 4.76h18v2H3zM3 11h18v2H3zM3 17.24h18v2H3z"/>',
+  /* The pad glyphs, identical to index.html's PAD_GLYPH — PromptFont
+     outlines under the OFL; read the long note beside that table. Four
+     files now carry this vocabulary (here, ui/files.js, ui/osk.js and
+     index.html) and they have to stay in step, because a browser whose
+     Cross is a different Cross from the home screen's is worse than either
+     drawing on its own. */
+  cross:  '<path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M12 11.04L7.61 6.65L6.65 7.61L11.04 12L6.65 16.39L7.61 17.35L12 12.96L16.39 17.35L17.35 16.39L12.96 12L17.35 7.61L16.39 6.65L12 11.04"/>',
+  circle: '<path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M15.91 8.09Q14.28 6.46 12 6.46Q9.72 6.46 8.09 8.09Q6.46 9.72 6.46 12Q6.46 14.28 8.09 15.91Q9.72 17.54 12 17.54Q14.28 17.54 15.91 15.91Q17.54 14.28 17.54 12Q17.54 9.72 15.91 8.09M9.05 9.05Q10.27 7.82 12 7.82Q13.73 7.82 14.95 9.05Q16.18 10.27 16.18 12Q16.18 13.73 14.95 14.95Q13.73 16.18 12 16.18Q10.27 16.18 9.05 14.95Q7.82 13.73 7.82 12Q7.82 10.27 9.05 9.05"/>',
+  square: '<path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M16.9 7.1L7.1 7.1L7.1 7.82L7.1 16.9L16.9 16.9L16.9 7.1M8.57 15.43L8.57 8.57L15.43 8.57L15.43 15.43L8.57 15.43"/>',
+  tri:    '<path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M18.05 16.01L12 5.14L5.95 16.01L7.1 16.01L18.05 16.01M8.28 14.66L12 7.94L15.72 14.66L8.28 14.66"/>',
+  dpad:   '<path class="solid" d="M13.58 12.14L18.38 7.2L24 7.2L24 16.8L18.38 16.8L13.58 12.14M22.9 8.21L19.06 8.21L15.26 12.12L19.06 15.79L22.9 15.79L22.9 8.21M0 7.2L5.62 7.2L10.42 12.14L5.62 16.8L0 16.8L0 7.2M8.74 12.12L4.94 8.21L1.1 8.21L1.1 15.79L4.94 15.79L8.74 12.12M12.14 10.42L7.2 5.62L7.2 0L16.8 0L16.8 5.62L12.14 10.42M8.21 1.1L8.21 4.94L12.12 8.74L15.79 4.94L15.79 1.1L8.21 1.1M7.2 24L7.2 18.38L12.14 13.58L16.8 18.38L16.8 24L7.2 24M12.12 15.26L8.21 19.06L8.21 22.9L15.79 22.9L15.79 19.06L12.12 15.26"/>',
+  stick:  '<path class="solid" d="M8.45 8.45Q9.91 6.98 12 6.98Q14.09 6.98 15.55 8.45Q17.02 9.91 17.02 12Q17.02 14.09 15.55 15.55Q14.09 17.02 12 17.02Q9.91 17.02 8.45 15.55Q6.98 14.09 6.98 12Q6.98 9.91 8.45 8.45M6.88 6.88Q9 4.75 12 4.75Q15 4.75 17.12 6.88Q19.25 9 19.25 12Q19.25 15 17.12 17.12Q15 19.25 12 19.25Q9 19.25 6.88 17.12Q4.75 15 4.75 12Q4.75 9 6.88 6.88M16.13 7.87Q14.42 6.17 12 6.17Q9.58 6.17 7.87 7.87Q6.17 9.58 6.17 12Q6.17 14.42 7.87 16.13Q9.58 17.83 12 17.83Q14.42 17.83 16.13 16.13Q17.83 14.42 17.83 12Q17.83 9.58 16.13 7.87M1.15 13.51L1.15 10.49L4.13 11.42L4.13 12.58L1.15 13.51M19.87 11.42L22.85 10.49L22.85 13.51L19.87 12.58L19.87 11.42M13.51 22.85L10.49 22.85L11.42 19.87L12.58 19.87L13.51 22.85M11.42 4.13L10.49 1.15L13.51 1.15L12.58 4.13L11.42 4.13M5.4 20.76L3.24 18.6L6.02 17.16L6.84 17.98L5.4 20.76M17.16 6.02L18.6 3.24L20.76 5.4L17.98 6.84L17.16 6.02M20.76 18.6L18.6 20.76L17.16 17.98L17.98 17.16L20.76 18.6M6.02 6.84L3.24 5.4L5.4 3.24L6.84 6.02L6.02 6.84"/>',
+  opts:   '<path class="solid" d="M3 6.8L3 4.73L21 4.73L21 6.8L3 6.8M3 12.99L3 11.01L21 11.01L21 12.99L3 12.99M3 19.27L3 17.28L21 17.28L21 19.27L3 19.27"/>',
   down:   '<path d="M12 4v10.5"/><path d="M7.6 10.6 12 15l4.4-4.4"/><path d="M4.6 18.6h14.8"/>'
 };
 
@@ -250,42 +271,42 @@ function el(tag, cls, html) {
 }
 
 function buildDOM() {
-  var wrap = el("div", "arcbw");
+  var wrap = el("div", "mosbw");
   wrap.setAttribute("aria-hidden", "true");
 
-  var chrome = el("div", "arcbw-chrome");
-  var tabs = el("div", "arcbw-tabs");
-  var omni = el("div", "arcbw-omni");
+  var chrome = el("div", "mosbw-chrome");
+  var tabs = el("div", "mosbw-tabs");
+  var omni = el("div", "mosbw-omni");
 
-  var addr = el("div", "arcbw-addr");
+  var addr = el("div", "mosbw-addr");
   addr.setAttribute("role", "button");
-  var tls = el("span", "arcbw-tls is-none");
-  var url = el("span", "arcbw-url is-placeholder");
+  var tls = el("span", "mosbw-tls is-none");
+  var url = el("span", "mosbw-url is-placeholder");
   url.textContent = "Search or enter an address";
   addr.appendChild(tls); addr.appendChild(url);
 
-  var zoomChip = el("div", "arcbw-chip", svg(G.zoom) + "<span>100%</span>");
+  var zoomChip = el("div", "mosbw-chip", svg(G.zoom) + "<span>100%</span>");
   /* The downloads chip is in the chrome and not in the menu because a download
      is the one thing in this browser that happens WHILE the human is doing
      something else. Buried two presses deep it would be invisible exactly when
      it matters — a 400 MB file that failed at 90% behind a menu nobody opened.
      It is only in the row while there is something to say; see renderDown(). */
-  var dlChip = el("div", "arcbw-chip is-dl is-off",
-    svg(G.down) + "<span>Downloads</span><i class=\"arcbw-chip-bar\"></i>");
-  var menuChip = el("div", "arcbw-chip", svg(G.menu) + "<span>Menu</span>");
+  var dlChip = el("div", "mosbw-chip is-dl is-off",
+    svg(G.down) + "<span>Downloads</span><i class=\"mosbw-chip-bar\"></i>");
+  var menuChip = el("div", "mosbw-chip", svg(G.menu) + "<span>Menu</span>");
 
   omni.appendChild(addr); omni.appendChild(zoomChip);
   omni.appendChild(dlChip); omni.appendChild(menuChip);
   chrome.appendChild(tabs); chrome.appendChild(omni);
 
-  var stage = el("div", "arcbw-stage");
-  var msg = el("div", "arcbw-stage-msg", "<h3></h3><p></p>");
+  var stage = el("div", "mosbw-stage");
+  var msg = el("div", "mosbw-stage-msg", "<h3></h3><p></p>");
   stage.appendChild(msg);
 
-  var sheet = el("div", "arcbw-sheet");
+  var sheet = el("div", "mosbw-sheet");
   stage.appendChild(sheet);
 
-  var hints = el("div", "arcbw-hints");
+  var hints = el("div", "mosbw-hints");
 
   wrap.appendChild(chrome);
   wrap.appendChild(stage);
@@ -294,7 +315,7 @@ function buildDOM() {
   /* Last, and a sibling of the stage rather than a child of it: a toast
      inside the stage would be behind the content window. See the note in
      browser.css. */
-  var toast = el("div", "arcbw-toast");
+  var toast = el("div", "mosbw-toast");
   wrap.appendChild(toast);
   document.body.appendChild(wrap);
 
@@ -314,6 +335,12 @@ function buildDOM() {
 
 function pushBounds() {
   if (!st.open || !st.el) return;
+  /* While a shell overlay is up the whole browser is display:none, so the
+     stage measures zero. Sending that would move the content window to a
+     0×0 rectangle for the life of the overlay and make the page flicker back
+     from nothing when it closes. The hold already has the page off the
+     screen; the rectangle is re-measured and re-sent on the way out. */
+  if (st.shellHeld) return;
   var r = st.el.stage.getBoundingClientRect();
   var dpr = root.devicePixelRatio || 1;
   var b = {
@@ -418,6 +445,45 @@ function clearHolds(why) {
   if (had !== "none") say("cleared content holds (" + had + ") — " + why);
 }
 
+/* ═══ Stepping aside for the shell ═════════════════════════════════════
+   The control centre is the shell's, not the browser's, and the PS button
+   has to reach it from inside a web page like it does from anywhere else.
+   Two things are in its way and they need two different answers:
+
+     - the CONTENT window, a child HWND that no shell surface can be drawn
+       over. That is the existing hold mechanism: suspendContent("shell").
+     - this file's OWN chrome, which is ordinary DOM at z-index 820 while
+       the control centre sits at 40. Hiding the page but leaving the
+       browser's black chrome up would put the overlay behind it, which
+       from the sofa is the same bug with a different cause.
+
+   So the hold does both, and while it is on this browser answers no pad
+   action at all — the shell is driving its overlay and a browser quietly
+   also acting on the same press is exactly how a control centre ends up
+   changing tabs. index.html calls this on the way in and on the way out;
+   handleAction("guide") returns false so it can. */
+function shellHold(on) {
+  on = !!on;
+  if (!st.el) return st.shellHeld;
+  if (on === st.shellHeld) return st.shellHeld;
+  st.shellHeld = on;
+  st.el.wrap.classList.toggle("is-shell-held", on);
+  if (on) {
+    suspendContent("shell");
+  } else {
+    resumeContent("shell");
+    /* The layout has to come back before its rectangle means anything, and
+       the browser was display:none until one line ago. */
+    st.lastBounds = "";
+    setTimeout(guard("shell hold bounds", pushBounds), 0);
+    setTimeout(guard("shell hold bounds", pushBounds), 120);
+  }
+  say("shell hold " + (on ? "ON — chrome hidden and the page suspended for a shell overlay"
+                          : "OFF — the browser has the screen again") +
+      " (holds: " + holdList() + ")");
+  return st.shellHeld;
+}
+
 /* ═══ Rendering ════════════════════════════════════════════════════════ */
 
 function activeTab() {
@@ -430,9 +496,9 @@ function renderTabs() {
   e.tabs.innerHTML = "";
   for (i = 0; i < st.tabs.length; i++) {
     var t = st.tabs[i];
-    var node = el("button", "arcbw-tab" + (t.id === st.active ? " is-active" : "") +
+    var node = el("button", "mosbw-tab" + (t.id === st.active ? " is-active" : "") +
                             (t.loading ? " is-loading" : "") + (t.crashed ? " is-crashed" : ""));
-    var fav = el("span", "arcbw-tab-fav");
+    var fav = el("span", "mosbw-tab-fav");
     /* Only ever a data: URI. The host fetches the icon inside the content
        WebView and hands the bytes over, so this page never issues a request
        to a site it is not itself served from. Anything else is ignored
@@ -440,21 +506,21 @@ function renderTabs() {
        to a third party, which is the one thing it must not do. */
     if (t.favicon && !t.loading && t.favicon.indexOf("data:image/") === 0) {
       var img = document.createElement("img");
-      img.className = "arcbw-tab-fav";
+      img.className = "mosbw-tab-fav";
       img.src = t.favicon;
       img.alt = "";
       fav = img;
     }
-    var title = el("span", "arcbw-tab-title");
+    var title = el("span", "mosbw-tab-title");
     title.textContent = t.crashed ? "Page stopped responding"
                       : (t.title || hostOf(t.url) || "New tab");
     node.appendChild(fav); node.appendChild(title);
-    node.__arcTab = t.id;
+    node.__mosTab = t.id;
     e.tabs.appendChild(node);
   }
-  var add = el("button", "arcbw-newtab", "+");
+  var add = el("button", "mosbw-newtab", "+");
   if (st.tabs.length >= st.max) add.setAttribute("aria-disabled", "true");
-  add.__arcNew = true;
+  add.__mosNew = true;
   e.tabs.appendChild(add);
 }
 
@@ -462,23 +528,23 @@ function renderAddress() {
   var e = st.el, t = activeTab();
   var url = t ? t.url : "";
   if (!url || url === "about:blank") {
-    e.url.className = "arcbw-url is-placeholder";
+    e.url.className = "mosbw-url is-placeholder";
     e.url.textContent = "Search or enter an address";
-    e.tls.className = "arcbw-tls is-none";
+    e.tls.className = "mosbw-tls is-none";
     e.tls.innerHTML = "";
   } else {
     var p = splitUrl(url);
-    e.url.className = "arcbw-url";
+    e.url.className = "mosbw-url";
     e.url.innerHTML = "";
-    var hostSpan = el("span", "arcbw-host"); hostSpan.textContent = p.host;
-    var restSpan = el("span", "arcbw-rest"); restSpan.textContent = p.rest;
+    var hostSpan = el("span", "mosbw-host"); hostSpan.textContent = p.host;
+    var restSpan = el("span", "mosbw-rest"); restSpan.textContent = p.rest;
     e.url.appendChild(hostSpan); e.url.appendChild(restSpan);
     /* The indicator says what the transport is, and nothing more. It is not
        a padlock meaning "safe": WebView2 refuses to load a page whose
        certificate does not verify, so https here means the connection was
        encrypted and authenticated, and http means it was neither. */
-    if (t.secure) { e.tls.className = "arcbw-tls is-secure"; e.tls.innerHTML = svg(G.lock) + "<span>https</span>"; }
-    else { e.tls.className = "arcbw-tls is-plain"; e.tls.innerHTML = svg(G.open) + "<span>not encrypted</span>"; }
+    if (t.secure) { e.tls.className = "mosbw-tls is-secure"; e.tls.innerHTML = svg(G.lock) + "<span>https</span>"; }
+    else { e.tls.className = "mosbw-tls is-plain"; e.tls.innerHTML = svg(G.open) + "<span>not encrypted</span>"; }
   }
   var z = t ? Math.round((t.zoom || 1) * 100) : 100;
   e.zoom.innerHTML = svg(G.zoom) + "<span>" + z + "%</span>";
@@ -503,10 +569,10 @@ function renderStage() {
 /* ═══ Hints ════════════════════════════════════════════════════════════ */
 
 function hint(glyph, label) {
-  return '<span class="arcbw-hint">' + svg(glyph) + "<span>" + label + "</span></span>";
+  return '<span class="mosbw-hint">' + svg(glyph) + "<span>" + label + "</span></span>";
 }
 function keyHint(cap, label) {
-  return '<span class="arcbw-hint"><b>' + cap + "</b><span>" + label + "</span></span>";
+  return '<span class="mosbw-hint"><b>' + cap + "</b><span>" + label + "</span></span>";
 }
 
 function renderHints() {
@@ -536,6 +602,7 @@ function renderHints() {
     h.push(hint(G.circle, "Back to the page"));
     h.push(keyHint("L1 / R1", "Switch tab"));
   } else if (st.scope === "start") {
+    var tile = st.sheetRows[st.sheetIdx];
     h.push(hint(G.dpad, "Move"));
     h.push(hint(G.cross, "Open"));
     /* Options is listed on EVERY scope, first among the shortcuts. It is
@@ -543,16 +610,30 @@ function renderHints() {
        browser, and a shortcut nobody is told about is a shortcut nobody
        uses — the whole browser was unusable for exactly that reason. */
     h.push(hint(G.opts, "Address bar"));
-    h.push(hint(G.square, "Remove pin"));
+    /* Per-tile, like the downloads sheet below and for the same reason. Two
+       of the tiles on this grid are not pins — the address tile at the top
+       and "+ Add a site" at the bottom — and there is nothing to remove on
+       either. Advertising Square for the whole screen made it a silent
+       no-op on exactly the two tiles a first-time human stands on. */
+    if (tile && typeof tile.__mosRemove === "function") h.push(hint(G.square, "Remove pin"));
     h.push(hint(G.circle, "Leave the browser"));
     h.push(hint(G.tri, "Menu"));
+  } else if (st.sheetKind === "permissions") {
+    /* Cross forgets the one decision the cursor is on; Square is only
+       offered on a site that has more than one, where "forget all of them"
+       is a different thing rather than the same press twice. */
+    var prow = st.sheetRows[st.sheetIdx];
+    h.push(hint(G.dpad, "Move"));
+    h.push(hint(G.cross, (prow && prow.__permKind) ? "Forget it" : "Select"));
+    if (prow && typeof prow.__mosRemove === "function") h.push(hint(G.square, "Forget every one for this site"));
+    h.push(hint(G.circle, "Back"));
   } else if (st.sheetKind === "extensions") {
     var erow = st.sheetRows[st.sheetIdx];
-    var etail = erow ? (erow.querySelector(".arcbw-row-tail") || {}).textContent : "";
+    var etail = erow ? (erow.querySelector(".mosbw-row-tail") || {}).textContent : "";
     h.push(hint(G.dpad, "Move"));
     h.push(hint(G.cross, etail === "On" ? "Turn off" : etail === "Off" ? "Turn on"
                        : etail === "Install" ? "Install it" : "Select"));
-    if (erow && typeof erow.__arcRemove === "function") h.push(hint(G.square, "Remove"));
+    if (erow && typeof erow.__mosRemove === "function") h.push(hint(G.square, "Remove"));
     h.push(hint(G.circle, "Back"));
   } else if (st.sheetKind === "downloads") {
     /* The two buttons do different things on different rows here, so the
@@ -657,7 +738,7 @@ function paintFocus() {
        the host log. It is the only way an unattended --walk over the browser's
        own chrome can be read back afterwards and believed. */
     var label = (node.textContent || "").replace(/\s+/g, " ").trim().slice(0, 70) ||
-                (node.__arcNew ? "+ new tab" : "(unnamed)");
+                (node.__mosNew ? "+ new tab" : "(unnamed)");
     var key = st.scope + "|" + label;
     if (key !== lastFocusKey) { lastFocusKey = key; say("focus " + st.scope + " | " + label); }
   }
@@ -720,20 +801,20 @@ function sheet(title, sub) {
   closeSheet();
   var s = st.el.sheet;
   var h = el("h2"); h.textContent = title; s.appendChild(h);
-  if (sub) { var p = el("p", "arcbw-sub"); p.textContent = sub; s.appendChild(p); }
+  if (sub) { var p = el("p", "mosbw-sub"); p.textContent = sub; s.appendChild(p); }
   s.classList.add("is-open");
   return s;
 }
 
 function rowEl(o) {
-  var r = el("button", "arcbw-row" + (o.danger ? " is-danger" : ""));
-  var main = el("div", "arcbw-row-main");
-  var lab = el("div", "arcbw-row-label"); lab.textContent = o.label;
+  var r = el("button", "mosbw-row" + (o.danger ? " is-danger" : ""));
+  var main = el("div", "mosbw-row-main");
+  var lab = el("div", "mosbw-row-label"); lab.textContent = o.label;
   main.appendChild(lab);
-  if (o.sub) { var s = el("div", "arcbw-row-sub"); s.textContent = o.sub; main.appendChild(s); }
+  if (o.sub) { var s = el("div", "mosbw-row-sub"); s.textContent = o.sub; main.appendChild(s); }
   r.appendChild(main);
-  if (o.tail) { var t = el("div", "arcbw-row-tail"); t.textContent = o.tail; r.appendChild(t); }
-  r.__arcRun = o.run;
+  if (o.tail) { var t = el("div", "mosbw-row-tail"); t.textContent = o.tail; r.appendChild(t); }
+  r.__mosRun = o.run;
   return r;
 }
 
@@ -748,7 +829,7 @@ function showStart() {
   st.scope = "start";
   syncContent("start page");
   var s = sheet("Browser", "Pinned apps open full screen. Everything else is one address away.");
-  var grid = el("div", "arcbw-pins");
+  var grid = el("div", "mosbw-pins");
   st.sheetRows = [];
 
   /* ── The first tile is always the address ────────────────────────────
@@ -770,33 +851,33 @@ function showStart() {
      the keyboard straight into the address field. Discoverability is not a
      nicety here — with no pointer and no keyboard, a control you cannot
      find is a control that does not exist. */
-  var go = el("button", "arcbw-pin is-go");
-  go.appendChild(el("div", "arcbw-pin-glyph", svg(G.zoom)));
-  go.appendChild(el("div", "arcbw-pin-name", "Search or enter an address"));
-  go.appendChild(el("div", "arcbw-pin-host", "The keyboard opens on Cross"));
-  go.__arcRun = editAddress;
+  var go = el("button", "mosbw-pin is-go");
+  go.appendChild(el("div", "mosbw-pin-glyph", svg(G.zoom)));
+  go.appendChild(el("div", "mosbw-pin-name", "Search or enter an address"));
+  go.appendChild(el("div", "mosbw-pin-host", "The keyboard opens on Cross"));
+  go.__mosRun = editAddress;
   grid.appendChild(go);
   st.sheetRows.push(go);
 
   for (var i = 0; i < st.pins.length; i++) {
     (function (pin) {
-      var tile = el("button", "arcbw-pin");
+      var tile = el("button", "mosbw-pin");
       tile.style.background = "linear-gradient(150deg, " + (pin.colour || "#2b5fd0") + " 0%, #06101f 78%)";
-      var glyph = el("div", "arcbw-pin-glyph");
+      var glyph = el("div", "mosbw-pin-glyph");
       glyph.textContent = (pin.name || "?").slice(0, 1).toUpperCase();
-      var name = el("div", "arcbw-pin-name"); name.textContent = pin.name;
-      var host = el("div", "arcbw-pin-host"); host.textContent = hostOf(pin.url);
+      var name = el("div", "mosbw-pin-name"); name.textContent = pin.name;
+      var host = el("div", "mosbw-pin-host"); host.textContent = hostOf(pin.url);
       tile.appendChild(glyph); tile.appendChild(name); tile.appendChild(host);
-      tile.__arcRun = function () { openPin(pin); };
-      tile.__arcRemove = function () { removePin(pin); };
+      tile.__mosRun = function () { openPin(pin); };
+      tile.__mosRemove = function () { removePin(pin); };
       grid.appendChild(tile);
       st.sheetRows.push(tile);
     })(st.pins[i]);
   }
 
-  var add = el("button", "arcbw-pin is-add");
-  add.appendChild(el("div", "arcbw-pin-name", "+ Add a site"));
-  add.__arcRun = addPin;
+  var add = el("button", "mosbw-pin is-add");
+  add.appendChild(el("div", "mosbw-pin-name", "+ Add a site"));
+  add.__mosRun = addPin;
   grid.appendChild(add);
   st.sheetRows.push(add);
 
@@ -877,11 +958,11 @@ function showHistory() {
   st.scope = "history";
   syncContent("history");
   var s = sheet("History", st.session.length + " this session, " + st.history.length + " kept on this machine.");
-  var list = el("div", "arcbw-list");
+  var list = el("div", "mosbw-list");
   st.sheetRows = [];
 
   if (!st.history.length) {
-    list.appendChild(el("div", "arcbw-empty", "Nothing here yet."));
+    list.appendChild(el("div", "mosbw-empty", "Nothing here yet."));
   } else {
     for (var i = 0; i < st.history.length && i < 120; i++) {
       (function (h) {
@@ -1069,7 +1150,7 @@ function renderDown() {
 
     var span = chip.querySelector("span");
     if (span) span.textContent = label;
-    var bar = chip.querySelector(".arcbw-chip-bar");
+    var bar = chip.querySelector(".mosbw-chip-bar");
     if (bar) {
       bar.style.width = (lead && pct >= 0) ? pct + "%" : (lead ? "100%" : "0%");
       chip.classList.toggle("is-unknown", !!lead && pct < 0);
@@ -1138,17 +1219,17 @@ function downTailText(d) {
    which is why the state is part of the rebuild key below. */
 function bindDownRow(r, d) {
   if (d.state === "running") {
-    r.__arcRun = function () { downCmd("pause", d.id); };
-    r.__arcRemove = function () { downCmd("cancel", d.id); };
+    r.__mosRun = function () { downCmd("pause", d.id); };
+    r.__mosRemove = function () { downCmd("cancel", d.id); };
   } else if (d.state === "paused") {
-    r.__arcRun = function () { downCmd("resume", d.id); };
-    r.__arcRemove = function () { downCmd("cancel", d.id); };
+    r.__mosRun = function () { downCmd("resume", d.id); };
+    r.__mosRemove = function () { downCmd("cancel", d.id); };
   } else if (d.state === "done") {
-    r.__arcRun = function () { revealDownload(d); };
-    r.__arcRemove = function () { downCmd("forget", d.id); };
+    r.__mosRun = function () { revealDownload(d); };
+    r.__mosRemove = function () { downCmd("forget", d.id); };
   } else {
-    r.__arcRun = function () { retryDownload(d); };
-    r.__arcRemove = function () { downCmd("forget", d.id); };
+    r.__mosRun = function () { retryDownload(d); };
+    r.__mosRemove = function () { downCmd("forget", d.id); };
   }
 }
 
@@ -1160,14 +1241,14 @@ function fillDownRow(r, d) {
 }
 
 function downRow(d) {
-  var r = el("button", "arcbw-row arcbw-drow is-" + d.state + (d.state === "failed" ? " is-danger" : ""));
-  var main = el("div", "arcbw-row-main");
-  var lab = el("div", "arcbw-row-label");
+  var r = el("button", "mosbw-row mosbw-drow is-" + d.state + (d.state === "failed" ? " is-danger" : ""));
+  var main = el("div", "mosbw-row-main");
+  var lab = el("div", "mosbw-row-label");
   lab.textContent = d.name;
-  var sub = el("div", "arcbw-row-sub");
-  var bar = el("div", "arcbw-bar", "<i></i>");
+  var sub = el("div", "mosbw-row-sub");
+  var bar = el("div", "mosbw-bar", "<i></i>");
   main.appendChild(lab); main.appendChild(sub); main.appendChild(bar);
-  var tail = el("div", "arcbw-row-tail");
+  var tail = el("div", "mosbw-row-tail");
   r.appendChild(main); r.appendChild(tail);
   r.__dl = d.id; r.__sub = sub; r.__tail = tail; r.__bar = bar.firstChild;
   bindDownRow(r, d);
@@ -1219,7 +1300,7 @@ function renderDownloadRows() {
     }
     /* The sub-line counts bytes too, and it is the line the human reads when
        the list is long enough that their row has scrolled off. */
-    var sub = st.el.sheet.querySelector(".arcbw-sub");
+    var sub = st.el.sheet.querySelector(".mosbw-sub");
     if (sub) sub.textContent = downSub();
     return;
   }
@@ -1230,7 +1311,7 @@ function renderDownloadRows() {
   st.sheetRows = [];
 
   if (!st.downloads.length) {
-    list.appendChild(el("div", "arcbw-empty",
+    list.appendChild(el("div", "mosbw-empty",
       "Nothing has been downloaded yet. When a site sends a file it is saved automatically " +
       "and appears here, with the console's own progress rather than the browser's."));
   }
@@ -1251,7 +1332,10 @@ function renderDownloadRows() {
   if (folder && typeof bridge.files === "function") {
     var open = rowEl({
       label: "Open the downloads folder",
-      sub: folder + " — opens in Files; the browser stays as it is behind it",
+      /* Not "the browser stays as it is behind it", which is what this said
+         and was never true: the shell's files() closes the browser first,
+         because Files cannot be drawn over a content window either. */
+      sub: folder + " — opens in Files, which closes the browser",
       run: function () { revealDownload({ folder: folder, path: folder }); }
     });
     list.appendChild(open); st.sheetRows.push(open);
@@ -1277,7 +1361,7 @@ function showDownloads() {
   var s = sheet("Downloads", downSub());
   st.sheetKind = "downloads";
   st.dlKey = null;
-  st.dlList = el("div", "arcbw-list");
+  st.dlList = el("div", "mosbw-list");
   s.appendChild(st.dlList);
   renderDownloadRows();
   /* Ask for a fresh list rather than drawing the last one and hoping: this
@@ -1287,33 +1371,101 @@ function showDownloads() {
 
 /* ── Menu ────────────────────────────────────────────────────────────── */
 
-function showMenu() {
+/* keepCursor is for the redraws the human did not ask for — the menu is
+   rebuilt when the active tab starts or stops loading, so that the Stop row
+   is not a lie a second after it was drawn. Rebuilding is only acceptable if
+   the cursor stays where their thumb left it, so the row is remembered by its
+   LABEL (the elements are all new) and found again afterwards. */
+function showMenu(keepCursor) {
+  var wasLabel = null;
+  if (keepCursor && st.sheetRows[st.sheetIdx]) wasLabel = st.sheetRows[st.sheetIdx].__mosKey || null;
+
   st.scope = "menu";
   syncContent("menu");
   var t = activeTab();
+  st.menuLoading = !!(t && t.loading);
+  /* After sheet(), never before: it calls closeSheet(), which clears the
+     kind along with the markup of whatever was up. */
   var s = sheet("Browser menu", t && t.url ? t.url : "No page loaded");
-  var list = el("div", "arcbw-list");
+  st.sheetKind = "menu";
+  var list = el("div", "mosbw-list");
   st.sheetRows = [];
 
-  function add(o) { var r = rowEl(o); list.appendChild(r); st.sheetRows.push(r); }
-  function sec(text) { list.appendChild(el("div", "arcbw-sec", text)); }
+  function add(o) {
+    var r = rowEl(o);
+    r.__mosKey = o.label;
+    list.appendChild(r); st.sheetRows.push(r);
+    return r;
+  }
+  function sec(text) { list.appendChild(el("div", "mosbw-sec", text)); }
 
   sec("This page");
   add({ label: "Reload", sub: t && t.crashed ? "Restart the page process" : "Fetch it again",
         run: function () { closeSheet(); goToContent(); bridge.post({ type: "browser", cmd: "reload" }); } });
-  add({ label: "Forward", sub: t && t.canForward ? "" : "Nothing ahead in this tab",
-        run: function () { closeSheet(); goToContent(); bridge.post({ type: "browser", cmd: "forward" }); } });
+  /* Only while there is a load to stop. The host has always implemented the
+     command; until now nothing in the browser sent it, so a page that had
+     hung halfway could only be waited out or reloaded — which starts the
+     same fetch again. The row leaves the menu on its own when the tab
+     finishes; see the "tabs" case in hostMessage. */
+  if (t && t.loading) {
+    add({ label: "Stop loading", sub: "Keep what has arrived and stop asking for the rest",
+          run: function () {
+            var now = activeTab();
+            if (!now || !now.loading) { toast("That page has already finished loading."); return; }
+            closeSheet(); goToContent();
+            bridge.post({ type: "browser", cmd: "stop" });
+          } });
+  }
+  /* Kept in the list rather than dropped when there is nothing ahead, so the
+     menu does not change height under the human's thumb between two presses
+     of Reload. What changes is what the press DOES: with no forward entry the
+     host ignores {cmd:"forward"} entirely, so sending it and closing the menu
+     looked exactly like a browser that had lost the press. */
+  add({ label: "Forward", sub: t && t.canForward ? "Back to the page you came from" : "Nothing ahead in this tab",
+        run: function () {
+          var now = activeTab();
+          if (!now || !now.canForward) { toast("Nothing ahead in this tab"); return; }
+          closeSheet(); goToContent(); bridge.post({ type: "browser", cmd: "forward" });
+        } });
+  /* Triangle inside a page opens this menu, so mosnav's own Triangle —
+     play/pause on whatever video the page is showing — can never be pressed
+     from the content pane. Rather than take the menu away from Triangle,
+     which is the one button everybody finds, the menu carries the press
+     down itself: the same {cmd:"pad", action:"triangle"} relay the keyboard
+     re-open uses, which reaches mosnav with a user activation intact. */
+  if (st.media) {
+    add({ label: st.media.playing ? "Pause" : "Play",
+          sub: st.media.playing ? "The video or audio this page is playing"
+                                : "The video or audio this page has open",
+          tail: mediaTail(),
+          run: function () {
+            closeSheet(); goToContent();
+            bridge.post({ type: "browser", cmd: "pad", action: "triangle", phase: "press" });
+          } });
+  }
   add({ label: "Zoom", tail: t ? Math.round((t.zoom || 1) * 100) + "%" : "100%",
         sub: "Remembered for this site", run: showZoom });
   add({ label: "Rescan the page for links",
         sub: "Use this when a site has redrawn itself and the ring cannot find anything",
         run: function () { closeSheet(); goToContent(); bridge.post({ type: "browser", cmd: "scan" }); } });
+  /* The label says which mode the press will put the page INTO, so it has to
+     be right about which one the page is in now. st.navMode is the shell's
+     copy of something that lives in the page, and mosnav is re-injected per
+     document defaulting to spatial — so it is reset on {ev:"ready"} and on a
+     tab switch (see hostMessage/fromPage) rather than only ever being moved
+     by a {ev:"mode"} that a fresh document never sends. And the press names
+     the mode it wants instead of asking for a toggle, so even if the two
+     sides do drift, what the row says is what the page gets. */
   add({ label: st.navMode === "cursor" ? "Use link navigation" : "Use the pointer",
         sub: st.navMode === "cursor"
           ? "Move between the page's links and buttons with the D-pad"
           : "A virtual mouse driven by the left stick — for sites the ring cannot read",
         tail: "L3",
-        run: function () { closeSheet(); goToContent(); bridge.post({ type: "browser", cmd: "mode", mode: "toggle" }); } });
+        run: function () {
+          var want = st.navMode === "cursor" ? "spatial" : "cursor";
+          closeSheet(); goToContent();
+          bridge.post({ type: "browser", cmd: "mode", mode: want });
+        } });
 
   sec("Browser");
   add({ label: "Pinned apps", sub: st.pins.length + " pinned", run: showStart });
@@ -1334,6 +1486,13 @@ function showMenu() {
   if (t) add({ label: "Close this tab", sub: t.title || hostOf(t.url) || "New tab", danger: true,
         run: function () { bridge.post({ type: "browser", cmd: "closetab", tab: t.id }); showMenu(); } });
   add({ label: "Search engine", tail: (ENGINES[st.engine] || ENGINES.duckduckgo).name, run: showEngines });
+  /* The other half of the consent sheet. "Remember for this site" is the
+     box that makes a decision permanent, and the sheet has always told the
+     human they can take it back in this menu — so it has to be here, or
+     that sentence was a promise the browser could not keep. */
+  add({ label: "Site permissions", tail: permTail(),
+        sub: "Camera, microphone and the rest — what you told a site to remember, and how to take it back",
+        run: showPermissions });
   add({ label: "Extensions", tail: extensionTail(),
         sub: "Ad blocking and anything else — install one from a download or a USB stick",
         run: showExtensions });
@@ -1359,7 +1518,29 @@ function showMenu() {
 
   s.appendChild(list);
   st.sheetIdx = 0;
+  if (wasLabel) {
+    for (var mi = 0; mi < st.sheetRows.length; mi++) {
+      if (st.sheetRows[mi].__mosKey === wasLabel) { st.sheetIdx = mi; break; }
+    }
+  }
   paintFocus();
+}
+
+/* What the play/pause row's tail says. Only the position, because that is
+   the one thing the shell knows about the page's media that the human
+   cannot see while the menu is covering it. */
+function mediaTail() {
+  var m = st.media;
+  if (!m) return "";
+  if (!m.duration || m.duration <= 0) return m.playing ? "Playing" : "Paused";
+  return clock(m.time || 0) + " / " + clock(m.duration);
+}
+
+function clock(s) {
+  s = Math.max(0, Math.round(s || 0));
+  var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  var mm = (h && m < 10 ? "0" : "") + m;
+  return (h ? h + ":" : "") + mm + ":" + (x < 10 ? "0" : "") + x;
 }
 
 /* ═══ Extensions ═══════════════════════════════════════════════════════
@@ -1432,22 +1613,53 @@ function renderExtensions() {
   syncContent("extensions");
   var s = sheet("Extensions", extSub());
   st.sheetKind = "extensions";
-  var list = el("div", "arcbw-list");
+  var list = el("div", "mosbw-list");
   st.sheetRows = [];
   var i;
 
   function add(o) { var r = rowEl(o); list.appendChild(r); st.sheetRows.push(r); return r; }
-  function sec(text) { list.appendChild(el("div", "arcbw-sec", text)); }
+  function sec(text) { list.appendChild(el("div", "mosbw-sec", text)); }
 
   if (exts.list.length) {
     sec("Installed");
     for (i = 0; i < exts.list.length; i++) {
       (function (x) {
         if (!x.ok) {
-          /* No id, so nothing can be switched: this one is on disk and did not
-             load. The reason is the whole content of the row. */
-          add({ label: x.name, sub: x.detail || "It did not load", tail: "Failed", danger: true,
-                run: function () { toast(x.name + " — " + (x.detail || "it did not load")); } });
+          /* No id, so nothing can be switched or removed: this one is on
+             disk and did not load, and the host's remove verb takes an id it
+             does not have. The one thing that DOES help is getting the human
+             to the folder, because the fix is always the same — delete it and
+             reopen the browser. A failure the list names is x.name = the name
+             of its folder inside the extensions folder (the host takes it
+             from the path; see AddOneExtension), so the row can say exactly
+             what to delete and open the place it lives.
+
+             Files replaces the browser rather than covering it — the pages
+             are a child window nothing can be drawn over — so the row says
+             so before it is pressed. */
+          var where = exts.folder || "";
+          var canOpen = !!where && typeof bridge.files === "function";
+          add({
+            label: x.name,
+            sub: (x.detail || "It did not load") +
+                 (canOpen ? " · Cross opens its folder in Files, which closes the browser"
+                          : (where ? " · delete " + where + "\\" + x.name + " and open the browser again"
+                                   : " · delete its folder from the extensions folder and open the browser again")),
+            tail: "Failed", danger: true,
+            run: function () {
+              if (!canOpen) {
+                toast(where ? "Delete " + where + "\\" + x.name + ", then open the browser again"
+                            : x.name + " — " + (x.detail || "it did not load"));
+                return;
+              }
+              toast("Delete the " + x.name + " folder, then open the browser again");
+              say("opening the extensions folder for the failed extension " + x.name + ": " + where);
+              var ok;
+              try { ok = bridge.files(where, where); }
+              catch (err) { report("extensions folder in files", err); ok = false; }
+              if (ok === false) toast("Delete " + where + "\\" + x.name + ", then open the browser again");
+            }
+          });
           return;
         }
         var r = add({
@@ -1457,7 +1669,7 @@ function renderExtensions() {
           tail: x.enabled ? "On" : "Off",
           run: function () { extCmd(x.enabled ? "disable" : "enable", { id: x.id }); }
         });
-        r.__arcRemove = function () { confirmRemoveExtension(x); };
+        r.__mosRemove = function () { confirmRemoveExtension(x); };
       })(exts.list[i]);
     }
   }
@@ -1479,7 +1691,7 @@ function renderExtensions() {
       })(exts.candidates[i]);
     }
   } else {
-    list.appendChild(el("div", "arcbw-empty",
+    list.appendChild(el("div", "mosbw-empty",
       "Nothing to install was found. Download an extension's .zip in this browser — most publish " +
       "one on their releases page — or plug in a USB stick with the unpacked folder on it, then " +
       "look again."));
@@ -1502,7 +1714,7 @@ function confirmRemoveExtension(x) {
   var s = sheet("Remove " + x.name + "?",
     "It stops running everywhere immediately, and the copy in the console's extensions folder is " +
     "deleted. Anything you installed it from — a download, a USB stick — is left alone.");
-  var list = el("div", "arcbw-list");
+  var list = el("div", "mosbw-list");
   st.sheetRows = [];
   var keep = rowEl({ label: "Keep it", sub: "Nothing changes", run: showExtensions });
   var go = rowEl({ label: "Remove it", sub: x.name, danger: true,
@@ -1523,7 +1735,7 @@ function showCrash(m) {
     "Its process ended (" + (m.reason || "unknown") + "). Nothing else was affected: web pages run in " +
     "their own processes, in a separate browser from the one drawing this interface, so the console " +
     "and everything else on it carried on.");
-  var list = el("div", "arcbw-list");
+  var list = el("div", "mosbw-list");
   st.sheetRows = [];
   function add(o) { var r = rowEl(o); list.appendChild(r); st.sheetRows.push(r); }
 
@@ -1534,6 +1746,35 @@ function showCrash(m) {
           if (t) bridge.post({ type: "browser", cmd: "closetab", tab: t.id });
           showStart();
         } });
+  add({ label: "Pinned apps", run: showStart });
+
+  s.appendChild(list);
+  st.sheetIdx = 0;
+  paintFocus();
+}
+
+/* A page that could not be reached. This is OURS on purpose: the content
+   WebView's own error page is Chromium's, which on a WebView2 runtime is the
+   Edge one — a Microsoft wordmark and buttons no pad can press — so the host
+   turns it off (IsBuiltInErrorPageEnabled = false) and hands the failure up
+   here instead. Same shape as the crash sheet: a plain sentence and a short
+   list of things to do, all reachable with the D-pad. */
+function showLoadError(m) {
+  st.scope = "menu";
+  st.el.wrap.classList.remove("is-immersive");
+  st.sheetKind = "loaderror";
+  syncContent("load error");
+  var t = activeTab();
+  var url = m.url || (t ? t.url : "");
+  var s = sheet("This page could not be opened", m.detail || "The page could not be opened.");
+  var list = el("div", "mosbw-list");
+  st.sheetRows = [];
+  function add(o) { var r = rowEl(o); list.appendChild(r); st.sheetRows.push(r); }
+
+  add({ label: "Try again", sub: url || "",
+        run: function () { closeSheet(); goToContent(); bridge.post({ type: "browser", cmd: "reload" }); } });
+  add({ label: "Address bar", sub: "Go somewhere else, or fix the address",
+        run: function () { closeSheet(); editAddress(); } });
   add({ label: "Pinned apps", run: showStart });
 
   s.appendChild(list);
@@ -1553,7 +1794,7 @@ function showZoom() {
   var cur = t ? Math.round((t.zoom || 1) * 100) : 100;
   var s = sheet("Zoom", "Television viewing distance is about three metres; 125% or 150% is usually right. " +
                         "Whatever you choose is remembered for this site.");
-  var list = el("div", "arcbw-list");
+  var list = el("div", "mosbw-list");
   st.sheetRows = [];
   for (var i = 0; i < ZOOMS.length; i++) {
     (function (pct) {
@@ -1580,7 +1821,7 @@ function showEngines() {
   st.scope = "menu";
   syncContent("search engine");
   var s = sheet("Search engine", "What a typed phrase is sent to when it is not an address.");
-  var list = el("div", "arcbw-list");
+  var list = el("div", "mosbw-list");
   st.sheetRows = [];
   for (var k in ENGINES) {
     if (!Object.prototype.hasOwnProperty.call(ENGINES, k)) continue;
@@ -1595,6 +1836,121 @@ function showEngines() {
   }
   s.appendChild(list);
   st.sheetIdx = 0;
+  paintFocus();
+}
+
+/* ═══ Site permissions ═════════════════════════════════════════════════
+   The consent sheet's "Remember for this site" box writes a decision into a
+   file the host owns, and the sheet tells the human they can take it back in
+   this menu. For a long time they could not: the host had permissions.list
+   and permissions.forget from the start and nothing in the browser sent
+   either, so a yes to a camera was permanent and a no was permanent, and the
+   only way out was to find the store on disk.
+
+   The list is the HOST'S, exactly like the downloads list: this asks, draws
+   what came back, and asks again after a forget — the host answers a forget
+   with a fresh list of its own accord, so the sheet redraws from the truth
+   rather than from what it thinks it just did. */
+
+function permTail() {
+  var n = st.permissions.length;
+  if (!n) return "None";
+  return n === 1 ? "1 site remembered" : n + " remembered";
+}
+
+function permForget(origin, kind) {
+  say("permissions.forget " + origin + (kind ? " " + kind : " (every kind)"));
+  bridge.post({ type: "browser", cmd: "permissions.forget", origin: origin, kind: kind || "" });
+}
+
+/* Ask on the way in, draw when the answer arrives — the same rule the
+   extensions sheet had to learn. A draw that also asked would redraw on its
+   own reply for as long as the message channel could carry it. */
+function showPermissions() {
+  if (st.sheetKind !== "permissions") st.sheetIdx = 0;
+  renderPermissions();
+  bridge.post({ type: "browser", cmd: "permissions.list" });
+}
+
+function renderPermissions() {
+  st.scope = "menu";
+  syncContent("site permissions");
+
+  var items = st.permissions || [];
+  var s = sheet("Site permissions",
+    items.length
+      ? "What sites are allowed to use without asking again. Kept on this console only, in " +
+        (st.permStore || "the browser's own store") + "."
+      : "Nothing is remembered. A site that wants your camera, your microphone or where this " +
+        "console is has to ask, every time, and the answer is yours to give.");
+  /* After sheet(), never before — closeSheet() clears it. */
+  st.sheetKind = "permissions";
+  var list = el("div", "mosbw-list");
+  st.sheetRows = [];
+
+  if (!items.length) {
+    list.appendChild(el("div", "mosbw-empty",
+      "Nothing has been remembered yet. When a page asks for something, the console's consent " +
+      "sheet offers \"Remember for this site\" — anything answered that way is listed here, and " +
+      "can be taken back from here."));
+  }
+
+  /* How many decisions each site has, so Square is only offered where
+     "forget all of them" is a different press from Cross. */
+  var counts = {}, i;
+  for (i = 0; i < items.length; i++) {
+    var o = items[i].origin || "";
+    counts[o] = (counts[o] || 0) + 1;
+  }
+
+  for (i = 0; i < items.length; i++) {
+    (function (p) {
+      var site = hostOf(p.origin) || p.origin || "a site";
+      var r = rowEl({
+        label: site,
+        /* A colon rather than a sentence, because PERM_WANT's phrases are
+           written to follow "Let example.com use …" and several of them are
+           not verbs — "Refused where this console is" is not English, and
+           "Refused: where this console is" is. */
+        sub: (p.allow ? "Allowed: " : "Refused: ") + permWant(p.kind) +
+             " · " + (p.origin || ""),
+        tail: p.allow ? "Allowed" : "Denied",
+        danger: !!p.allow && !!PERM_SHARP[p.kind],
+        run: function () { permForget(p.origin, p.kind); toast("Forgot " + site + " · " + permWant(p.kind)); }
+      });
+      r.__permKind = p.kind || "?";
+      if (counts[p.origin] > 1) {
+        r.__mosRemove = function () {
+          permForget(p.origin, "");
+          toast("Forgot everything remembered for " + site);
+        };
+      }
+      list.appendChild(r); st.sheetRows.push(r);
+    })(items[i]);
+  }
+
+  if (items.length) {
+    var all = rowEl({
+      label: "Forget every one of them", sub: items.length + " remembered on this console", danger: true,
+      run: function () {
+        /* One forget per site rather than one big command: the host's verb
+           is per-origin, and inventing a "forget everything" it does not
+           have would be a row that only worked by accident. */
+        var seen = {}, n = 0, j;
+        for (j = 0; j < items.length; j++) {
+          var o2 = items[j].origin || "";
+          if (!o2 || seen[o2]) continue;
+          seen[o2] = true; n++;
+          permForget(o2, "");
+        }
+        toast(n === 1 ? "Forgot the one remembered site" : "Forgot all " + n + " remembered sites");
+      }
+    });
+    list.appendChild(all); st.sheetRows.push(all);
+  }
+
+  s.appendChild(list);
+  st.sheetIdx = Math.max(0, Math.min(st.sheetIdx, st.sheetRows.length - 1));
   paintFocus();
 }
 
@@ -1681,7 +2037,7 @@ function afterOsk() {
 }
 
 /* ═══ Text fields inside the page ══════════════════════════════════════
-   arcnav.js posts what the field currently holds; the OSK edits it; the
+   mosnav.js posts what the field currently holds; the OSK edits it; the
    value goes back down and is written through the native setter so that a
    framework-controlled input keeps it. */
 
@@ -1696,7 +2052,7 @@ function editPageField(m) {
   var secure = !!m.secure || m.inputType === "password";
   var title = m.label || "Enter text";
 
-  /* arcnav sends the mapped mode; inputType is kept as the fallback for a
+  /* mosnav sends the mapped mode; inputType is kept as the fallback for a
      page injected by an older build that predates it. */
   var mode = m.mode ||
     (m.inputType === "password" ? "password"
@@ -1737,7 +2093,7 @@ function choosePageOption(m) {
   st.scope = "menu";
   syncContent("page dropdown");
   var s = sheet(m.label || "Choose", "From the page.");
-  var list = el("div", "arcbw-list");
+  var list = el("div", "mosbw-list");
   st.sheetRows = [];
   var opts = m.options || [];
   for (var i = 0; i < opts.length; i++) {
@@ -1779,6 +2135,164 @@ function toast(text) {
   }, 2600);
 }
 
+/* ═══ Permissions a page asks for ══════════════════════════════════════
+   A web page asking for the camera, the microphone or the console's
+   location raises CoreWebView2.PermissionRequested in the host. Left
+   alone, Edge draws its own bubble for it — Microsoft UI, inside the
+   content window, unreachable by a D-pad, and the first thing on this
+   console that a controller simply could not answer. So the host takes
+   the deferral, draws nothing, and posts the question up here.
+
+   This file does not draw it either. The shell owns ONE consent sheet
+   (Grant.ask in index.html, handed over as bridge.grant) and it is the
+   same sheet Settings uses to install software as administrator,
+   because they are the same question: something is asking for
+   authority, and the answer has to be deliberate. Allow must be held;
+   Deny holds the focus; no answer at all is a Deny.
+
+   Two rules specific to being inside the browser:
+
+     - the content view is a child window and NOTHING can be drawn over
+       it, so the page is hidden for as long as a permission is on
+       screen. suspendContent()/resumeContent() with one named hold, so
+       two questions in a row cannot leave the page hidden or reveal it
+       under the second sheet.
+     - a page can ask twice before anybody has answered once (a video
+       call wants the camera and the microphone). They QUEUE. Answering
+       one question with a press meant for another is exactly the
+       accident this whole design is built to make impossible. */
+
+var perm = { queue: [], busy: false, held: false, dropped: {} };
+
+/* CoreWebView2PermissionKind, in the shell's words rather than the
+   API's. Anything unknown is named honestly instead of being softened —
+   "something this browser does not have a name for" is a better thing
+   to read before granting than a confident guess. */
+var PERM_WANT = {
+  microphone:                 "your microphone",
+  camera:                     "your camera",
+  geolocation:                "where this console is",
+  notifications:              "to send you notifications",
+  otherSensors:               "this console's motion and orientation sensors",
+  clipboardRead:              "to read what you last copied",
+  multipleAutomaticDownloads: "to download several files at once",
+  fileReadWrite:              "to read and change files you open with it",
+  autoplay:                   "to start audio and video on its own",
+  localFonts:                 "the list of fonts installed on this console",
+  midiSystemExclusive:        "full MIDI control of attached instruments",
+  windowManagement:           "to see and place windows on your displays"
+};
+/* The ones where saying yes hands over something that can watch, listen
+   or locate. They get the destructive treatment on the sheet. */
+var PERM_SHARP = {
+  microphone: 1, camera: 1, geolocation: 1, otherSensors: 1,
+  clipboardRead: 1, midiSystemExclusive: 1, fileReadWrite: 1
+};
+
+function permWant(kind) {
+  return PERM_WANT[kind] || ("something this browser has no name for (" + (kind || "unknown") + ")");
+}
+
+function permToken(m) { return "perm:" + m.id; }
+
+function permReply(m, allow, remember) {
+  /* The host withdrew this one — it has already answered its own
+     deferral and a reply now would be for a request that no longer
+     exists. Said out loud rather than dropped silently: a permission
+     that was never answered by a human is exactly the thing somebody
+     will later ask why the page did not get. */
+  if (perm.dropped[m.id]) {
+    delete perm.dropped[m.id];
+    say("permission " + (m.kind || "?") + " for " + (m.origin || "?") +
+        " was withdrawn before it was answered — nothing sent back");
+    return;
+  }
+  bridge.post({ type: "browser", cmd: "permission", id: m.id,
+                allow: !!allow, remember: !!remember });
+  say("permission " + (allow ? "ALLOWED" : "denied") + " — " + (m.kind || "?") +
+      " for " + (m.origin || m.uri || "?") + (remember ? " (remembered)" : ""));
+}
+
+function permAsk(m) {
+  perm.queue.push(m);
+  say("permission requested: " + (m.kind || "?") + " by " + (m.origin || m.uri || "?") +
+      (m.userInitiated ? " (user-initiated)" : "") +
+      (perm.queue.length > 1 ? " — queued behind " + (perm.queue.length - 1) : ""));
+  permPump();
+}
+
+function permPump() {
+  if (perm.busy) return;
+  var m = perm.queue.shift();
+  if (!m) {
+    if (perm.held) { perm.held = false; resumeContent("permission"); }
+    return;
+  }
+  /* No sheet to ask with is not a reason to grant anything. */
+  if (typeof bridge.grant !== "function") {
+    say("no grant sheet in this shell — denying " + (m.kind || "?"));
+    permReply(m, false, false);
+    setTimeout(guard("perm pump", permPump), 0);
+    return;
+  }
+  perm.busy = true;
+  if (!perm.held) { perm.held = true; suspendContent("permission"); }
+
+  var site = hostOf(m.origin || m.uri) || (m.origin || "this page");
+  var want = permWant(m.kind);
+  var res;
+  try {
+    res = bridge.grant({
+      scope: "web",
+      title: "Let " + site + " use " + want + "?",
+      /* This sentence is a promise, and for a long time it was one the
+         browser could not keep — there was no such control. There is now:
+         Menu → Site permissions lists every remembered decision and takes
+         any of them back. Naming the row rather than "the menu" is the
+         difference between a true sentence and a findable one. */
+      sub: "Only this site, and only until you take it back in the browser menu, under Site permissions.",
+      facts: [
+        ["Site",  m.origin || m.uri || site],
+        ["Wants", want],
+        ["Asked", m.userInitiated ? "after something you just pressed on the page"
+                                  : "by the page itself, not by anything you pressed"]
+      ],
+      token: permToken(m),
+      allowLabel: "Allow",
+      denyLabel: "Deny",
+      rememberLabel: "Remember for this site",
+      rememberSub: "Answer this the same way next time, without asking",
+      danger: !!PERM_SHARP[m.kind]
+    });
+  } catch (err) {
+    report("grant " + m.kind, err);
+    perm.busy = false;
+    permReply(m, false, false);
+    setTimeout(guard("perm pump", permPump), 0);
+    return;
+  }
+
+  Promise.resolve(res).then(function (ans) {
+    perm.busy = false;
+    permReply(m, ans && ans.allow, ans && ans.remember);
+    permPump();
+  }, function (err) {
+    report("grant " + m.kind, err);
+    perm.busy = false;
+    permReply(m, false, false);
+    permPump();
+  });
+}
+
+/* The browser going away has to answer everything still waiting, or the
+   host is left holding deferrals that never complete — which is a page
+   frozen on a getUserMedia() call for as long as the process lives. */
+function permDrainDenied(why) {
+  if (!perm.queue.length) return;
+  say("denying " + perm.queue.length + " waiting permission request(s) — " + why);
+  while (perm.queue.length) permReply(perm.queue.shift(), false, false);
+}
+
 /* ═══ Messages from the host ═══════════════════════════════════════════ */
 
 function hostMessage(m) {
@@ -1786,10 +2300,33 @@ function hostMessage(m) {
 
   switch (m.ev) {
     case "tabs":
-      st.tabs = m.tabs || [];
-      st.active = m.active || 0;
-      st.max = m.max || 4;
-      if (st.open) { renderTabs(); renderAddress(); renderStage(); paintFocus(); }
+      {
+        var wasActive = st.active;
+        st.tabs = m.tabs || [];
+        st.active = m.active || 0;
+        st.max = m.max || 4;
+        /* A different tab is a different document with its own mosnav in it,
+           and a fresh mosnav is always in spatial mode with no media. Keeping
+           the last tab's answers would make the menu's mode row say the
+           opposite of what the page is doing and offer a Pause for a video
+           that is in another tab. */
+        if (st.active !== wasActive) {
+          st.navMode = "spatial";
+          st.media = null;
+          st.focusKind = null;
+        }
+        if (st.open) { renderTabs(); renderAddress(); renderStage(); paintFocus(); }
+        /* The menu carries two rows that are only true for one loading state
+           — Stop loading, and Forward's subtitle — so it is redrawn when that
+           state flips underneath it. Only on a real flip: this message
+           arrives several times a second while a page loads, and a rebuild
+           per message would throw the cursor and the scroll away between two
+           presses of the D-pad. The cursor is carried across by label. */
+        if (st.open && st.sheetKind === "menu") {
+          var nowLoading = !!((activeTab() || {}).loading);
+          if (nowLoading !== st.menuLoading) showMenu(true);
+        }
+      }
       return true;
 
     case "opened":
@@ -1893,6 +2430,65 @@ function hostMessage(m) {
       if (m.tab === st.active) showCrash(m);
       return true;
 
+    /* A page that could not be reached. The host has turned Edge's own error
+       page off (it carries a Microsoft wordmark), so without this the content
+       view is blank on a dead link. Only raised for real failures — a
+       download is a "failed" navigation too, and the host filters those out
+       before they reach here. Not shown while the human is off in the chrome
+       or a sheet: it would yank them out of what they were doing for a tab
+       that is not even on screen. */
+    case "loaderror":
+      say("tab " + m.tab + " load error: " + m.status + " -> " + m.url);
+      if (m.tab === st.active && (st.scope === "content" || st.scope === "start")) showLoadError(m);
+      return true;
+
+    /* A page asked for something the host will not decide on its own.
+       Answered by the shell's grant sheet; see the region above. The
+       host is holding a deferral until the reply goes back, so every
+       path out of here ends in exactly one {cmd:"permission"}. */
+    case "permission":
+      if (!st.open) {
+        /* No browser on screen means no page anybody is looking at, and
+           nothing to draw a sheet over. Deny and say why. */
+        say("permission for " + (m.kind || "?") + " arrived with the browser closed — denied");
+        permReply(m, false, false);
+        return true;
+      }
+      permAsk(m);
+      return true;
+
+    /* The host has answered this one itself — the page navigated away,
+       the tab closed, or its 60-second deadline expired and it denied.
+       The sheet asking about it is now a question about nothing, and it
+       is standing over whatever the human moved on to, so it goes. */
+    case "permissiondone":
+      perm.dropped[m.id] = true;
+      for (var pi = perm.queue.length - 1; pi >= 0; pi--) {
+        /* Still waiting its turn: nothing can reply for it, so the flag
+           that suppresses that reply has nothing to suppress. */
+        if (perm.queue[pi].id === m.id) { perm.queue.splice(pi, 1); delete perm.dropped[m.id]; }
+      }
+      say("permission " + m.id + " withdrawn by the host (" + (m.reason || "no reason") + ")");
+      try {
+        if (typeof bridge.grantDrop === "function") bridge.grantDrop("perm:" + m.id);
+      } catch (err) { report("grantDrop", err); }
+      return true;
+
+    /* The host's remembered decisions. Sent when the browser asks for them
+       and again, unasked, after every forget — so the sheet redraws from
+       what the host actually holds rather than from what the press was
+       supposed to have done. Logged either way, so the list is readable in
+       an unattended run where nobody opened the sheet. */
+    case "permissions":
+      st.permissions = m.items || [];
+      st.permStore = m.store || "";
+      say("remembered permissions: " + st.permissions.length +
+          (st.permStore ? " (in " + st.permStore + ")" : ""));
+      /* renderPermissions, NOT showPermissions: the latter asks for a list,
+         and this is the answer to one. */
+      if (st.open && st.sheetKind === "permissions") renderPermissions();
+      return true;
+
     case "fullscreen":
       st.el.wrap.classList.toggle("is-immersive", !!m.on);
       /* The chrome disappearing changes the stage rectangle, and the host
@@ -1900,17 +2496,38 @@ function hostMessage(m) {
       setTimeout(pushBounds, 30);
       return true;
 
-    case "arcnav":
-      return fromPage(m.msg || {});
+    case "mosnav":
+      return fromPage(m.msg || {}, m.tab);
   }
   return false;
 }
 
-/* Messages from the injected navigation layer, relayed by the host. */
-function fromPage(m) {
+/* Messages from the injected navigation layer, relayed by the host. The tab
+   is stamped on the envelope by the host; it matters for the state the shell
+   MIRRORS (which mode the page is in, whether it has media), because a
+   background tab finishing a load must not rewrite what the menu says about
+   the tab the human is looking at. */
+function fromPage(m, tab) {
+  /* Undefined rather than a number when something local is driving this
+     without a host — treated as the active tab, which is what it is. */
+  var mine = (tab === undefined || tab === null || tab === st.active);
   switch (m.ev) {
     case "ready":
       say("page ready: " + m.title + " (" + m.items + " targets) " + m.url);
+      /* A new document means a NEW mosnav — it is injected per document and
+         starts in spatial mode with nothing playing. st.navMode is only ever
+         moved by {ev:"mode"}, which a fresh page never sends, so without this
+         the shell kept the last document's answer: after one navigation the
+         menu's row said "Use link navigation" on a page that was already in
+         link mode, and the press put it into the pointer. The shell's copy
+         is reset to the truth here, and the press names the mode it wants
+         rather than asking for a toggle. */
+      if (mine) {
+        st.navMode = "spatial";
+        st.media = null;
+        st.focusKind = null;
+        renderHints();
+      }
       remember(m.url, m.title);
       applyRememberedZoom(m.url);
       return true;
@@ -1927,7 +2544,7 @@ function fromPage(m) {
          has to be makeable from a log after an unattended run. */
       st.lastFocus = m.label;
       /* Kept because it decides what Triangle means and what the hint bar
-         says. m.label is the field's NAME, never its contents — arcnav.js
+         says. m.label is the field's NAME, never its contents — mosnav.js
          guarantees that; see describe() there. */
       st.focusKind = m.kind;
       say("focus [" + m.kind + "] " + m.label + (m.href ? "  -> " + m.href : ""));
@@ -1969,7 +2586,7 @@ function applyRememberedZoom(url) {
 }
 
 /* ═══ The pad ══════════════════════════════════════════════════════════
-   One entry point, exactly like ArcOSK and ArcFiles. While the browser is
+   One entry point, exactly like MarwanOSK and MarwanFiles. While the browser is
    open it consumes everything: it is modal over the shell, and an action it
    does not recognise must not fall through to the home rail underneath. */
 
@@ -1981,11 +2598,18 @@ var ALIAS = {
   l1: "prev", tabplay: "prev", lb: "prev",
   r1: "next", tabmedia: "next", rb: "next",
   up: "up", down: "down", left: "left", right: "right",
-  l3: "l3", r3: "r3", create: "history", guide: "guide"
+  /* The host names the PS button "ps" on the wire and "guide" as the
+     action; index.html hands this table the BUTTON when it has one, so
+     both spellings have to land on the same word or a press the shell
+     calls guide arrives here as "ps", misses, and is swallowed as a
+     sheet action — which is exactly how the control centre stayed
+     unreachable from a web page for a while after guide itself was
+     un-consumed. */
+  l3: "l3", r3: "r3", create: "history", guide: "guide", ps: "guide"
 };
 
 /* Everything the content pane wants sent straight down, under its literal
-   button name — arcnav.js has its own vocabulary and the shell should not
+   button name — mosnav.js has its own vocabulary and the shell should not
    be translating between two of them. */
 var TO_PAGE = {
   up: "up", down: "down", left: "left", right: "right",
@@ -1994,6 +2618,12 @@ var TO_PAGE = {
 
 function handleAction(a, phase) {
   if (!st.open) return false;
+
+  /* A shell overlay is up over the browser and driving the pad itself. The
+     browser is off the screen for as long as that lasts — chrome and page
+     both — so every action is somebody else's; see shellHold(). Consuming
+     one here would move a cursor nobody can see. */
+  if (st.shellHeld) return false;
 
   /* The keyboard is modal over the browser, as it is over everything. */
   try { if (bridge.oskIsOpen()) return false; } catch (e) {}
@@ -2007,7 +2637,13 @@ function handleAction(a, phase) {
 
   var name = ALIAS[String(a).toLowerCase()] || String(a).toLowerCase();
 
-  if (name === "guide") return true;        // the PS button is the shell's, not ours
+  /* The PS button is the shell's, not ours — and "not ours" has to mean NOT
+     CONSUMED, or the control centre it opens everywhere else in the console
+     is the one screen a web page can lock the human out of. This used to
+     return true, which said "handled" and threw the press away: the comment
+     was right and the line contradicted it. Returning false hands it up;
+     index.html opens its overlay and calls shellHold(true) on the way. */
+  if (name === "guide") return false;
 
   if (st.scope === "content") return contentAction(name, a);
   if (st.scope === "chrome") return chromeAction(name);
@@ -2028,7 +2664,7 @@ function contentAction(name, raw) {
       /* Full screen is done twice over, on purpose.
          The shell's half - chrome hidden, content window given the whole
          display - always works and needs nobody's permission. The page's
-         half is asked for in parallel by arcnav, and now succeeds too,
+         half is asked for in parallel by mosnav, and now succeeds too,
          because discrete actions reach the page through ExecuteScriptAsync
          and therefore carry a user activation. Where a site has its own
          fullscreen UI that is much better than a bare stretched video, and
@@ -2047,7 +2683,7 @@ function contentAction(name, raw) {
     /* Triangle is the keyboard when there is a field to type into, and the
        menu the rest of the time. The keyboard has to be reopenable: it is
        dismissible with Circle, and a keyboard you can dismiss and not get
-       back is a field you cannot correct. arcnav.js reopens it on whatever
+       back is a field you cannot correct. mosnav.js reopens it on whatever
        is focused, so this only has to get the press down there. */
     case "menu":
       if (st.focusKind === "text") {
@@ -2105,15 +2741,15 @@ function chromeAction(name) {
       /* Close the focused tab from the strip. */
       {
         var node = items[st.chromeIdx];
-        if (node && node.__arcTab) { bridge.post({ type: "browser", cmd: "closetab", tab: node.__arcTab }); return true; }
+        if (node && node.__mosTab) { bridge.post({ type: "browser", cmd: "closetab", tab: node.__mosTab }); return true; }
       }
       return true;
     case "activate":
       {
         var n = items[st.chromeIdx];
         if (!n) return true;
-        if (n.__arcTab) { bridge.post({ type: "browser", cmd: "activate", tab: n.__arcTab }); goToContent(); return true; }
-        if (n.__arcNew) {
+        if (n.__mosTab) { bridge.post({ type: "browser", cmd: "activate", tab: n.__mosTab }); goToContent(); return true; }
+        if (n.__mosNew) {
           if (st.tabs.length >= st.max) { toast("Four tabs is the limit — each one is its own process."); return true; }
           bridge.post({ type: "browser", cmd: "newtab", url: "" });
           showStart();
@@ -2164,8 +2800,8 @@ function sheetAction(name) {
     case "activate":
       {
         var n = rows[st.sheetIdx];
-        if (n && typeof n.__arcRun === "function") {
-          try { n.__arcRun(); } catch (err) { report("sheet row", err); }
+        if (n && typeof n.__mosRun === "function") {
+          try { n.__mosRun(); } catch (err) { report("sheet row", err); }
         }
       }
       return true;
@@ -2173,7 +2809,7 @@ function sheetAction(name) {
     case "square":
       {
         var r = rows[st.sheetIdx];
-        if (r && typeof r.__arcRemove === "function") { try { r.__arcRemove(); } catch (err) { report("remove", err); } }
+        if (r && typeof r.__mosRemove === "function") { try { r.__mosRemove(); } catch (err) { report("remove", err); } }
       }
       return true;
 
@@ -2196,7 +2832,7 @@ function gridCols() {
   /* Read the real column count off the grid rather than assuming one: the
      tile size is a min-max and the count changes with the viewport. */
   try {
-    var grid = st.el.sheet.querySelector(".arcbw-pins");
+    var grid = st.el.sheet.querySelector(".mosbw-pins");
     if (!grid) return 1;
     var cs = getComputedStyle(grid).gridTemplateColumns;
     var n = cs ? cs.split(" ").filter(function (s) { return s && s !== "0px"; }).length : 1;
@@ -2233,6 +2869,11 @@ function open(cfg) {
   st.navMode = "spatial";
   st.media = null;
   st.lastBounds = "";
+  /* A hold left over from a previous session would open the browser into an
+     invisible one. It is cleared on close as well; this is the belt to that
+     brace, because the state it guards is "nothing is on the screen". */
+  st.shellHeld = false;
+  st.el.wrap.classList.remove("is-shell-held");
 
   /* A fresh session starts holding nothing, and with no memory of what was
      last posted — the host has torn its tabs down and back up, so the first
@@ -2292,11 +2933,17 @@ function close() {
   st.boundsTimer = 0;
   removeEventListener("resize", onResize);
   closeSheet();
+  permDrainDenied("the browser closed");
+  perm.held = false;
+  /* Whatever a shell overlay was holding, it is holding it over a browser
+     that no longer exists. The flag and the class go with the browser, or
+     the next open() is a black screen with a working focus ring in it. */
+  st.shellHeld = false;
   clearHolds("browser closed");
   shownNow = null; focusNow = null;
   bridge.post({ type: "browser", cmd: "close" });
   try {
-    st.el.wrap.classList.remove("is-open", "is-immersive");
+    st.el.wrap.classList.remove("is-open", "is-immersive", "is-shell-held");
     st.el.wrap.setAttribute("aria-hidden", "true");
   } catch (e) {}
   say("closed");
@@ -2305,7 +2952,7 @@ function close() {
 
 /* ═══ Public surface ═══════════════════════════════════════════════════ */
 
-root.ArcBrowser = {
+root.MarwanBrowser = {
   version: VERSION,
   attach: guard("attach", function (b) {
     if (!b) return;
@@ -2315,12 +2962,18 @@ root.ArcBrowser = {
     if (b.log) bridge.log = b.log;
     if (b.toast) bridge.toast = b.toast;
     if (b.files) bridge.files = b.files;
+    if (b.grant) bridge.grant = b.grant;
+    if (b.grantDrop) bridge.grantDrop = b.grantDrop;
   }),
   open: guard("open", open),
   close: guard("close", close),
   isOpen: guard("isOpen", function () { return !!st.open; }),
   handleAction: guard("handleAction", handleAction),
   hostMessage: guard("hostMessage", hostMessage),
+  /* Called by index.html when a shell overlay opens over the browser and
+     again after it closes. See shellHold() for what it takes off the screen
+     and why both halves are needed. */
+  shellHold: guard("shellHold", shellHold),
   engines: ENGINES,
   debugState: guard("debugState", function () {
     return {
@@ -2329,6 +2982,10 @@ root.ArcBrowser = {
       chromeIdx: st.chromeIdx, sheetIdx: st.sheetIdx, sheetRows: st.sheetRows.length,
       sheetKind: st.sheetKind,
       downloads: st.downloads.length, downloadsActive: st.downActive,
+      permissionAsking: !!perm.busy, permissionQueued: perm.queue.length,
+      permissionsRemembered: st.permissions.length,
+      shellHeld: st.shellHeld,
+      media: st.media ? (st.media.playing ? "playing" : "paused") : null,
       contentShown: shownNow, contentFocused: focusNow, holds: holdList(),
       pins: st.pins.length, history: st.history.length, engine: st.engine,
       bounds: st.lastBounds, url: (activeTab() || {}).url || null,

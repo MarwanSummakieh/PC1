@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — library.css
+   MarwanOS — library.css
    The face a cover wears.
 
    Every tile on the rail is one of three faces, and ui/library.js picks
@@ -25,9 +25,9 @@
                    already has its own darkened floor baked in.
      .face-field   no artwork of any kind: the shell's own two tiles,
                    and the honest "nothing is installed here" tile. A
-                   two-stop field in the tile's own colour, the arc
-                   mark, and the source glyph. This is the bench's case
-                   and it has to look like a decision.
+                   two-stop field in the tile's own colour and the
+                   source glyph. This is the bench's case and it has to
+                   look like a decision.
 
    --k-accent / --k-deep / --k-ink are set per tile by ui/library.js from
    ui/homeart.js's reading of the artwork, so even a tile with no picture
@@ -39,12 +39,11 @@
   background-repeat:no-repeat;
   background-position:center;
   background-size:cover;
-  background-color:var(--k-ink,#0d0d11);
+  background-color:var(--k-ink,#0b0b0b);
 }
 
 /* ── Real and generated portraits ───────────────────────────────────── */
 .tile.face-art .tile-glyph,
-.tile.face-art .tile-arc,
 .tile.face-art .tile-mark{opacity:0}
 
 /* A generated portrait already carries its own bottom scrim, so the
@@ -57,21 +56,9 @@
 .tile.face-field .tile-art{
   background-image:
     linear-gradient(158deg,rgba(255,255,255,.10),rgba(0,0,0,.34) 62%),
-    radial-gradient(128% 96% at 26% 0%,var(--k-accent,#4d7fb8) 0%,transparent 60%),
-    linear-gradient(158deg,var(--k-deep,#161a21) 0%,var(--k-ink,#08080a) 88%);
+    radial-gradient(128% 96% at 26% 0%,var(--k-accent,#2f6b45) 0%,transparent 60%),
+    linear-gradient(158deg,var(--k-deep,#1b1c1e) 0%,var(--k-ink,#080808) 88%);
 }
-
-/* The arc, at cover scale — the same mark that sweeps behind the whole
-   screen and the same one ui/homeart.js draws into a generated portrait,
-   so all three read as one idea at three sizes. Clipped by the tile. */
-.tile-arc{
-  position:absolute;left:50%;bottom:-78%;
-  width:168%;aspect-ratio:1/1;translate:-50% 0;
-  border-radius:50%;
-  border:.0625rem solid rgba(255,255,255,.22);
-  opacity:0;transition:opacity .3s var(--e-out);
-}
-.tile.face-field .tile-arc{opacity:1}
 
 /* The executable's own icon, shown for the moment between the scan
    landing and the generated portrait being drawn. Centred at a size it
@@ -90,5 +77,5 @@
    users get the swap with no animation, same as the rest of the shell. */
 .tile-art{transition:background-image .3s linear}
 @media (prefers-reduced-motion:reduce){
-  .tile-art,.tile-arc,.tile-mark{transition:none}
+  .tile-art,.tile-mark{transition:none}
 }

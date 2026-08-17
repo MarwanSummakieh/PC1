@@ -1,14 +1,15 @@
 <#
 .SYNOPSIS
-    Removes the ARC install broker. Undo for provisioning\04-install-broker.ps1.
+    Removes the MarwanOS install broker. Undo for provisioning\04-install-broker.ps1.
 
 .DESCRIPTION
-    Unregisters the \ARC\arc-install-broker scheduled task and removes the \ARC
+    Unregisters the \MarwanOS\marwan-install-broker scheduled task and removes the \MarwanOS
     task folder if it is left empty. This is the part that matters: with the task
-    gone, the elevated path is gone, and the console shell can no longer cause an
-    install without a human at the machine.
+    gone, the elevated path is gone, and the console shell can no longer perform any
+    brokered privileged action (install, updates.install, wifi.forget, bt.forget)
+    without a human at the machine.
 
-    The state directory C:\ProgramData\ARC is LEFT IN PLACE by default, because
+    The state directory C:\ProgramData\MarwanOS is LEFT IN PLACE by default, because
     it holds the install log and the manifest. Pass -RemoveData to delete it too.
 
     Idempotent: removing a broker that is not installed reports that and exits 0.
@@ -30,7 +31,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Root = 'C:\ProgramData\ARC',
+    [string]$Root = 'C:\ProgramData\MarwanOS',
     [switch]$RemoveData,
     [switch]$Force,
     [switch]$WhatIfOnly
@@ -39,8 +40,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$TaskFolder = 'ARC'
-$TaskName   = 'arc-install-broker'
+$TaskFolder = 'MarwanOS'
+$TaskName   = 'marwan-install-broker'
 $TaskFull   = "\$TaskFolder\$TaskName"
 
 Write-Host "=== 94-remove-install-broker.ps1 ===" -ForegroundColor Cyan

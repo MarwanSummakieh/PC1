@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Applies a Shell Launcher custom-shell configuration to ONE account ('arcshell') only.
+    Applies a Shell Launcher custom-shell configuration to ONE account ('marwanshell') only.
 
 .DESCRIPTION
     Step 3 of 3 in the PC1 shell-replacement provisioning sequence. This is the
@@ -34,7 +34,7 @@
       * The resolved SID equals the SID of the account currently running the script.
       * The resolved SID is a member of the local Administrators group.
         (Per the project rule: never configure a SID that belongs to an
-        Administrators member other than arcshell. If arcshell itself is somehow
+        Administrators member other than marwanshell. If marwanshell itself is somehow
         in Administrators, that is a provisioning error and the script also
         aborts -- fix the group membership first.)
       * The resolved SID is not a machine-local user SID (must be S-1-5-21-<domain>-<RID>
@@ -49,7 +49,7 @@
     entry pointing at a nonexistent binary gives the account a black screen.
 
 .PARAMETER UserName
-    Local account to configure. Defaults to 'arcshell'.
+    Local account to configure. Defaults to 'marwanshell'.
 
 .DOCS  (verified 2026-08-13 against Microsoft Learn)
     WESL_UserSetting class + full MOF + reference PowerShell sample:
@@ -135,16 +135,16 @@
     UNVERIFIED ON THIS MACHINE (Windows 11 IoT Enterprise LTSC 2024 / 24H2):
       * Whether the WMI provider path still fully governs shell selection on 24H2,
         or whether an Assigned Access CSP configuration would take precedence.
-        Untested here. Verify empirically on the arcshell account before trusting.
+        Untested here. Verify empirically on the marwanshell account before trusting.
       * Whether a *console* application (ShellHost.exe) works as a Shell Launcher
         shell without a visible console window issue. Console-subsystem shells are
-        not the documented scenario. Test on arcshell first.
+        not the documented scenario. Test on marwanshell first.
       * Whether Ctrl+Shift+Esc reaches Task Manager under Shell Launcher on this
         build. Shell Launcher has NO AllowTaskManager setting (that attribute
         belongs to Assigned Access multi-app kiosk XML, not Shell Launcher), and
         Shell Launcher does not itself set the DisableTaskMgr policy -- so Task
         Manager is expected to be reachable. THIS IS AN EXPECTATION, NOT A
-        VERIFIED FACT. See provisioning\RECOVERY.md before you sign into arcshell.
+        VERIFIED FACT. See provisioning\RECOVERY.md before you sign into marwanshell.
       * Whether -NoRestart from step 01 left the provider fully registered.
 
     RUN AS: elevated *Windows PowerShell 5.1* (powershell.exe). PowerShell 7 has
@@ -161,7 +161,7 @@ param(
     [string]$ShellPath = 'C:\Users\brain\Documents\repos\PC1\spike\ShellHost.exe',
 
     [ValidateNotNullOrEmpty()]
-    [string]$UserName = 'arcshell',
+    [string]$UserName = 'marwanshell',
 
     # Shell exit codes to map. Parallel to -ReturnCodeActions.
     [int[]]$ReturnCodes = @(0, 2, 3),

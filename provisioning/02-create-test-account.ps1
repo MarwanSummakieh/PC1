@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Creates the throwaway local test account 'arcshell' (standard user, NOT an admin).
+    Creates the throwaway local test account 'marwanshell' (standard user, NOT an admin).
 
 .DESCRIPTION
     Step 2 of 3 in the PC1 shell-replacement provisioning sequence.
@@ -36,8 +36,8 @@
         policy could still reject it. If New-LocalUser fails with a password error,
         that is why.
       * Whether the machine has a policy hiding local accounts from the sign-in
-        screen (some IoT/kiosk images do). If 'arcshell' does not appear on the
-        logon screen, use "Other user" and type .\arcshell.
+        screen (some IoT/kiosk images do). If 'marwanshell' does not appear on the
+        logon screen, use "Other user" and type .\marwanshell.
       * The user profile is NOT created until the first interactive sign-in.
         92-remove-test-account.ps1 handles both the profile-exists and
         profile-never-created cases.
@@ -50,7 +50,7 @@
 param(
     # Name of the throwaway account. Do NOT point this at a real account.
     [ValidateNotNullOrEmpty()]
-    [string]$UserName = 'arcshell',
+    [string]$UserName = 'marwanshell',
 
     [string]$FullName = 'PC1 Shell Launcher test account',
 
@@ -64,7 +64,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # --- Hard guard: never operate on the primary account -----------------------
-# This is a belt-and-braces check. Even though -UserName defaults to arcshell,
+# This is a belt-and-braces check. Even though -UserName defaults to marwanshell,
 # a typo must not be able to clobber the operator's real account.
 $ProtectedNames = @('brain', 'Administrator', 'DefaultAccount', 'Guest', 'WDAGUtilityAccount')
 if ($ProtectedNames -contains $UserName) {

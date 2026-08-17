@@ -1,5 +1,5 @@
 @echo off
-REM ARC OS - build the SystemApi console harness with the inbox .NET Framework compiler.
+REM MarwanOS - build the SystemApi console harness with the inbox .NET Framework compiler.
 REM
 REM   build-cli.cmd                -> bin\systemapi-cli.exe
 REM   build-cli.cmd myname.exe     -> bin\myname.exe

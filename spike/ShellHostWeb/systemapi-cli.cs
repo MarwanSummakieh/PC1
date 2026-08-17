@@ -1,4 +1,4 @@
-// ARC OS - SystemApi console harness
+// MarwanOS - SystemApi console harness
 //
 // Exercises SystemApi.Handle() from the command line so the whole system-control surface can be
 // tested without going anywhere near the live shell.
@@ -25,9 +25,9 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
-using ArcOs.Sys;
+using MarwanOs.Sys;
 
-namespace ArcOs.Sys.Cli
+namespace MarwanOs.Sys.Cli
 {
     public static class CliProgram
     {
@@ -105,7 +105,7 @@ namespace ArcOs.Sys.Cli
 
         static void Usage()
         {
-            Console.WriteLine("ARC OS SystemApi harness");
+            Console.WriteLine("MarwanOS SystemApi harness");
             Console.WriteLine();
             Console.WriteLine("  systemapi-cli <cmd> [key=value ...] [--wait[=ms]] [--raw] [--quiet]");
             Console.WriteLine("  systemapi-cli --json '{\"cmd\":\"...\"}'");

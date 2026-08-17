@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   PC1 — on-screen keyboard  (ui/osk.css)
+   MarwanOS — on-screen keyboard  (ui/osk.css)
 
    Kept as a separate sheet rather than injected from JS: a strict CSP
    (`style-src 'self'`) blocks an inline <style> element but allows a
@@ -13,24 +13,24 @@
    self-referential var(--x, var(--x)) is invalid CSS and silently unsets.
    ═══════════════════════════════════════════════════════════════════════ */
 
-.arc-osk-probe{ --osk-loaded:1 }
+.mos-osk-probe{ --osk-loaded:1 }
 
-.arc-osk{
-  --osk-void:     var(--void, #0b0b0d);
-  --osk-deep:     var(--deep, #141417);
-  --osk-haze:     var(--haze, #1c1c21);
-  --osk-line:     var(--line, #2b2b32);
-  --osk-ice:      var(--ice, #f4f5f7);
-  --osk-steel:    var(--steel, #9c9da5);
-  --osk-dim:      var(--dim, #6a6b73);
-  --osk-beam:     var(--beam, #1a86ff);
-  --osk-beam-hot: var(--beam-hot, #57a6ff);
-  --osk-beam-deep:var(--beam-deep, #0b4fa8);
+.mos-osk{
+  --osk-void:     var(--void, #070707);
+  --osk-deep:     var(--deep, #17181a);
+  --osk-haze:     var(--haze, #202124);
+  --osk-line:     var(--line, #34353a);
+  --osk-ice:      var(--ice, #efe9d6);
+  --osk-steel:    var(--steel, #cdc7b4);
+  --osk-dim:      var(--dim, #9d998c);
+  --osk-beam:     var(--beam, #50e380);
+  --osk-beam-hot: var(--beam-hot, #7cee9f);
+  --osk-beam-deep:var(--beam-deep, #1fb85a);
   --osk-sel:      var(--sel, #ffffff);
-  --osk-warn:     var(--warn, #ffb457);
+  --osk-warn:     var(--warn, #ffb27a);
 
-  --osk-sans:    var(--sans,    Inter,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
-  --osk-display: var(--display, "Inter Tight",Inter,"Segoe UI Variable Display","Segoe UI Light","Segoe UI",system-ui,-apple-system,sans-serif);
+  --osk-sans:    var(--sans,    "Geist",Inter,"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Helvetica Neue",Arial,sans-serif);
+  --osk-display: var(--display, "Geist",Inter,"Segoe UI Variable Display","Segoe UI","Segoe UI Light",system-ui,-apple-system,sans-serif);
   --osk-e-out:   var(--e-out,   cubic-bezier(.16,.84,.24,1));
 
   /* Sized for a three-metre read: a key cap is never below 44px tall and
@@ -39,14 +39,14 @@
   --osk-key-gap:  clamp(5px, .62vh, 10px);
   --osk-key-font: clamp(19px, .95vw + .55vh, 30px);
   --osk-mod-font: clamp(14px, .62vw + .42vh, 20px);
-  --osk-radius:   6px;
+  --osk-radius:   2px;
 
   /* ── Above EVERY shell surface, without exception ──────────────────────
      The keyboard is the shell's innermost modal: it can be opened over the
-     home screen (z 20-60), over the file explorer (.arcfs, z 50) and over
-     the browser chrome (.arcbw, z 820). It must out-rank all of them.
+     home screen (z 20-60), over the file explorer (.mosfs, z 50) and over
+     the browser chrome (.mosbw, z 820). It must out-rank all of them.
 
-     This was 60, and that number cost a day. `.arcbw` is `inset:0` with an
+     This was 60, and that number cost a day. `.mosbw` is `inset:0` with an
      OPAQUE background, so with the browser open the keyboard rendered
      underneath it and was simply not on the screen — while still taking
      every pad press, because being modal is a JavaScript fact and has
@@ -69,13 +69,13 @@
   opacity:0; pointer-events:none;
   transition:opacity .3s var(--osk-e-out);
 }
-.arc-osk.is-open{ opacity:1; pointer-events:auto }
+.mos-osk.is-open{ opacity:1; pointer-events:auto }
 
-.arc-osk *{ box-sizing:border-box }
+.mos-osk *{ box-sizing:border-box }
 /* Deliberately NOT `font:inherit`: the shorthand would reset font-size, and
-   `.arc-osk button` out-specifies `.osk-key`, so every key cap would silently
+   `.mos-osk button` out-specifies `.osk-key`, so every key cap would silently
    render at the host page's body size instead of the sofa-legible clamp. */
-.arc-osk button{
+.mos-osk button{
   font-family:inherit;
   color:inherit; background:none; border:0; cursor:pointer;
 }
@@ -92,8 +92,8 @@
   translate:0 34px;
   transition:translate .42s var(--osk-e-out);
 }
-.arc-osk.is-open .osk-panel{ translate:0 0 }
-.arc-osk.osk--number .osk-panel{ width:min(560px, 92vw) }
+.mos-osk.is-open .osk-panel{ translate:0 0 }
+.mos-osk.osk--number .osk-panel{ width:min(560px, 92vw) }
 
 /* ── head: context line, field, counter ────────────────────────────── */
 .osk-head{ margin-bottom:clamp(10px,1.6vh,20px) }
@@ -114,7 +114,7 @@
 .osk-field{
   display:flex; align-items:stretch; gap:0;
   border:1px solid var(--osk-line);
-  border-radius:14px;
+  border-radius:2px;
   background:rgba(20,20,24,.78);
   box-shadow:0 10px 30px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.03);
   transition:border-color .25s var(--osk-e-out), box-shadow .25s var(--osk-e-out);
@@ -225,10 +225,10 @@
   border-color:var(--ice);
 }
 
-.osk-reveal{ flex:1; min-width:0; height:auto; padding:8px 10px; border-radius:10px }
+.osk-reveal{ flex:1; min-width:0; height:auto; padding:8px 10px; border-radius:2px }
 .osk-reveal .osk-keytext{ overflow:hidden; text-overflow:clip }
 
-.arc-osk .osk-key:hover{ border-color:rgba(255,255,255,.4) }
+.mos-osk .osk-key:hover{ border-color:rgba(255,255,255,.4) }
 
 /* ── focus: the one thing that must be unmistakable from the sofa ──────
    Not a border treatment — a filled beam cap with dark text, lifted off the
@@ -269,25 +269,28 @@
   width:17px; height:17px; fill:none; stroke:currentColor;
   stroke-width:1.5; stroke-linecap:round; stroke-linejoin:round;
 }
-/* The face symbols carry Sony's heavier absolute stroke, square-cut ends
-   and sharp corners — see the note beside PAD_GLYPH in index.html. */
-.osk-glyph svg .face{ stroke-width:1.9; stroke-linecap:butt; stroke-linejoin:miter }
-.osk-glyph svg .tri{ stroke-linejoin:miter }
+/* The pad prompts are PromptFont OUTLINES — filled caps with the mark
+   knocked out of them, not stroked symbols — so they opt out of this
+   sheet's default stroke language entirely. Without this rule the default
+   `fill:none; stroke:currentColor` above draws the outline of the knockout
+   and the button reads as a tangle of thin loops. See the note beside
+   PAD_GLYPH in index.html. */
+.osk-glyph svg .solid{ fill:currentColor; stroke:none }
 .osk-padkey{
   display:inline-grid; place-items:center; height:20px; padding:0 7px;
-  border:1px solid var(--osk-line); border-radius:5px;
+  border:1px solid var(--osk-line); border-radius:2px;
   background:rgba(20,20,24,.7);
   font-size:10px; letter-spacing:.14em; color:var(--osk-steel);
 }
 
 /* ── short screens: give the keys the room, drop the decoration ─────── */
 @media (max-height:640px){
-  .arc-osk{ --osk-key-h:clamp(38px,8.4vh,52px) }
+  .mos-osk{ --osk-key-h:clamp(38px,8.4vh,52px) }
   .osk-hints{ display:none }
   .osk-title{ margin-bottom:6px }
 }
 @media (max-width:720px){
-  .arc-osk{ --osk-key-font:clamp(15px,3.4vw,22px); --osk-mod-font:11px }
+  .mos-osk{ --osk-key-font:clamp(15px,3.4vw,22px); --osk-mod-font:11px }
   .osk-panel{ padding:12px 12px 16px }
   /* the toggle keeps its modelled width, so below this the eye carries it */
   .osk-reveal .osk-keytext{ display:none }
@@ -297,10 +300,10 @@
    Everything collapses, including the caret blink: a blinking cursor is an
    animation like any other, and steady is the accessible default here. */
 @media (prefers-reduced-motion:reduce){
-  .arc-osk,
-  .arc-osk *,
-  .arc-osk *::before,
-  .arc-osk *::after{
+  .mos-osk,
+  .mos-osk *,
+  .mos-osk *::before,
+  .mos-osk *::after{
     animation-duration:.001s !important;
     animation-iteration-count:1 !important;
     animation-delay:0s !important;
@@ -308,4 +311,4 @@
   }
   .osk-caret{ animation:none !important; opacity:1 }
 }
-.arc-osk.is-still .osk-caret{ animation:none; opacity:1 }
+.mos-osk.is-still .osk-caret{ animation:none; opacity:1 }

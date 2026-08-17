@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
-    Installs the ARC install broker: a SYSTEM scheduled task that installs
-    allowlisted winget packages on demand, with no UAC prompt.
+    Installs the MarwanOS broker: a SYSTEM scheduled task that performs a small
+    allowlist of privileged VERBS on demand, with no UAC prompt.
 
 .DESCRIPTION
     Step 4 of the PC1 provisioning sequence. Independent of steps 1-3 (Shell
@@ -24,17 +24,24 @@
 
     WHAT THIS DELIBERATELY DOES NOT DO
     The task does not run a command supplied by the caller. It runs a fixed
-    worker script, which accepts a winget package ID and matches it against an
-    administrator-owned allowlist. A broker that ran caller-supplied paths would
-    be a permanent SYSTEM backdoor for every process running as arcshell - which
-    is precisely the standard, non-administrative account the shell runs as.
+    worker script, which accepts one of exactly four verbs:
+
+        install          package=<id>      id must be in packages.json
+        updates.install  (no arguments)
+        wifi.forget      ssid=<1..32 ch>
+        bt.forget        address=<12 hex>
+
+    NO VERB TAKES A PATH, A URL, A COMMAND LINE OR AN ARGUMENT LIST. A broker
+    that ran caller-supplied paths would be a permanent SYSTEM backdoor for every
+    process running as marwanshell - which is precisely the standard,
+    non-administrative account the shell runs as.
 
     LAYOUT CREATED
-        C:\ProgramData\ARC\                 SYSTEM+Admins full, runners read
+        C:\ProgramData\MarwanOS\                 SYSTEM+Admins full, runners read
           packages.json                     the only authority; admin-writable only
-          arc-install-worker.ps1            the privileged half
+          marwan-install-worker.ps1            the privileged half
           queue\                            runners may create request files here
-          processed\                        results, readable by runners
+          processed\                        results + <ticket>.progress, readable by runners
           cache\                            downloaded installers
           logs\install-broker.log           every download, check and decision
 
@@ -42,7 +49,7 @@
     task in place. An existing packages.json is preserved unless -ReplaceManifest.
 
 .PARAMETER AllowRunAs
-    Accounts permitted to trigger the task. Default: arcshell. These accounts get
+    Accounts permitted to trigger the task. Default: marwanshell. These accounts get
     read access to the broker directory and write access to queue\ only.
 
 .PARAMETER ReplaceManifest
@@ -65,8 +72,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string[]]$AllowRunAs = @('arcshell'),
-    [string]$Root = 'C:\ProgramData\ARC',
+    [string[]]$AllowRunAs = @('marwanshell'),
+    [string]$Root = 'C:\ProgramData\MarwanOS',
     [switch]$ReplaceManifest,
     [switch]$WhatIfOnly
 )
@@ -74,19 +81,19 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$TaskFolder = 'ARC'
-$TaskName   = 'arc-install-broker'
+$TaskFolder = 'MarwanOS'
+$TaskName   = 'marwan-install-broker'
 $TaskFull   = "\$TaskFolder\$TaskName"
 
 $SourceDir  = Join-Path $PSScriptRoot 'install-broker'
-$SrcWorker  = Join-Path $SourceDir 'arc-install-worker.ps1'
+$SrcWorker  = Join-Path $SourceDir 'marwan-install-worker.ps1'
 $SrcAllow   = Join-Path $SourceDir 'packages.json'
 
 $QueueDir     = Join-Path $Root 'queue'
 $ProcessedDir = Join-Path $Root 'processed'
 $LogDir       = Join-Path $Root 'logs'
 $CacheDir     = Join-Path $Root 'cache'
-$DstWorker    = Join-Path $Root 'arc-install-worker.ps1'
+$DstWorker    = Join-Path $Root 'marwan-install-worker.ps1'
 $DstAllow     = Join-Path $Root 'packages.json'
 
 Write-Host "=== 04-install-broker.ps1 ===" -ForegroundColor Cyan
@@ -148,7 +155,7 @@ Write-Host ""
 Write-Host "Will apply:" -ForegroundColor Yellow
 Write-Host "  1. Create $Root (+ queue, processed, cache, logs)"
 Write-Host "  2. Set explicit ACLs: SYSTEM/Administrators full; runners read; runners write to queue\ only"
-Write-Host "  3. Copy arc-install-worker.ps1 -> $DstWorker"
+Write-Host "  3. Copy marwan-install-worker.ps1 -> $DstWorker"
 Write-Host ("  4. {0} packages.json -> {1}" -f $(if ((Test-Path $DstAllow) -and -not $ReplaceManifest) { 'PRESERVE existing' } else { 'Copy' }), $DstAllow)
 Write-Host "  5. Register scheduled task $TaskFull as SYSTEM, RunLevel Highest, no trigger (on-demand)"
 Write-Host "  6. Grant runners read+execute on the task itself, so they can trigger it"
@@ -226,7 +233,7 @@ catch {
 
 $def = $svc.NewTask(0)
 $def.RegistrationInfo.Author      = 'PC1 provisioning\04-install-broker.ps1'
-$def.RegistrationInfo.Description = 'ARC OS install broker. Installs packages named in the manifest on demand, so the controller-only shell never faces a UAC prompt. Manifest: ' + $DstAllow
+$def.RegistrationInfo.Description = 'MarwanOS broker. Performs an allowlisted privileged verb on demand (install / updates.install / wifi.forget / bt.forget), so the controller-only shell never faces a UAC prompt. Manifest: ' + $DstAllow
 
 $def.Principal.UserId    = 'SYSTEM'
 $def.Principal.LogonType = 5    # TASK_LOGON_SERVICE_ACCOUNT
@@ -250,7 +257,7 @@ $registered = $folder.RegisterTaskDefinition($TaskName, $def, 6, 'SYSTEM', $null
 Write-Host "  registered $TaskFull (SYSTEM, RunLevel Highest, on-demand only)"
 
 # --- 6. Let the runners trigger it ------------------------------------------
-# Without this the task exists but arcshell cannot start it: by default only
+# Without this the task exists but marwanshell cannot start it: by default only
 # administrators and SYSTEM hold execute rights on a SYSTEM-registered task.
 #   GA = full, GR = read, GX = execute (i.e. "may run this task")
 $aces = ($runners | ForEach-Object { "(A;;GRGX;;;$($_.Sid))" }) -join ''
@@ -287,9 +294,9 @@ Write-Host ("  task SD         : {0}" -f $check.GetSecurityDescriptor(4))   # DA
 
 Write-Host ""
 Write-Host "Verify end-to-end as the runner account (NOT elevated):" -ForegroundColor Green
-Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$SourceDir\arc-install.ps1`" -PackageId steam"
+Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File `"$SourceDir\marwan-install.ps1`" -PackageId steam"
 Write-Host ""
-Write-Host "Nothing is proven until that command has been run from an arcshell session and observed." -ForegroundColor Yellow
+Write-Host "Nothing is proven until that command has been run from an marwanshell session and observed." -ForegroundColor Yellow
 Write-Host ""
 Write-Host "UNDO for this step: provisioning\94-remove-install-broker.ps1" -ForegroundColor DarkGray
 Write-Host "Record this change in provisioning\MACHINE-CHANGES.md" -ForegroundColor DarkGray

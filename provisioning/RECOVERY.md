@@ -1,6 +1,6 @@
 # RECOVERY.md — getting back to a working desktop
 
-**Read this before you sign into `arcshell` for the first time.**
+**Read this before you sign into `marwanshell` for the first time.**
 
 This document lists every way back, in order of escalation. Start at (a) and go down.
 Nothing here should ever be needed for the `brain` account: `brain` is never given a
@@ -13,7 +13,7 @@ Shell Launcher configuration, and the default shell for unconfigured users is se
 
 1. **Use `Switch user`, not `Sign out`.**
    From the `brain` desktop press `Ctrl` + `Alt` + `Del` → **Switch user** → sign into
-   `arcshell`. Your elevated `brain` session with the provisioning scripts stays alive
+   `marwanshell`. Your elevated `brain` session with the provisioning scripts stays alive
    in the background. Getting back is then just `Ctrl` + `Alt` + `Del` → **Switch user**
    → `brain`. This is recovery path (c) and it costs nothing to set up.
 
@@ -80,8 +80,8 @@ lockdown attempt (run as `brain`, elevated):
 ```powershell
 # Machine-wide policy
 Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name DisableTaskMgr -ErrorAction SilentlyContinue
-# Per-user policy for arcshell (needs the account's SID; hive must be loaded, i.e. signed in)
-$sid = (Get-LocalUser arcshell).SID.Value
+# Per-user policy for marwanshell (needs the account's SID; hive must be loaded, i.e. signed in)
+$sid = (Get-LocalUser marwanshell).SID.Value
 Get-ItemProperty "Registry::HKEY_USERS\$sid\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name DisableTaskMgr -ErrorAction SilentlyContinue
 
 # To clear the machine-wide one:
@@ -103,8 +103,8 @@ The screen offers:
 | Option | What it gets you |
 | --- | --- |
 | **Lock** | Not useful here. |
-| **Switch user** | **Use this.** Takes you to the logon screen with the `arcshell` session left running; sign into `brain`, which always gets Explorer. |
-| **Sign out** | Ends the `arcshell` session cleanly. Returns to the logon screen. |
+| **Switch user** | **Use this.** Takes you to the logon screen with the `marwanshell` session left running; sign into `brain`, which always gets Explorer. |
+| **Sign out** | Ends the `marwanshell` session cleanly. Returns to the logon screen. |
 | **Change a password** | Not useful here. |
 | **Task Manager** | Second route into path (a), independent of `Ctrl` + `Shift` + `Esc`. |
 
@@ -135,7 +135,7 @@ desktop.
 ```powershell
 cd C:\Users\brain\Documents\repos\PC1\provisioning
 
-# Undo step 03 — removes arcshell's custom shell, turns enforcement off.
+# Undo step 03 — removes marwanshell's custom shell, turns enforcement off.
 # THIS IS THE ONE THAT FIXES A BROKEN SHELL.
 .\93-remove-shell-launcher-config.ps1
 
@@ -149,7 +149,7 @@ cd C:\Users\brain\Documents\repos\PC1\provisioning
 .\91-disable-shell-launcher.ps1
 ```
 
-5. Sign the `arcshell` session out so it re-reads the configuration:
+5. Sign the `marwanshell` session out so it re-reads the configuration:
 
 ```powershell
 # Find the session id, then log it off.
@@ -173,13 +173,13 @@ $SL.SetEnabled($false)
 $SL.SetDefaultShell("explorer.exe", 0)
 
 # Remove a specific SID's entry:
-$SL.RemoveCustomShell((Get-LocalUser arcshell).SID.Value)
+$SL.RemoveCustomShell((Get-LocalUser marwanshell).SID.Value)
 ```
 
 ### Just disable the account and stop the bleeding
 
 ```powershell
-Disable-LocalUser -Name arcshell
+Disable-LocalUser -Name marwanshell
 ```
 
 Nobody can sign into a broken shell if the account cannot sign in.
@@ -309,7 +309,7 @@ Last resort. Use when WinRE on the machine itself is unavailable or damaged.
 > ```powershell
 > reg query "HKLM\SOFTWARE\Microsoft\Windows Embedded\Shell Launcher" /s
 > # If that returns nothing, find where the SID actually landed:
-> $sid = (Get-LocalUser arcshell).SID.Value
+> $sid = (Get-LocalUser marwanshell).SID.Value
 > reg query HKLM\SOFTWARE /f "$sid" /s /k /e
 > reg query HKLM\SOFTWARE /f "ShellHost.exe" /s /d
 > ```
@@ -329,7 +329,7 @@ Print this, or keep it on a phone.
 | Black screen, nothing responds | `Ctrl`+`Alt`+`Del` → Switch user → sign in as `brain` |
 | Want the config gone for good | As `brain`, elevated: `.\93-remove-shell-launcher-config.ps1` |
 | Config in unknown state | `.\93-remove-shell-launcher-config.ps1 -All` |
-| Stop anyone signing into the broken account | `Disable-LocalUser -Name arcshell` |
+| Stop anyone signing into the broken account | `Disable-LocalUser -Name marwanshell` |
 | Cannot sign into `brain` | Shift+Restart → Troubleshoot → Startup Settings → `4` (Safe Mode) |
 | Cannot reach a desktop at all | WinRE Command Prompt → `dism /image:D:\ /disable-feature /featurename:Client-EmbeddedShellLauncher` |
 | WinRE broken | Install USB → `Shift`+`F10` → same DISM command |

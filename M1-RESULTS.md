@@ -2,11 +2,11 @@
 
 **Machine:** DESKTOP-6BCSJ3P (test bench), Windows 11 IoT Enterprise LTSC Evaluation, build **26100.9168**
 **Date:** 2026-08-14, ~01:00–01:10
-**Shell:** `C:\ArcOS\ArcShellHost.exe` bound to the `arcshell` SID via `WESL_UserSetting`, enforcement ON
+**Shell:** `C:\MarwanOS\MarwanShellHost.exe` bound to the `marwanshell` SID via `WESL_UserSetting`, enforcement ON
 **Display:** 3440×1440
 **Controller:** none attached — all input was keyboard
 
-Every result below was observed on the machine. Timings come from `C:\ArcOS\handoff-log.txt`,
+Every result below was observed on the machine. Timings come from `C:\MarwanOS\handoff-log.txt`,
 written by the host itself; session/process facts come from live queries over SSH from the laptop.
 
 ---
@@ -22,11 +22,11 @@ written by the host itself; session/process facts come from live queries over SS
 
 ## 1. Shell replacement — PASS
 
-Signing into `arcshell` lands directly in the host window. No taskbar, no Start, no desktop icons.
+Signing into `marwanshell` lands directly in the host window. No taskbar, no Start, no desktop icons.
 
-Process evidence while the session was live (`arcshell` = session 3, `brain` = session 1, disconnected):
+Process evidence while the session was live (`marwanshell` = session 3, `brain` = session 1, disconnected):
 
-    ArcShellHost   pid 7656   session 3      <- our shell
+    MarwanShellHost   pid 7656   session 3      <- our shell
     explorer       pid 7208   session 1      <- brain's session only
     SearchHost     pid 7400   session 1
     StartMenuExperienceHost  pid 2268  session 1
@@ -87,7 +87,7 @@ Most likely the shutdown was simply not triggered. Recording it as unverified ra
 ## Unplanned finding: reboot returns straight to the shell, unattended
 
 After the exit-code-2 device restart, the machine came back up **into the ARC shell with no logon
-interaction at all** — `arcshell` was signed in again at 01:09 with no password typed. This is
+interaction at all** — `marwanshell` was signed in again at 01:09 with no password typed. This is
 Windows' automatic sign-in of the last interactive user after a restart, working because the account
 has a blank password.
 

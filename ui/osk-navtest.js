@@ -1,17 +1,17 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   PC1 — on-screen keyboard: grid navigation test  (ui/osk-navtest.js)
+   MarwanOS — on-screen keyboard: grid navigation test  (ui/osk-navtest.js)
 
    Grid navigation is where on-screen keyboards fail, and the failures are
    very visible: a cursor that sticks in a corner, a "down" that lands two
    columns over because the row below has wider keys, a row you can only
    leave by going the long way round. This walks the pure model exported as
-   ArcOSK._model and asserts every one of those away.
+   MarwanOSK._model and asserts every one of those away.
 
    Runs in two places, from the same file:
 
      node ui/osk-navtest.js          headless, exit code 0/1
      <script src="osk-navtest.js">   in the harness page, then
-                                     ArcOSKNavTest.run() -> { pass, fail, lines }
+                                     MarwanOSKNavTest.run() -> { pass, fail, lines }
 
    The browser path is what proves it inside WebView2 on the bench, where the
    result is written into document.title and posted to the host log.
@@ -21,9 +21,9 @@
 "use strict";
 
 function getAPI() {
-  if (root.ArcOSK) return root.ArcOSK;
+  if (root.MarwanOSK) return root.MarwanOSK;
   if (typeof require === "function") return require("./osk.js");
-  throw new Error("ArcOSK is not loaded");
+  throw new Error("MarwanOSK is not loaded");
 }
 
 var DIRS = ["up", "down", "left", "right"];
@@ -201,7 +201,7 @@ function run() {
     ok(!!cellJ && !cellJ.spacer, "junk position " + JSON.stringify(junk[j]) + " was not recovered");
   }
 
-  lines.unshift("ArcOSK grid navigation — " + cases.length + " layer cases");
+  lines.unshift("MarwanOSK grid navigation — " + cases.length + " layer cases");
   lines.push((fail === 0 ? "PASS" : "FAIL") + "  " + pass + " assertions passed, " + fail + " failed");
   return { pass: pass, fail: fail, lines: lines };
 }
@@ -231,7 +231,7 @@ function expectTarget(grid, r, a2, at) {
 
 function pad(s, n) { s = String(s); while (s.length < n) s += " "; return s; }
 
-root.ArcOSKNavTest = { run: run };
+root.MarwanOSKNavTest = { run: run };
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = { run: run };

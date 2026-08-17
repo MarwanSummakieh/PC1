@@ -1,20 +1,33 @@
 <meta charset="utf-8">
-<title>PC1 — starting</title>
+<title>MarwanOS — starting</title>
 
 <!--
-  PC1 boot splash — standalone.
+  MarwanOS boot splash — for PC1.
 
-  One typographic lockup: the wordmark sits on a rule that fills with
-  the machine's progress and then stays put as the wordmark's
-  underline. No spinner, no glow, no bloom. The only colour on the
-  screen is the blue in that rule, and the rule is the only thing that
-  moves.
+  THIS IS THE ONLY BOOT SEQUENCE. The shell (index.html) used to run a
+  second, identical one of its own the moment it loaded, so the machine
+  played the whole thing twice: once here, once there. The shell's copy
+  is gone; it now comes up already live. What is left is this page, on
+  the one screen where a boot sequence belongs — machine start-up.
 
-  Standalone in the sense that matters: it needs no network, no script
-  but its own, and no stylesheet. It will USE Inter Tight if the font
-  file happens to sit beside it (as it does in C:\ArcOS\web\), and
-  falls back to Segoe UI Variable Display if not — the lockup is built
-  from weight and spacing, so it survives the substitution.
+  One lockup: the MarwanOS mark, and a small ring of dots turning
+  beneath it. No glow, no bloom, no bar — the dots are the only thing on
+  this screen that moves.
+
+  THERE IS NO PERCENTAGE AND NO RING THAT FILLS. This page cannot
+  measure anything: by the time it paints, the host is up and WebView2
+  has already composited, so a number climbing to 100 was a timer
+  wearing a progress bar's clothes. What is honestly true is only that
+  the machine is busy — which is exactly what an indeterminate spinner
+  says, and the whole of what it says. The line under the dots names
+  what a start-up does; it never claims a fraction of it is finished.
+  There is no invented build number on this screen either (the shell
+  shows the real one, from sys.info, in Settings).
+
+  Degrades rather than breaks: it needs no network, no stylesheet and no
+  script but its own. It uses Bangers, Geist, Permanent Marker and
+  marwanos.png if they sit beside it (as they do in C:\ArcOS\web\v10\)
+  and falls back to a type wordmark and stock faces if they do not.
 
   Query parameters:
     ?duration=7000   total sequence length in ms          (default 6400)
@@ -23,24 +36,42 @@
 -->
 
 <style>
+/* The identity's faces, vendored beside this page exactly as the shell
+   vendors them: same origin, no CDN, no network. Licences in
+   OFL-Bangers.txt, OFL-Geist.txt and Apache-PermanentMarker.txt.
+
+   font-display:block, not swap: a splash that flashes Segoe and then
+   snaps to the real face looks broken, and these are on local disk so
+   the block is measured in milliseconds. The latin subsets are enough —
+   every word on this screen is ASCII. */
 @font-face{
-  font-family:"Inter Tight";font-style:normal;font-weight:100 900;font-display:block;
-  src:url("InterTight-latin.woff2") format("woff2");
+  font-family:"Bangers";font-style:normal;font-weight:400;font-display:block;
+  src:url("Bangers-latin.woff2") format("woff2");
 }
 @font-face{
-  font-family:"Inter";font-style:normal;font-weight:100 900;font-display:block;
-  src:url("Inter-latin.woff2") format("woff2");
+  font-family:"Geist";font-style:normal;font-weight:100 900;font-display:block;
+  src:url("Geist-latin.woff2") format("woff2");
+}
+@font-face{
+  font-family:"Permanent Marker";font-style:normal;font-weight:400;font-display:block;
+  src:url("PermanentMarker-latin.woff2") format("woff2");
 }
 
 :root{
-  --void:#0b0b0d;
-  --line:#2b2b32;
-  --ice:#f4f5f7;
-  --steel:#9c9da5;
-  --dim:#6a6b73;
-  --beam:#1a86ff;
-  --display:"Inter Tight","Segoe UI Variable Display","Segoe UI",system-ui,-apple-system,sans-serif;
-  --sans:"Inter","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif;
+  /* The site's palette, same tokens and same names as the shell's
+     stylesheet: a warm near-black wall, chalk type, one spray green. */
+  --void:      #070707;   /* wall     */
+  --line:      #34353a;
+  --line-soft: #26272b;
+  --ice:       #efe9d6;   /* chalk    */
+  --steel:     #cdc7b4;
+  --dim:       #9d998c;
+  --beam:      #50e380;   /* spray green — the accent, and nothing else */
+  --ink:       #000000;
+
+  --poster:"Bangers","Impact","Arial Black","Haettenschweiler",sans-serif;
+  --sans:"Geist","Inter","Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Arial,sans-serif;
+  --marker:"Permanent Marker","Bangers","Comic Sans MS",cursive;
   --e-out:cubic-bezier(.16,.84,.24,1);
 
   /* Height-led scale, same rule as the shell: a console is read from a
@@ -48,61 +79,136 @@
   font-size:clamp(12px, min(1.62vh, 2.05vw), 40px);
   --edge:max(2.5rem, 2.6vw);
   --safe-y:max(1.6rem, 2.2vh);
+
+  /* The lockup: the mark's width, and the diameter of the dots' orbit.
+     The mark keeps the size it had inside the old ring (72% of a
+     22rem/62vmin box) so the screen's proportions do not move; the
+     spinner is deliberately a fraction of it, because a spinner that
+     competes with the logo is a spinner that has become the logo. */
+  --mark:min(15.8rem, 44.6vmin);
+  --spin:min(3rem, 8.4vmin);
 }
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
   margin:0;overflow:hidden;cursor:none;
   background:
-    radial-gradient(64% 50% at 50% 44%, #131318 0%, rgba(11,11,13,0) 72%),
+    radial-gradient(58% 46% at 50% 46%, #111113 0%, rgba(7,7,7,0) 70%),
     var(--void);
   color:var(--ice);font-family:var(--sans);font-size:1rem;
   -webkit-font-smoothing:antialiased;
 }
 
-/* Centred on the screen, left-aligned inside itself: a splash that
-   centres every line reads as a logo screen, and this one is meant to
-   read as a machine reporting in. */
+/* A mark over a spinner is a vertical stack about one axis, so this
+   screen is centred — the one place in the whole product where centring
+   every line is the honest layout rather than a logo-screen reflex. */
 .core{
   position:fixed;inset:0;
-  display:grid;place-content:center;justify-items:start;
-  padding-bottom:1rem;
+  display:grid;place-content:center;justify-items:center;
+  padding-bottom:2rem;
 }
-.lockup{width:24rem;max-width:74vw;display:grid}
 
-.wordmark{
-  display:flex;
-  font-family:var(--display);font-size:4.25rem;font-weight:700;
-  letter-spacing:-.045em;line-height:1;
-}
-.wordmark span{
+/* The mark. aspect-ratio is stated so nothing shifts between the
+   element existing and the PNG arriving — on a splash, a logo that
+   jumps once the image decodes is the one flaw everybody sees.
+
+   It arrives in its own colours. It used to be painted in from
+   grayscale on the same percentage that filled the ring, which made the
+   brand into the progress bar; with nothing left to be a percentage of,
+   that is just a logo that looks broken for six seconds. */
+.mark{
+  position:relative;width:var(--mark);aspect-ratio:457 / 142;
   opacity:0;translate:0 .5rem;
-  animation:letter .55s var(--e-out) forwards;
+  animation:letter .55s var(--e-out) .18s forwards;
 }
+.mark img{display:block;width:100%;height:100%;object-fit:contain}
+
+/* ── The spinner ───────────────────────────────────────────
+   Five dots on one orbit under the mark, the way a machine that is
+   working but cannot say how far along it is has said so since long
+   before this one.
+
+   Each dot gets its OWN full-size rotating frame rather than a shared
+   parent, because the whole character of this spinner is that the dots
+   are not evenly spaced. They all run the same 360° at the same eased
+   rate, offset in time by a tenth of a second each: through the fast
+   part of the curve a tenth of a second is a long way round the circle
+   and the dots draw apart, through the slow part it is barely any
+   distance and they gather. A linear rotation with the same offsets is
+   five dots welded in a ring — correct, and dead.
+
+   Composited transforms only, no paint per frame. This is a screen
+   whose entire job is to hold still while the machine behind it starts
+   something else. */
+.spinner{
+  position:relative;width:var(--spin);aspect-ratio:1;
+  margin-top:1.9rem;
+  opacity:0;animation:fade .5s var(--e-out) .5s forwards;
+}
+.spinner b{
+  position:absolute;inset:0;display:block;
+  animation:orbit 1.9s cubic-bezier(.62,.03,.38,.97) infinite;
+}
+.spinner b::after{
+  content:"";position:absolute;top:0;left:50%;
+  width:15%;aspect-ratio:1;border-radius:50%;
+  background:var(--ice);translate:-50% 0;
+}
+.spinner b:nth-child(2){animation-delay:-.10s}
+.spinner b:nth-child(3){animation-delay:-.20s}
+.spinner b:nth-child(4){animation-delay:-.30s}
+.spinner b:nth-child(5){animation-delay:-.40s}
+@keyframes orbit{to{rotate:360deg}}
+/* A splash is the worst possible place to show a broken-image icon, so
+   a mark that will not load steps aside for type. */
+.mark-type{
+  display:none;
+  font-family:var(--poster);font-weight:400;
+  font-size:calc(var(--mark) * .222);letter-spacing:.02em;line-height:1;
+  color:var(--ice);text-align:center;
+}
+.mark.no-art{aspect-ratio:auto;width:auto}
+.mark.no-art img{display:none}
+.mark.no-art .mark-type{display:block}
+
 @keyframes letter{to{opacity:1;translate:0 0}}
 @keyframes fade{to{opacity:1}}
 
-.progress{
-  width:100%;display:grid;gap:.75rem;margin-top:1.25rem;
-  opacity:0;animation:fade .5s var(--e-out) .75s forwards;
+/* ── The readout ───────────────────────────────────────────
+   One line, and no digits. The number that used to sit above it was
+   the ring's readout said twice; with the ring gone it would have been
+   a precise-looking fraction produced by a setTimeout, which is worse
+   than saying nothing. What is left names the work, not its extent. */
+.step{
+  margin-top:1.35rem;
+  font-size:.8125rem;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dim);text-align:center;
+  opacity:0;animation:fade .5s var(--e-out) .7s forwards;
 }
-.track{height:.125rem;background:var(--line);position:relative;overflow:hidden}
-.fill{
-  position:absolute;inset:0 auto 0 0;width:0%;
-  background:var(--beam);
-  transition:width .5s var(--e-out);
-}
-.status{
-  display:flex;justify-content:space-between;gap:1rem;
-  font-size:.8125rem;color:var(--steel);
-}
-.status b{font-weight:500;color:var(--dim);font-variant-numeric:tabular-nums}
 
+/* ── The footer ────────────────────────────────────────────
+   The mark's own footer line, as the site sets it: one sticker and the
+   machine's name. No build number — this page cannot ask the host what
+   the build is, and a hardcoded one would be a number that was right on
+   the day it was typed and wrong ever after. */
 .meta{
   position:fixed;bottom:var(--safe-y);left:0;right:0;
-  display:flex;justify-content:space-between;padding:0 var(--edge);
-  font-size:.75rem;color:var(--dim);
+  display:flex;align-items:center;justify-content:center;gap:.85rem;
+  padding:0 var(--edge);
   opacity:0;animation:fade .6s var(--e-out) 1.1s forwards;
+}
+.sticker{
+  display:inline-flex;align-items:center;
+  padding:.16rem .5rem .26rem;
+  font-family:var(--marker);font-weight:400;
+  font-size:.8125rem;line-height:1.2;letter-spacing:.01em;
+  color:var(--ink);background:var(--beam);
+  border:.125rem solid var(--ink);border-radius:.25rem;
+  rotate:-2deg;
+}
+.machine{
+  font-size:.6875rem;font-weight:700;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dim);
 }
 
 /* Leaving is a fade, not a flash. */
@@ -110,25 +216,38 @@ body.out .core,body.out .meta{opacity:0;transition:opacity .4s ease-in}
 
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.001s!important;animation-delay:0s!important;transition-duration:.12s!important}
+  .sticker{rotate:0deg}
+  /* A spinner is motion by definition, so under this preference it stops
+     being one: the five dots are parked at even fifths of the circle and
+     the mark simply sits over a ring of dots. Without this the blanket
+     rule above ends every orbit at 0° and stacks all five in one place. */
+  .spinner b{animation:none!important}
+  .spinner b:nth-child(1){rotate:0deg}
+  .spinner b:nth-child(2){rotate:72deg}
+  .spinner b:nth-child(3){rotate:144deg}
+  .spinner b:nth-child(4){rotate:216deg}
+  .spinner b:nth-child(5){rotate:288deg}
 }
 </style>
 
 <div class="core">
-  <div class="lockup">
-    <div class="wordmark" id="wordmark" aria-label="PC1"></div>
-    <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar">
-      <div class="track"><div class="fill" id="fill"></div></div>
-      <div class="status">
-        <span id="stepText">Power-on self test</span>
-        <b id="pctText">0%</b>
-      </div>
-    </div>
+  <div class="mark" id="mark">
+    <img id="markArt" src="marwanos.png" alt="MarwanOS" decoding="async">
+    <div class="mark-type">MarwanOS</div>
   </div>
+
+  <!-- Five <b>, and nothing in them: each is a rotating frame and the dot
+       itself is its ::after. Hidden from the accessibility tree because
+       it carries no information a screen reader can use — "busy" is what
+       it means, and the line below says that in words. -->
+  <div class="spinner" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b></div>
+
+  <div class="step" id="stepText" role="status" aria-live="polite">Power-on self test</div>
 </div>
 
 <div class="meta">
-  <span>PC1 OS 1.0</span>
-  <span>Build 26100.4351</span>
+  <span class="sticker">marwanos.</span>
+  <span class="machine">PC1</span>
 </div>
 
 <script>
@@ -140,49 +259,57 @@ const DURATION = Math.max(2000, Number(Q.get("duration")) || 6400);
 const NEXT     = Q.get("next");
 const HOLD     = Q.get("hold") === "1";
 
-/* Steps are weighted, not evenly spaced — a real boot spends most of its
-   time on drivers and services, and a bar that admits that reads as honest. */
+/* Steps are weighted, not evenly spaced — a real start-up spends most of
+   its time on drivers and services, and a curtain that admits that reads
+   as honest. The share is how long the line stays up, and that is all it
+   is now: there is no percentage for it to also be a percentage of. */
 const STEPS = [
-  ["Power-on self test",      12, .10],
-  ["Mounting NVMe volumes",   31, .13],
-  ["Loading graphics driver", 54, .22],
-  ["Starting PC1 shell",      78, .21],
-  ["Restoring session",       94, .17],
-  ["Ready",                  100, .17]
+  ["Power-on self test",      .10],
+  ["Mounting NVMe volumes",   .13],
+  ["Loading graphics driver", .22],
+  ["Starting MarwanOS shell", .21],
+  ["Restoring session",       .17],
+  ["Ready",                   .17]
 ];
 
-"PC1".split("").forEach((ch, i) => {
-  const s = document.createElement("span");
-  s.textContent = ch;
-  s.style.animationDelay = (0.18 + i * 0.09) + "s";
-  $("#wordmark").appendChild(s);
-});
+/* The spinner is CSS and never stops, so the only thing left for script
+   to do on this screen is change one line of text. Nothing here runs a
+   paint loop — the dots are composited transforms, where a canvas
+   cycling pixels would want a frame every 16 ms from a machine whose
+   entire job at that moment is starting something else. */
+function setStep(label){
+  if (label != null) $("#stepText").textContent = label;
+}
+
+/* A mark that will not load steps aside for type. This is also what
+   keeps boot.html usable on its own if it is ever run without its
+   sibling PNG. */
+(function armMark(){
+  const mk = $("#mark"), art = $("#markArt");
+  const fail = () => mk.classList.add("no-art");
+  art.addEventListener("error", fail, { once: true });
+  if (art.complete && art.naturalWidth === 0) fail();
+})();
+setStep(STEPS[0][0]);
 
 let timers = [];
 function run(){
   timers.forEach(clearTimeout); timers = [];
   document.body.classList.remove("out");
-  $("#fill").style.width = "0%";
-  $("#pctText").textContent = "0%";
-  $("#bar").setAttribute("aria-valuenow", "0");
+  setStep(STEPS[0][0]);
 
   const lead = 900;
   const body = Math.max(800, DURATION - lead - 500);
   let at = lead;
 
-  STEPS.forEach(([label, pct, share]) => {
-    timers.push(setTimeout(() => {
-      $("#stepText").textContent = label;
-      $("#fill").style.width = pct + "%";
-      $("#pctText").textContent = pct + "%";
-      $("#bar").setAttribute("aria-valuenow", String(pct));
-    }, at));
+  STEPS.forEach(([label, share]) => {
+    timers.push(setTimeout(() => setStep(label), at));
     at += body * share;
   });
 
-  /* The filled rule holds for a beat before anything leaves: the
-     lockup is the logo, and cutting the instant it completes never
-     lets you see it as one. */
+  /* "Ready" holds for a beat before anything leaves: the lockup is the
+     logo, and cutting the instant the last line lands never lets you
+     see it as one. */
   timers.push(setTimeout(() => {
     if (HOLD){ run(); return; }
     document.body.classList.add("out");

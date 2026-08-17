@@ -1,5 +1,5 @@
-// ARC OS - SystemApi
-// Native Windows system-control layer for the ARC OS Settings screen.
+// MarwanOS - SystemApi
+// Native Windows system-control layer for the MarwanOS Settings screen.
 //
 // The WebView2 page posts a JSON command object; SystemApi.Handle() returns a JSON response string.
 // Every response has exactly one of two shapes:
@@ -19,7 +19,7 @@
 // Language level: C# 5 (inbox .NET Framework csc.exe).
 // No string interpolation, no nameof, no expression-bodied members, no async/await.
 //
-// Namespace is deliberately ArcOs.Sys, not ArcOs.ShellWeb, so that the helper types here
+// Namespace is deliberately MarwanOs.Sys, not MarwanOs.ShellWeb, so that the helper types here
 // (Json reader, Native interop) cannot collide with the same-named types in ShellHostWeb.cs.
 //
 // -------------------------------------------------------------------------------------------
@@ -37,15 +37,21 @@
 // -------------------------------------------------------------------------------------------
 // ELEVATION
 // -------------------------------------------------------------------------------------------
-// The shell runs as a STANDARD USER (arcshell). Commands that need administrator rights are
-// marked "elevation":"required" (will fail as arcshell) or "maybe" (build/policy dependent) in
+// The shell runs as a STANDARD USER (marwanshell). Commands that need administrator rights are
+// marked "elevation":"required" (will fail as marwanshell) or "maybe" (build/policy dependent) in
 // the catalogue. Run {"cmd":"sys.privileges"} at runtime to see what the current token actually has.
 //
 // Measured on the bench (DESKTOP-6BCSJ3P, Windows 11 IoT Enterprise LTSC 24H2 / 26100.9168) as
-// the real arcshell account, interactive session 1, medium integrity, NOT elevated:
-//   arcshell's token holds SeShutdownPrivilege and SeTimeZonePrivilege (both present, disabled by
+// the real marwanshell account, interactive session 1, medium integrity, NOT elevated:
+//   marwanshell's token holds SeShutdownPrivilege and SeTimeZonePrivilege (both present, disabled by
 //   default - this code enables them on demand). It does NOT hold SeSystemtimePrivilege.
 //   Everything in this file works in that context EXCEPT updates.install.
+//
+// The admin.* commands are the answer to that "except", and they are NOT an elevation path for this
+// process: they hand a request to a SYSTEM scheduled task an administrator authorised once, at
+// provisioning time, and read its result back. They are elevation:"no" and every one of them works
+// from the standard-user token, because the privileged half happens somewhere else. See the
+// AdminMod region.
 //
 // -------------------------------------------------------------------------------------------
 // SESSION 0 IS NOT THE SHELL'S CONTEXT
@@ -66,7 +72,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-namespace ArcOs.Sys
+namespace MarwanOs.Sys
 {
     #region JSON  (hand-rolled writer + reader, no Newtonsoft, no System.Web.Extensions)
 
@@ -407,10 +413,19 @@ namespace ArcOs.Sys
             public string Detail;
             public DateTime StartedUtc;
             public DateTime FinishedUtc;
+
+            // Structured progress, for jobs that have more to say than a percentage and a
+            // phase word. admin.request publishes the broker's own log lines through here:
+            //     {"phase":"queued|running","elapsedMs":N,"line":"...","lines":N}
+            // It is a whole J object rather than more fields on Job because the shape belongs
+            // to the command, not to the job machinery, and job.status just passes it along.
+            public J Progress;
+
             volatile bool _cancel;
             public bool CancelRequested { get { return _cancel; } }
             public void RequestCancel() { _cancel = true; }
             public void Report(int percent, string phase) { Percent = percent; Phase = phase; }
+            public void ReportProgress(J progress) { Progress = progress; }
         }
 
         static readonly object Gate = new object();
@@ -447,6 +462,20 @@ namespace ArcOs.Sys
                             job.Percent = 100;
                             job.Phase = "complete";
                         }
+                    }
+                }
+                // A typed failure keeps its code. Without this every fault raised inside a job -
+                // elevation_required from updates.install, broker_timeout from admin.request -
+                // arrived at the page as the useless "job_failed", and the catalogue's promise
+                // that updates.install "reports error:elevation_required" was not actually true.
+                catch (ApiFault f)
+                {
+                    lock (Gate)
+                    {
+                        job.State = "error";
+                        job.Error = f.Code;
+                        job.Detail = f.Message;
+                        if (f.Extra != null) job.Result = f.Extra;
                     }
                 }
                 catch (Exception ex)
@@ -512,6 +541,7 @@ namespace ArcOs.Sys
             if (j.State != "running")
                 o.Set("finishedUtc", j.FinishedUtc.ToString("o", CultureInfo.InvariantCulture));
             o.Set("elapsedMs", (long)((j.State == "running" ? DateTime.UtcNow : j.FinishedUtc) - j.StartedUtc).TotalMilliseconds);
+            if (j.Progress != null) o.Set("progress", j.Progress);
             if (j.Result != null) o.Set("result", j.Result);
             if (j.Error != null) { o.Set("error", j.Error); o.Set("detail", j.Detail); }
             return o;
@@ -2378,7 +2408,7 @@ namespace ArcOs.Sys
         // works for the current user without disturbing the live connection.
         public static J ProfileSelfTest()
         {
-            string ssid = "ARC-OS-SELFTEST-" + DateTime.UtcNow.ToString("HHmmss", CultureInfo.InvariantCulture);
+            string ssid = "MARWANOS-SELFTEST-" + DateTime.UtcNow.ToString("HHmmss", CultureInfo.InvariantCulture);
             string err;
             using (Session s = Session.Open(out err))
             {
@@ -5091,7 +5121,7 @@ namespace ArcOs.Sys
             object session = New("Microsoft.Update.Session");
             try
             {
-                try { Put(session, "ClientApplicationID", "ARC OS Settings"); }
+                try { Put(session, "ClientApplicationID", "MarwanOS Settings"); }
                 catch { }
 
                 object searcher = Call(session, "CreateUpdateSearcher");
@@ -5329,6 +5359,727 @@ namespace ArcOs.Sys
             o.Set("installed", true);
             job.Report(100, "installed");
             return o;
+        }
+    }
+
+    #endregion
+
+    #region Privileged actions through the install broker  (admin.*)
+
+    // -------------------------------------------------------------------------------------------
+    // THE ONE THING IN THIS FILE THAT DOES NOT RUN AS THE CALLER
+    // -------------------------------------------------------------------------------------------
+    // Everything else here either works as a standard user or honestly reports that it cannot
+    // (updates.install). This module is the third answer: hand the work to something that was
+    // authorised ONCE, by an administrator, at provisioning time.
+    //
+    // The UAC consent dialog lives on the secure desktop, which discards synthetic input, so no
+    // pad and no remapper can ever answer it. provisioning/04-install-broker.ps1 therefore
+    // registers a SYSTEM scheduled task ("the install broker") whose action is fixed on disk; the
+    // shell account can only do two things to it - drop a request file into queue\ (create-only
+    // write) and start the task. It cannot edit the worker, the manifest or the task action, so
+    // "start the broker" is not a general elevation primitive: the set of things it can cause is
+    // exactly the verb allowlist below plus the manifest an administrator wrote.
+    //
+    // NOTHING IN THIS MODULE NEEDS ELEVATION. All three commands are elevation:"no" in the
+    // catalogue and every one of them works from the shell's own standard-user token. That is the
+    // whole point - the privileged half happens in the task, in another session, as SYSTEM.
+    //
+    // NAMING. The product was renamed ARC OS -> MarwanOS. The bench was not. Both layouts are
+    // probed, MarwanOS first, and the first root that actually has a queue\ wins; nothing is
+    // renamed or created here.
+    // -------------------------------------------------------------------------------------------
+    public static class AdminMod
+    {
+        // Probe order. Index-matched: root[i] pairs with task[i] and worker[i].
+        static readonly string[] RootDirs = new string[] { @"C:\ProgramData\MarwanOS", @"C:\ProgramData\ARC" };
+        static readonly string[] TaskPaths = new string[] { @"\MarwanOS\marwan-install-broker", @"\ARC\arc-install-broker" };
+        static readonly string[] WorkerNames = new string[] { "marwan", "arc" };
+
+        // Per-verb ceiling on how long the broker may take before the job gives up waiting. The
+        // work itself is NOT cancelled by this - the task keeps running and writes its result
+        // whenever it finishes; only this process stops watching.
+        //
+        // The ceiling is measured in IDLE time: while `schtasks /query` still reports the task
+        // as Running, the wait continues regardless (a game client patching several GB writes no
+        // progress line for a long time - the Riot installer is the case that forced this), and
+        // only a hard cap ends it. Once the task is no longer running and there is still no
+        // result, the per-verb ceiling counts from the last sign of life.
+        const int DefaultTimeoutMs = 900000;      // 15 min idle
+        const int UpdatesTimeoutMs = 3600000;     // 60 min idle - a real Windows Update run
+        const int HardCapMs = 4 * 3600000;        // 4 h absolute, task running or not
+        const int TaskPollMs = 5000;              // how often schtasks /query is asked
+        const int PollMs = 500;
+
+        public sealed class Broker
+        {
+            public bool Available;
+            public string Reason;         // null when Available
+            public string Root;           // null when nothing was found
+            public string TaskPath;
+            public string Worker;         // "marwan" | "arc" | null
+            public string QueueDir;
+            public string ProcessedDir;
+            public string ManifestPath;
+            public string LogPath;
+        }
+
+        // ---- probing ---------------------------------------------------------------------
+
+        public static Broker Probe()
+        {
+            Broker b = new Broker();
+            for (int i = 0; i < RootDirs.Length; i++)
+            {
+                string q = Path.Combine(RootDirs[i], "queue");
+                bool has = false;
+                try { has = Directory.Exists(q); }
+                catch { }
+                if (!has) continue;
+                b.Root = RootDirs[i];
+                b.TaskPath = TaskPaths[i];
+                b.Worker = WorkerNames[i];
+                b.QueueDir = q;
+                b.ProcessedDir = Path.Combine(b.Root, "processed");
+                b.ManifestPath = Path.Combine(b.Root, "packages.json");
+                b.LogPath = Path.Combine(Path.Combine(b.Root, "logs"), "install-broker.log");
+                break;
+            }
+            if (b.Root == null)
+            {
+                b.Available = false;
+                b.Reason = "no broker root found";
+                return b;
+            }
+
+            string output;
+            int exit;
+            string runError = Run("schtasks.exe", "/query /tn \"" + b.TaskPath + "\"", 15000, out output, out exit);
+            if (runError != null)
+            {
+                b.Available = false;
+                b.Reason = "schtasks.exe could not be run: " + runError;
+                return b;
+            }
+            if (exit != 0)
+            {
+                b.Available = false;
+                b.Reason = "task " + b.TaskPath + " not registered";
+                return b;
+            }
+            b.Available = true;
+            return b;
+        }
+
+        static void Require(Broker b)
+        {
+            if (b.Available) return;
+            throw new ApiFault("broker_unavailable",
+                "the install broker is not available on this machine: " + b.Reason +
+                ". It is set up once, by an administrator, with provisioning/04-install-broker.ps1");
+        }
+
+        public static J Status()
+        {
+            Broker b = Probe();
+            J o = J.Obj();
+            o.Set("ok", true);
+            o.Set("available", b.Available);
+            o.Set("root", b.Root);
+            o.Set("taskPath", b.TaskPath);
+            o.Set("worker", b.Worker);
+            if (b.Reason == null) o.SetNull("reason"); else o.Set("reason", b.Reason);
+            o.Set("queueDir", b.QueueDir);
+            o.Set("processedDir", b.ProcessedDir);
+            o.Set("manifestPath", b.ManifestPath);
+            o.Set("packageCount", b.Available ? CountPackages(b) : 0);
+            o.Set("logPath", b.LogPath);
+            return o;
+        }
+
+        static int CountPackages(Broker b)
+        {
+            try
+            {
+                J man = ReadManifest(b);
+                J pk = man.Get("packages");
+                if (pk == null || pk.Kind != J.TArr) return 0;
+                return pk.Count;
+            }
+            catch { return 0; }
+        }
+
+        // ---- catalogue -------------------------------------------------------------------
+
+        static J ReadManifest(Broker b)
+        {
+            string text;
+            try { text = File.ReadAllText(b.ManifestPath, Encoding.UTF8); }
+            catch (Exception ex)
+            {
+                throw new ApiFault("manifest_unreadable",
+                    "cannot read " + b.ManifestPath + ": " + Api.Describe(ex));
+            }
+            try { return J.Parse(text); }
+            catch (Exception ex)
+            {
+                throw new ApiFault("manifest_unreadable",
+                    b.ManifestPath + " is not valid JSON: " + Api.Describe(ex));
+            }
+        }
+
+        public static J Catalog()
+        {
+            Broker b = Probe();
+            Require(b);
+            J man = ReadManifest(b);
+            J pk = man.Get("packages");
+            J arr = J.Arr();
+            if (pk != null && pk.Kind == J.TArr)
+            {
+                for (int i = 0; i < pk.Count; i++)
+                {
+                    J p = pk.At(i);
+                    if (p == null || p.Kind != J.TObj) continue;
+                    string id = p.S("id", null);
+                    if (string.IsNullOrEmpty(id)) continue;
+                    string verify = p.S("verifyPath", null);
+                    string url = p.S("url", null);
+                    string wingetId = p.S("wingetId", null);
+                    string localPath = p.S("path", null);
+                    J e = J.Obj();
+                    e.Set("id", id);
+                    e.Set("name", p.S("name", id));
+                    e.Set("publisher", p.S("publisher", null));
+                    e.Set("type", p.S("type", "exe"));
+                    e.Set("verifyPath", verify);
+                    e.Set("installed", Exists(verify));
+                    e.Set("wingetId", wingetId);
+                    e.Set("url", url);
+                    e.Set("path", localPath);
+                    // interactive = the worker opens the installer's own UI on the console
+                    // (SYSTEM token, console session) and the person finishes it there.
+                    // The sheet must say so: it is the one case where "allow" is not silent.
+                    e.Set("interactive", p.B("interactive", false));
+                    // A `path` entry runs an installer that something else must first put on
+                    // disk (Riot Client drops the Vanguard setup into ProgramData and then wants
+                    // it run elevated). ready=false means "not there yet" - the shell shows the
+                    // row disabled with readyNote instead of letting a hold end in FAILED.
+                    bool ready = true;
+                    string readyNote = null;
+                    if (!string.IsNullOrEmpty(localPath))
+                    {
+                        ready = LocalInstallerPresent(localPath);
+                        if (!ready) readyNote = "waiting for " + localPath + " to appear";
+                    }
+                    e.Set("ready", ready);
+                    e.Set("readyNote", readyNote);
+                    e.Set("source", !string.IsNullOrEmpty(localPath)
+                        ? "on this machine \u00B7 " + SafeDir(localPath)
+                        : SourceOf(url, wingetId));
+                    arr.Add(e);
+                }
+            }
+            J o = J.Obj();
+            o.Set("ok", true);
+            o.Set("root", b.Root);
+            o.Set("manifestPath", b.ManifestPath);
+            o.Set("packages", arr);
+            o.Set("count", arr.Count);
+            return o;
+        }
+
+        // Where the bytes actually come from, in one line the shell can print on the consent
+        // sheet. The manifest carries BOTH a url and a wingetId, and the sheet used to print the
+        // wingetId - which is a lie on this hardware: neither the bench nor the laptop has winget
+        // (no Store on this SKU, see BENCH-CHANGES B13), so what the worker really does is fetch
+        // the url over HTTPS and check its Authenticode publisher. Naming a package manager that
+        // is not installed on a screen whose whole job is to tell someone what they are agreeing
+        // to is the wrong kind of wrong. So: the host of the url wins, and the wingetId is only
+        // named when there is no url and winget genuinely is the route.
+        static string SourceOf(string url, string wingetId)
+        {
+            if (!string.IsNullOrEmpty(url))
+            {
+                try { return new Uri(url).Host; }
+                catch { return url; }
+            }
+            // The escape rather than the character itself: this file has no BOM, so csc decodes
+            // it with the machine's ANSI codepage and a literal middle dot arrives as mojibake.
+            if (!string.IsNullOrEmpty(wingetId)) return "winget \u00B7 " + wingetId;
+            return null;
+        }
+
+        // `path` may end in a *.exe glob (the worker takes the newest match). Presence only -
+        // the worker does the signature check; the shell just needs to know whether a hold
+        // could possibly succeed right now.
+        static bool LocalInstallerPresent(string pattern)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(pattern);
+                string leaf = Path.GetFileName(pattern);
+                if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(leaf) || !Directory.Exists(dir)) return false;
+                if (leaf.IndexOf('*') < 0 && leaf.IndexOf('?') < 0) return File.Exists(pattern);
+                return Directory.GetFiles(dir, leaf).Length > 0;
+            }
+            catch { return false; }
+        }
+
+        static string SafeDir(string pattern)
+        {
+            try { return Path.GetDirectoryName(pattern); } catch { return pattern; }
+        }
+
+        // "installed" is deliberately this weak: the manifest's verifyPath is the only claim
+        // anyone here is entitled to make. No registry sweep, no guessing - a package with no
+        // verifyPath reports installed:false rather than pretending to know.
+        static bool Exists(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            try { return File.Exists(path) || Directory.Exists(path); }
+            catch { return false; }
+        }
+
+        // ---- validation (the same rules the worker enforces; §1 of the protocol) ----------
+
+        // ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$
+        static bool IsPackageId(string s)
+        {
+            if (string.IsNullOrEmpty(s) || s.Length > 64) return false;
+            char c0 = s[0];
+            if (!((c0 >= 'A' && c0 <= 'Z') || (c0 >= 'a' && c0 <= 'z') || (c0 >= '0' && c0 <= '9'))) return false;
+            for (int i = 1; i < s.Length; i++)
+            {
+                char c = s[i];
+                bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                          || c == '.' || c == '_' || c == '-';
+                if (!ok) return false;
+            }
+            return true;
+        }
+
+        static bool IsHex12(string s)
+        {
+            if (s == null || s.Length != 12) return false;
+            for (int i = 0; i < 12; i++)
+            {
+                char c = s[i];
+                bool ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+                if (!ok) return false;
+            }
+            return true;
+        }
+
+        static bool InManifest(Broker b, string id)
+        {
+            J man = ReadManifest(b);
+            J pk = man.Get("packages");
+            if (pk == null || pk.Kind != J.TArr) return false;
+            for (int i = 0; i < pk.Count; i++)
+            {
+                J p = pk.At(i);
+                if (p == null) continue;
+                if (string.Equals(p.S("id", null), id, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Build the request body, rejecting anything the worker would reject - before it is
+        /// written. Validating here as well as there is not redundancy: the shell gets a precise
+        /// error in milliseconds instead of a REJECTED result thirty seconds later, and the
+        /// worker's copy stays the security boundary because it is the one that cannot be
+        /// bypassed.
+        ///
+        /// Everything checked here is a property of the REQUEST, not of the machine, so it runs
+        /// with b == null too: "bt.forget address=nonsense" is malformed on a laptop with no
+        /// broker exactly as it is on the console. Only the manifest-membership rule needs a
+        /// broker, and the caller applies that afterwards.
+        /// </summary>
+        static string BuildRequest(Broker b, string verb, string package, string ssid, string address,
+                                   out int timeoutMs)
+        {
+            timeoutMs = DefaultTimeoutMs;
+            if (string.IsNullOrEmpty(verb)) throw new ApiFault("bad_request", "verb is required");
+            string v = verb.Trim();
+
+            if (string.Equals(v, "install", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrEmpty(package))
+                    throw new ApiFault("bad_request", "install needs a package id");
+                if (!IsPackageId(package))
+                    throw new ApiFault("bad_request",
+                        "malformed package id '" + package + "'; must match ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$");
+                if (b != null && !InManifest(b, package))
+                    throw new ApiFault("bad_request",
+                        "'" + package + "' is not in " + b.ManifestPath + "; the manifest is the only authority for what may be installed");
+                return "verb=install\r\npackage=" + package + "\r\n";
+            }
+
+            if (string.Equals(v, "updates.install", StringComparison.OrdinalIgnoreCase))
+            {
+                timeoutMs = UpdatesTimeoutMs;
+                return "verb=updates.install\r\n";
+            }
+
+            if (string.Equals(v, "wifi.forget", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrEmpty(ssid))
+                    throw new ApiFault("bad_request", "wifi.forget needs an ssid");
+                if (ssid.Length > 32)
+                    throw new ApiFault("bad_request", "ssid must be 1..32 characters");
+                for (int i = 0; i < ssid.Length; i++)
+                {
+                    if (ssid[i] < ' ' || ssid[i] == '\u007f')
+                        throw new ApiFault("bad_request", "ssid must not contain control characters");
+                    if (ssid[i] == '"')
+                        throw new ApiFault("bad_request", "ssid must not contain a double quote");
+                }
+                return "verb=wifi.forget\r\nssid=" + ssid + "\r\n";
+            }
+
+            if (string.Equals(v, "bt.forget", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.IsNullOrEmpty(address))
+                    throw new ApiFault("bad_request", "bt.forget needs an address");
+                string a = address.Replace(":", "").Replace("-", "").Trim();
+                if (!IsHex12(a))
+                    throw new ApiFault("bad_request",
+                        "address must be exactly 12 hexadecimal characters, no separators (got '" + address + "')");
+                return "verb=bt.forget\r\naddress=" + a.ToUpperInvariant() + "\r\n";
+            }
+
+            throw new ApiFault("bad_request", "unknown verb '" + verb + "'; allowed: install, updates.install, wifi.forget, bt.forget");
+        }
+
+        // ---- the job ---------------------------------------------------------------------
+
+        /// <summary>
+        /// Everything that can be decided without touching the machine: is there a broker, is the
+        /// verb allowed, are its arguments legal, what does the request file say.
+        ///
+        /// Deliberately run BEFORE the job starts, on the caller's thread, so that
+        /// broker_unavailable and bad_request come back as errors on admin.request itself rather
+        /// than as a job that fails a moment later. A job the shell has to poll to be told it
+        /// typed the wrong thing is a worse API than an immediate no.
+        /// </summary>
+        public sealed class Plan
+        {
+            public Broker Broker;
+            public string Verb;
+            public string Body;
+            public int TimeoutMs;
+        }
+
+        public static Plan Prepare(string verb, string package, string ssid, string address)
+        {
+            Plan p = new Plan();
+            p.Verb = verb == null ? null : verb.Trim();
+            // Shape first, and without the machine: a malformed verb or argument is malformed
+            // whether or not this box has a broker, and answering "broker_unavailable" to
+            // "bt.forget address=nonsense" would be a misleading diagnosis.
+            p.Body = BuildRequest(null, verb, package, ssid, address, out p.TimeoutMs);
+
+            Broker b = Probe();
+            Require(b);
+            p.Broker = b;
+
+            // The manifest rule is the one that needs the broker's own root.
+            if (string.Equals(p.Verb, "install", StringComparison.OrdinalIgnoreCase) && !InManifest(b, package))
+                throw new ApiFault("bad_request",
+                    "'" + package + "' is not in " + b.ManifestPath +
+                    "; the manifest is the only authority for what may be installed");
+            return p;
+        }
+
+        public static J Request(Jobs.Job job, Plan plan)
+        {
+            Broker b = plan.Broker;
+            string verb = plan.Verb;
+            int timeoutMs = plan.TimeoutMs;
+            string body = plan.Body;
+
+            string ticket = Guid.NewGuid().ToString();
+            string reqPath = Path.Combine(b.QueueDir, ticket + ".req");
+
+            job.Report(5, "queueing");
+            try
+            {
+                // No BOM. The worker reads the FIRST LINE to decide v2 (verb=) from v1 (a bare
+                // package id), and a BOM in front of "verb=" makes a v2 request look like a v1
+                // one with a malformed id.
+                File.WriteAllText(reqPath, body, new UTF8Encoding(false));
+            }
+            catch (Exception ex)
+            {
+                throw new ApiFault("broker_unavailable",
+                    "cannot write " + reqPath + ": " + Api.Describe(ex) +
+                    " (the shell account has create-only write on queue\\; if this is ACCESS_DENIED the ACLs are wrong)");
+            }
+
+            job.Report(10, "starting the broker");
+            string output;
+            int exit;
+            string runError = Run("schtasks.exe", "/run /tn \"" + b.TaskPath + "\"", 30000, out output, out exit);
+            if (runError != null || (exit != 0 && !AlreadyRunning(output)))
+            {
+                string cleanup = TryDelete(reqPath);
+                throw new ApiFault("broker_start_failed",
+                    "schtasks /run /tn " + b.TaskPath + " " +
+                    (runError != null ? "could not be run: " + runError : "exited " + exit + ": " + OneLine(output)) +
+                    ". " + cleanup);
+            }
+
+            string progressPath = Path.Combine(b.ProcessedDir, ticket + ".progress");
+            string resultPath = Path.Combine(b.ProcessedDir, ticket + ".result");
+
+            DateTime started = DateTime.UtcNow;
+            DateTime lastAlive = started;          // last progress line OR last "task is Running" sighting
+            DateTime lastTaskPoll = DateTime.MinValue;
+            bool taskRunning = true;               // assume alive until schtasks says otherwise
+            int seen = 0;
+            while (true)
+            {
+                DateTime now = DateTime.UtcNow;
+                long elapsed = (long)(now - started).TotalMilliseconds;
+
+                if ((now - lastTaskPoll).TotalMilliseconds >= TaskPollMs)
+                {
+                    lastTaskPoll = now;
+                    taskRunning = TaskIsRunning(b.TaskPath);
+                    if (taskRunning) lastAlive = now;
+                }
+
+                List<string> lines = ReadLinesShared(progressPath);
+                if (lines.Count != seen)
+                {
+                    lastAlive = now;
+                    seen = lines.Count;
+                    J p = J.Obj();
+                    p.Set("phase", seen > 0 ? "running" : "queued");
+                    p.Set("elapsedMs", elapsed);
+                    p.Set("line", seen > 0 ? lines[seen - 1] : "");
+                    p.Set("lines", seen);
+                    job.ReportProgress(p);
+                    job.Report(-1, seen > 0 ? lines[seen - 1] : "queued");
+                }
+                else if (job.Progress == null)
+                {
+                    J p = J.Obj();
+                    p.Set("phase", "queued");
+                    p.Set("elapsedMs", elapsed);
+                    p.Set("line", "");
+                    p.Set("lines", 0);
+                    job.ReportProgress(p);
+                    job.Report(-1, "queued");
+                }
+
+                Dictionary<string, string> kv = ReadResult(resultPath);
+                if (kv != null) return Describe(b, ticket, verb, kv, lines.Count);
+
+                long idle = (long)(now - lastAlive).TotalMilliseconds;
+                if (elapsed > HardCapMs)
+                    throw new ApiFault("broker_timeout",
+                        "the broker did not write " + resultPath + " within " + (HardCapMs / 3600000) +
+                        " h. The task " + (taskRunning ? "is still running" : "is not running") +
+                        "; its log is " + b.LogPath);
+                if (!taskRunning && idle > timeoutMs)
+                    throw new ApiFault("broker_timeout",
+                        "the broker task stopped without writing " + resultPath + " and nothing happened for " +
+                        (timeoutMs / 1000) + " s. Its log is " + b.LogPath);
+
+                Thread.Sleep(PollMs);
+            }
+        }
+
+        // schtasks /query /fo csv /nh prints one row per trigger: "TaskName","Next Run Time","Status".
+        // Status is "Running" while the worker is alive. Any failure to ask is treated as "not
+        // running" so the idle ceiling still applies - never as "running", which would wait for ever.
+        static bool TaskIsRunning(string taskPath)
+        {
+            string output;
+            int exit;
+            string err = Run("schtasks.exe", "/query /tn \"" + taskPath + "\" /fo csv /nh", 15000, out output, out exit);
+            if (err != null || exit != 0 || string.IsNullOrEmpty(output)) return false;
+            string[] rows = output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            for (int i = 0; i < rows.Length; i++)
+            {
+                string[] cols = rows[i].Split(new[] { "\",\"" }, StringSplitOptions.None);
+                if (cols.Length < 3) continue;
+                string status = cols[cols.Length - 1].Trim().Trim('"');
+                if (string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        // schtasks /run on a task that is already going is not a failure - the worker drains the
+        // whole queue, so our ticket is picked up by the run that is already in flight. The exact
+        // wording varies by build; SCHED_E_TASK_ALREADY_RUNNING (0x800710E0) is the code behind
+        // all of them.
+        static bool AlreadyRunning(string output)
+        {
+            if (string.IsNullOrEmpty(output)) return false;
+            string t = output.ToLowerInvariant();
+            return t.IndexOf("already running", StringComparison.Ordinal) >= 0
+                || t.IndexOf("currently running", StringComparison.Ordinal) >= 0
+                || t.IndexOf("0x800710e0", StringComparison.Ordinal) >= 0;
+        }
+
+        static string TryDelete(string path)
+        {
+            try
+            {
+                File.Delete(path);
+                return "the queued request was removed";
+            }
+            catch (Exception ex)
+            {
+                // Expected as the shell account: queue\ is create-only, with no delete right.
+                return "the queued request " + path + " could NOT be removed (" + ex.GetType().Name +
+                       ") and will be processed whenever the broker next runs";
+            }
+        }
+
+        static J Describe(Broker b, string ticket, string requestedVerb, Dictionary<string, string> kv, int lines)
+        {
+            J o = J.Obj();
+            o.Set("ok", true);
+            o.Set("ticket", Val(kv, "ticket", ticket));
+            // The worker writes verb= empty when it could not make sense of the request. Reporting
+            // "" would lose the only thing that says what was asked for, so the request's own verb
+            // stands in. package= empty is NOT treated this way - for wifi.forget and bt.forget an
+            // empty package is the truth.
+            string verb = Val(kv, "verb", requestedVerb);
+            if (string.IsNullOrEmpty(verb)) verb = requestedVerb;
+            o.Set("verb", verb);
+            o.Set("status", Val(kv, "status", "FAILED"));
+            int exitcode;
+            if (!int.TryParse(Val(kv, "exitcode", "-1"), NumberStyles.Integer, CultureInfo.InvariantCulture, out exitcode))
+                exitcode = -1;
+            o.Set("exitcode", exitcode);
+            o.Set("package", Val(kv, "package", ""));
+            o.Set("detail", Val(kv, "detail", ""));
+            if (kv.ContainsKey("installed"))
+            {
+                int n;
+                if (int.TryParse(kv["installed"], NumberStyles.Integer, CultureInfo.InvariantCulture, out n))
+                    o.Set("installed", n);
+                else
+                    o.Set("installed", kv["installed"]);
+            }
+            if (kv.ContainsKey("rebootRequired"))
+                o.Set("rebootRequired", string.Equals(kv["rebootRequired"], "true", StringComparison.OrdinalIgnoreCase));
+            if (kv.ContainsKey("completed")) o.Set("completed", kv["completed"]);
+            o.Set("progressLines", lines);
+            o.Set("log", b.LogPath);
+            return o;
+        }
+
+        static string Val(Dictionary<string, string> kv, string key, string dflt)
+        {
+            string v;
+            if (kv.TryGetValue(key, out v) && v != null) return v;
+            return dflt;
+        }
+
+        // ---- file helpers ----------------------------------------------------------------
+
+        /// <summary>
+        /// Read a file the broker is writing to RIGHT NOW. The worker appends to .progress while
+        /// this runs, so the share flags matter more than the reading does: without
+        /// FileShare.ReadWrite this throws IOException on every poll and the UI never sees a line.
+        /// </summary>
+        static List<string> ReadLinesShared(string path)
+        {
+            List<string> lines = new List<string>();
+            try
+            {
+                using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                                      FileShare.ReadWrite | FileShare.Delete))
+                using (StreamReader sr = new StreamReader(fs, Encoding.UTF8))
+                {
+                    string line;
+                    while ((line = sr.ReadLine()) != null)
+                    {
+                        line = line.Trim();
+                        if (line.Length > 0) lines.Add(line);
+                    }
+                }
+            }
+            catch { }      // not there yet, or half-written - both are "no news", not an error
+            return lines;
+        }
+
+        /// <summary>
+        /// The result file, or null if it is not there yet OR is still being written. "completed="
+        /// is the last line the worker writes, so requiring it is what makes a torn read
+        /// impossible to mistake for a finished one.
+        /// </summary>
+        static Dictionary<string, string> ReadResult(string path)
+        {
+            bool exists;
+            try { exists = File.Exists(path); }
+            catch { return null; }
+            if (!exists) return null;
+
+            List<string> lines = ReadLinesShared(path);
+            Dictionary<string, string> kv = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < lines.Count; i++)
+            {
+                int eq = lines[i].IndexOf('=');
+                if (eq <= 0) continue;
+                kv[lines[i].Substring(0, eq).Trim()] = lines[i].Substring(eq + 1).Trim();
+            }
+            if (!kv.ContainsKey("status") || !kv.ContainsKey("completed")) return null;
+            return kv;
+        }
+
+        static string OneLine(string s)
+        {
+            if (string.IsNullOrEmpty(s)) return "(no output)";
+            string t = s.Replace("\r", " ").Replace("\n", " ").Trim();
+            while (t.IndexOf("  ", StringComparison.Ordinal) >= 0) t = t.Replace("  ", " ");
+            return t.Length > 300 ? t.Substring(0, 300) + "..." : t;
+        }
+
+        /// <summary>
+        /// Run a console tool and collect its output. Returns null on success (with exit code and
+        /// text through the out parameters) or a description of why the process could not be
+        /// started at all - which is a different failure from "it ran and said no".
+        /// </summary>
+        static string Run(string exe, string args, int timeoutMs, out string output, out int exit)
+        {
+            output = "";
+            exit = -1;
+            try
+            {
+                ProcessStartInfo psi = new ProcessStartInfo(exe, args);
+                psi.UseShellExecute = false;
+                psi.CreateNoWindow = true;
+                psi.RedirectStandardOutput = true;
+                psi.RedirectStandardError = true;
+                using (Process p = Process.Start(psi))
+                {
+                    if (p == null) return "process did not start";
+                    string so = p.StandardOutput.ReadToEnd();
+                    string se = p.StandardError.ReadToEnd();
+                    if (!p.WaitForExit(timeoutMs))
+                    {
+                        try { p.Kill(); }
+                        catch { }
+                        output = so + se;
+                        return "timed out after " + timeoutMs + " ms";
+                    }
+                    exit = p.ExitCode;
+                    output = (so + se).Trim();
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                return Api.Describe(ex);
+            }
         }
     }
 
@@ -5630,6 +6381,26 @@ namespace ArcOs.Sys
                 case "accounts.list":
                     return AccountsMod.List();
 
+                // ---------------- privileged actions (brokered) ----------------
+                case "admin.status":
+                    return AdminMod.Status();
+                case "admin.catalog":
+                    return AdminMod.Catalog();
+                case "admin.request":
+                    {
+                        string verb = q.S("verb", null);
+                        string package = q.S("package", null);
+                        string ssid = q.S("ssid", null);
+                        string address = q.S("address", null);
+                        // Validated here, on this thread: an unavailable broker or a bad verb is
+                        // an error on THIS command, not a job the shell has to poll to discover it.
+                        AdminMod.Plan plan = AdminMod.Prepare(verb, package, ssid, address);
+                        return StartJob(cmd, delegate (Jobs.Job job)
+                        {
+                            return AdminMod.Request(job, plan);
+                        });
+                    }
+
                 default:
                     throw new ApiFault("unknown_command",
                         "no such command '" + cmd + "'; call api.commands for the catalogue");
@@ -5752,6 +6523,14 @@ namespace ArcOs.Sys
             a.Add(Cmd("accounts.list", "accounts", "read", "no", false,
                 "local users, admin membership, who is signed in. READ ONLY by design", ""));
 
+            a.Add(Cmd("admin.status", "admin", "read", "no", false,
+                "is the install broker present? Probes C:\\ProgramData\\MarwanOS then C:\\ProgramData\\ARC for a queue\\ and checks the scheduled task. Needs no elevation - brokered", ""));
+            a.Add(Cmd("admin.catalog", "admin", "read", "no", false,
+                "the packages an administrator authorised, from the active root's packages.json, with installed=verifyPath exists. error broker_unavailable when there is no broker - brokered", ""));
+            a.Add(Cmd("admin.request", "admin", "write", "no", true,
+                "SLOW (minutes). Asks the SYSTEM install broker to carry out one allowlisted verb: install (manifest ids only), updates.install, wifi.forget, bt.forget. Writes queue\\<guid>.req, runs the task, tails processed\\<guid>.progress, parses processed\\<guid>.result. status REJECTED/FAILED still resolves ok:true - only transport failures are errors. Needs no elevation itself - brokered",
+                "verb, package?, ssid?, address?"));
+
             J o = J.Obj();
             o.Set("apiVersion", ApiVersion);
             o.Set("commands", a);
@@ -5759,7 +6538,7 @@ namespace ArcOs.Sys
             o.Set("elevated", Api.IsElevated());
             o.Set("envelope", "{\"ok\":true,\"data\":{...}} | {\"ok\":false,\"error\":\"code\",\"detail\":\"text\"}");
             o.Set("asyncContract",
-                "commands with async=true return {\"jobId\":\"job-N\",\"state\":\"running\"}; poll {\"cmd\":\"job.status\",\"jobId\":\"job-N\"} until state is done|error|cancelled");
+                "commands with async=true return {\"jobId\":\"job-N\",\"state\":\"running\"}; poll {\"cmd\":\"job.status\",\"jobId\":\"job-N\"} until state is done|error|cancelled. job.status carries \"percent\"/\"phase\" always, and a command-shaped \"progress\" object when the command publishes one (admin.request: {phase,elapsedMs,line,lines})");
             return o;
         }
     }

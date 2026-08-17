@@ -1,4 +1,4 @@
-# PC1 — a console shell for this machine
+# MarwanOS
 
 A living-room operating system for one machine, called PC1. The layout is the
 PS5 dashboard's: a status bar, two view tabs, a hero that answers "what is
@@ -11,10 +11,47 @@ Neither is imitated as trade dress. There is no Sony mark or artwork here, and
 nothing is copied out of Mythos — it is the same design language rebuilt at
 ten-foot scale for a controller.
 
-The identity is a single typographic lockup: **PC1** sitting on a rule that
-fills with the machine's progress while it boots and then stays put as the
-wordmark's underline. The loading bar *is* the logo, which is why the boot
-screen and the shell read as the same object.
+**MarwanOS** is the system; **PC1** is the machine it runs on. Both appear on
+the splash, in that order, and the distinction is kept everywhere else.
+
+## The mark
+
+The identity is one lockup: the MarwanOS graffiti mark sitting on a rule that
+fills with the machine's progress and then stays put as the mark's underline.
+The loading bar *is* part of the logo, which is why the boot screen and the
+shell read as the same object.
+
+**The mark's hue is the progress bar.** `hue-rotate` is driven from the same
+percentage that drives the rule — 0° at 0%, 360° at 100% — so one full trip
+around the colour wheel is exactly one boot, and the mark returns to its true
+colours at the moment the machine is ready. Two things follow from tying it to
+progress rather than to a timer:
+
+* **It only moves when the machine does.** A logo animating on a clock keeps
+  cycling cheerfully through a hang. This one stops, and a stall is visible as
+  a mark that has stopped changing colour.
+* **It costs nothing.** One CSS filter, tweened by the compositor, with the
+  0.5s transition matched to the rule's fill so six discrete steps read as
+  continuous motion. A canvas cycling pixels would want a frame every 16ms from
+  a machine whose entire job at that moment is starting something else.
+
+The artwork is `ui/marwanos.png` — 457×142 RGBA, extracted from
+`MarwanOS.psd`. It ships flat beside the shell like the fonts. If it ever fails
+to load, both `index.html` and `boot.html` fall back to a type wordmark rather
+than showing a broken-image icon, which is the last thing a splash should do.
+
+Regenerating it from the PSD:
+
+```bash
+node .stage/psd2png.mjs ~/Downloads/MarwanOS.psd ui/marwanos.png --pad=2
+```
+
+That script exists because ffmpeg's PSD decoder reports `gbrp` — it composites
+RGB and discards the fourth channel, so the mark came out on opaque black. The
+composite's alpha is simply the fourth plane of the image-data section, so
+reading the PSD directly is less work than fighting the decoder. It also trims
+to the content box, which is where the 457×142 and the `aspect-ratio: 457 / 142`
+in both stylesheets come from.
 
 ## Files
 
@@ -22,11 +59,12 @@ screen and the shell read as the same object.
 |---|---|
 | `index.html` | The full shell — boot sequence resolving into the home screen. |
 | `boot.html` | The boot splash on its own, for actually running at startup. |
+| `ui/marwanos.png` | The mark. 457×142 RGBA, deployed flat beside `index.html`. |
 | `ui/*.woff2`, `ui/OFL-Inter.txt` | Inter and Inter Tight, vendored. Deployed flat beside `index.html`. |
-| `ui/osk.js`, `ui/osk.css` | The on-screen keyboard (`ArcOSK`). Deployed flat beside `index.html`. |
-| `ui/files.js`, `ui/files.css` | The file explorer (`ArcFiles`). Same deal. |
-| `ui/browser.js`, `ui/browser.css` | The browser's **chrome** (`ArcBrowser`) — tabs, address bar, start page, history, downloads. Not the web pages. |
-| `ui/arcnav.js` | The navigation layer injected into **every web page** the browser loads. Never loaded by `index.html`; the host reads it off disk and injects it. |
+| `ui/osk.js`, `ui/osk.css` | The on-screen keyboard (`MarwanOSK`). Deployed flat beside `index.html`. |
+| `ui/files.js`, `ui/files.css` | The file explorer (`MarwanFiles`). Same deal. |
+| `ui/browser.js`, `ui/browser.css` | The browser's **chrome** (`MarwanBrowser`) — tabs, address bar, start page, history, downloads. Not the web pages. |
+| `ui/mosnav.js` | The navigation layer injected into **every web page** the browser loads. Never loaded by `index.html`; the host reads it off disk and injects it. |
 | `spike/ShellHostWeb/ShellHostWeb.cs` | The WebView2 host. Owns the pad, the launch cycle, the bridges into `SystemApi` and `FileApi`, and the browser's content WebViews. |
 | `spike/ShellHostWeb/SystemApi.cs` | The native system-control layer everything in Settings reads and writes through. |
 | `spike/ShellHostWeb/FileApi.cs` | The native file-operations layer behind the explorer. |
@@ -34,18 +72,58 @@ screen and the shell read as the same object.
 
 No build step, no CDN, no external images, no network of any kind — the fonts
 ship in the same folder and are loaded same-origin. `index.html` loads
-`osk.*`, `files.*`, `browser.*` and the woff2 files **by bare filename**,
-because the host deploys everything flat into `C:\ArcOS\web\`; opening the
-repo's `index.html` directly will not find them. `boot.html` will use Inter
-Tight if it is a sibling and falls back to Segoe UI Variable Display if not,
-so it still stands alone. Browsed web pages are exempt from all of this: they
-are not the shell and not on the shell's origin. See below.
+`osk.*`, `files.*`, `browser.*`, `marwanos.png` and the woff2 files **by bare
+filename**, because the host deploys everything flat into `C:\MarwanOS\web\`;
+opening the repo's `index.html` directly will not find them. `boot.html` uses
+the same siblings when they are there and degrades rather than breaks when they
+are not — a type wordmark instead of the mark, Segoe UI Variable Display
+instead of Inter Tight — so it still stands alone. Browsed web pages are exempt
+from all of this: they are not the shell and not on the shell's origin.
 
-**The code still says `arc`.** `arcos.local`, `ArcOSK`, `ArcFiles`,
-`ArcBrowser`, `.arcbw-*`, `__arcAdjust`, `arcnav.js` and the `arc.deviceName`
-key are identifiers, not branding, and they are wired through the C# host and
-the provisioning scripts. Renaming them is a separate job with real blast
-radius; only user-visible text was rebranded.
+## Naming
+
+There is no `arc` left anywhere. Two prefixes, mirroring what `arc` did:
+**`MarwanOS` / `Marwan*`** for public names, file paths, binaries and anything
+a human reads; **`mos*`** for terse internal prefixes.
+
+| Was | Is | Kind |
+|---|---|---|
+| `arcos.local` | `marwanos.local` | virtual host the shell is served from |
+| `C:\ArcOS\web\` | `C:\MarwanOS\web\` | flat deploy folder |
+| `ArcShellHostWeb.exe` | `MarwanShellHostWeb.exe` | the WebView2 host binary |
+| `ArcOSK` / `ArcFiles` / `ArcBrowser` | `MarwanOSK` / `MarwanFiles` / `MarwanBrowser` | the page's public globals |
+| `ArcLibrary` / `ArcSysApi` / `ArcFileApi` | `MarwanLibrary` / `MarwanSysApi` / `MarwanFileApi` | host-side bridge objects |
+| `arcnav.js` | `mosnav.js` | the layer injected into every browsed page |
+| `.arc-osk` / `.arc-files` / `.arcbw-*` | `.mos-osk` / `.mos-files` / `.mosbw-*` | CSS namespaces |
+| `arcPost` / `arcPad` / `__arcAdjust` | `mosPost` / `mosPad` / `__mosAdjust` | page↔host message channel |
+| `arc.deviceName` | `marwanos.deviceName` | localStorage key |
+| `arcshell` | `marwanshell` | the Shell Launcher test account |
+| `\ARC\arc-install-broker` | `\MarwanOS\marwan-install-broker` | scheduled task |
+| `.arc-mark` | `.curve-mark` | the two decorative arcs — named for the **shape**, since the identity is the graffiti mark now |
+
+Bridge names are the ones to be careful with: `mosFileApi`, `mosLibrary`,
+`mosPost` and `mosPad` are injected by `ShellHostWeb.cs` and read by the page,
+so they only work because both sides moved together. Change one and the shell
+loads with a dead bridge and no error.
+
+Three `arc`s are deliberately still here and are **not** the brand: `arcade`
+(an app), `Architecture` / `archive` / `arcs` (English), and `arcbench` — which
+names an SSH keypair that exists on the bench, so renaming the doc would only
+make the doc wrong.
+
+### Migrating a machine provisioned before the rename
+
+Two things were created under the old names and are **not** renamed by any of
+this, because renaming a script does not rename what it already made:
+
+* the **`arcshell`** local account — still present and enabled.
+  `92-remove-test-account.ps1` now removes `marwanshell` *and* accepts
+  `-UserName arcshell` so the old one can still be cleaned up.
+* **`C:\ArcOS\`** — the old deploy root. Nothing serves from it yet
+  (`C:\ArcOS\web\` was never created), so it is safe to delete by hand.
+
+The install broker was never installed, so there is no `\ARC\` scheduled task
+or `C:\ProgramData\ARC` to migrate.
 
 ## The browser: two WebViews, not one
 
@@ -60,14 +138,14 @@ There are **two entirely separate WebView2 worlds** in the shell process.
 | How many | one | one per tab, capped at four |
 | Environment | the shell's | a *second* one, own user-data folder, own browser process |
 | Hardening | full kiosk lockdown, unchanged | ordinary browser: script, storage, cookies, media all on |
-| Origin | `https://arcos.local/` only | anywhere |
+| Origin | `https://marwanos.local/` only | anywhere |
 
 **Why not an `<iframe>`.** `index.html` cannot script into a cross-origin
 document, so an iframe could never have a focus ring drawn in it, a link list
 built from it, or a link clicked in it. Spatial navigation *is* the product,
 and it requires code running inside the page. Only a WebView the host owns
 can get that, via `AddScriptToExecuteOnDocumentCreatedAsync` — which is what
-injects `ui/arcnav.js` at the top of every document on every origin.
+injects `ui/mosnav.js` at the top of every document on every origin.
 
 **Why a second environment.** An environment is a browser process tree.
 Sharing the shell's would put the shell's renderer, its GPU process and its
@@ -79,7 +157,7 @@ Verified by killing a content renderer outright — see `_crashtest.ps1`.
 **Why the page cannot be drawn over.** A `CoreWebView2Controller` is a real
 child window, not a composited layer. Nothing `index.html` draws can appear on
 top of it. So the content view is a *rectangle* the shell reserves in its own
-layout (`.arcbw-stage`), and any shell surface needing the whole screen — the
+layout (`.mosbw-stage`), and any shell surface needing the whole screen — the
 keyboard, the start page, history, the menu — asks the host to hide the
 content view first. `browser.js` calls this `stage(false)`; forget it and your
 new panel will be invisible behind a web page.
@@ -87,7 +165,7 @@ new panel will be invisible behind a web page.
 **Why downloads are taken off Chromium.** WebView2 has its own download
 experience and it cannot be used here: it is painted by the renderer *inside*
 the content window, so the shell cannot restyle it, move it, or put a focus
-ring on it; its buttons are mouse targets that `arcnav.js` cannot reach,
+ring on it; its buttons are mouse targets that `mosnav.js` cannot reach,
 because they are not in the document; and it fades away after a few seconds
 with no toolbar button to bring it back. So `DownloadStarting` sets
 `e.Handled = true` — the documented way to suppress the flyout — and the host
@@ -112,7 +190,7 @@ immediately and the profile remembers it, and `EnableAsync` / `RemoveAsync`
 are the same shape. So the browser's Extensions sheet is a real manager. The
 host offers the two sources a television actually has — a `.zip` or `.crx`
 this browser has **downloaded**, and anything on a plugged-in **USB stick** —
-unpacks the chosen one into `C:\ArcOS\extensions\<name>` (a `.crx` is a zip
+unpacks the chosen one into `C:\MarwanOS\extensions\<name>` (a `.crx` is a zip
 with a signature header; the header is parsed and skipped) and adds it. Cross
 turns one on or off, Square removes it after a confirmation, and a folder that
 is on disk but did not load is listed with its reason rather than being
@@ -255,7 +333,8 @@ token. Both details matter:
 
 | Moment | Timing | Curve |
 |---|---|---|
-| Wordmark letters | 0.55s, staggered 0.09s from 0.18s | `(.16,.84,.24,1)` |
+| Mark reveal | 0.55s from 0.18s | `(.16,.84,.24,1)` |
+| Mark hue | 0.5s per step, 3.6° per percent | `(.16,.84,.24,1)` |
 | Progress step | 0.5s per step, weighted by real cost | `(.16,.84,.24,1)` |
 | Boot hold at 100% | 0.42s before anything leaves | — |
 | Boot exit | 0.45s opacity + scale 1→1.015 | `(.6,0,.9,.4)` |
@@ -297,6 +376,57 @@ interface; the keyboard is a debugging convenience that happens to still work.
 | Options / touchpad | `C` | Control centre |
 | PS | `G` | Guide (currently opens the control centre) |
 | — | `B` | Replay the boot sequence |
+
+### Pointer mode
+
+Everything above is the shell driving its own pages. A window the shell did not
+draw — a vendor installer, a launcher's sign-in, anything that is a mouse UI on
+a machine with no mouse — cannot be navigated that way, and nothing the shell
+paints can even appear over it. So the host stops drawing and starts driving
+the **real Windows cursor**, with `SendInput`, in absolute coordinates over the
+virtual screen.
+
+It turns itself on when the front window is not the shell's *and* is not a game
+(a game reads the pad itself; injecting a stick as a mouse would double-act):
+a launcher by name or by what the tile called it, a window whose process this
+shell cannot even open (another user's, or SYSTEM), or one that opens but runs
+on an **elevated token** — which is how the install broker's interactive
+installer identifies itself now that it runs under the console user's own admin
+token (see below). L3 overrides the rule either way until the shell is in front
+again, and the shell being in front always ends it.
+
+A window at a *higher* integrity than the shell (a real SYSTEM process, or one
+elevated to High while the shell sits at Medium) still swallows `SendInput`
+silently — UIPI — so the pointer gives up on it after three refused moves and
+says why. The broker sidesteps that for its own installers by starting them at
+the shell's integrity (Medium) rather than above it: same admin token, reachable
+cursor. See `provisioning/install-broker/` and BENCH-CHANGES B30.
+
+The bindings are the browser's pointer mode (`ui/browser.js`, `ui/mosnav.js`)
+moved onto a real cursor, so a human who learned one already knows the other:
+
+| DualSense | What it does to the window in front |
+|---|---|
+| Touchpad surface | Moves the cursor. Relative, like a trackpad: first contact does not jump it |
+| Left stick | Moves the cursor — same dead zone and squared curve as the browser's |
+| D-pad | Steps the cursor 8 px, for the last few pixels the stick cannot place |
+| Cross | Left button — down on press, up on release, so dragging works |
+| Touchpad click | Left button, likewise. The click that belongs with the surface |
+| Touchpad tap | A left click (contact under 150 ms that moved under 10 units) |
+| Square | Right button |
+| Two fingers / right stick | Wheel, vertical and horizontal |
+| L1 / R1 | Page Up / Page Down |
+| Options | Enter |
+| Circle | Escape |
+| Triangle | **The keyboard.** The host remembers the window, brings the shell forward with the on-screen keyboard over it, and types what you enter back into that window when you press Done (or Done + ⏎). Circle cancels and just goes back |
+| L3 | Turns the pointer off (and on again) |
+| PS | Unchanged: back to the shell |
+
+One thing it cannot do, and the limit is Windows': `SendInput` is subject to
+UIPI, so a shell running at medium integrity may not inject input into a window
+owned by an elevated or SYSTEM process — and the refusal is silent. The host
+watches for it (three moves that went nowhere) and turns the pointer off saying
+why, rather than leaving a pointer that looks alive and moves nothing.
 
 ### Focus scopes
 
@@ -428,7 +558,7 @@ cannot be silent, and it says exactly what to do instead.
 ### Sliders on a pad
 
 A volume slider is a focusable row that claims the horizontal axis through
-`element.__arcAdjust(dx, dy)` — the focus manager stays generic and knows
+`element.__mosAdjust(dx, dy)` — the focus manager stays generic and knows
 nothing about sliders. Left and right adjust in 5% steps, debounced before
 the write; Cross toggles mute. At either end of the track the press is *not*
 consumed, so in the two-pane layout pushing left at 0% crosses back to the
@@ -439,9 +569,9 @@ category list rather than doing nothing.
 The host can drive the whole screen with no human present:
 
 ```bash
-ArcShellHostWeb-v4.exe --sys-selftest      # read-only sweep + walk all nine categories
-ArcShellHostWeb-v4.exe --display-selftest  # apply a mode, then press NOTHING and prove the revert
-ArcShellHostWeb-v4.exe --walk=cc,right,select,... --walk-gap=2200   # any flow at all
+MarwanShellHostWeb-v4.exe --sys-selftest      # read-only sweep + walk all nine categories
+MarwanShellHostWeb-v4.exe --display-selftest  # apply a mode, then press NOTHING and prove the revert
+MarwanShellHostWeb-v4.exe --walk=cc,right,select,... --walk-gap=2200   # any flow at all
 ```
 
 `--sys-selftest` fires every read-only command straight at the worker (each

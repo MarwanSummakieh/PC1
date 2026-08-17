@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — library.js
+   MarwanOS — library.js
    The home rail's contents, from a real scan of what is installed.
 
    Everything on the rail used to be a fixture: a Steam tile claiming 342
@@ -13,32 +13,34 @@
    its place by being installed.
 
    ── Public surface ──────────────────────────────────────────────────
-     ArcLibrary.initial(hooks)   synchronous, no host call. The rail data
+     MarwanLibrary.initial(hooks)   synchronous, no host call. The rail data
                                  to paint with before anything has loaded:
                                  Files, Browser, and a Play tab that says
                                  it is still looking.
-     ArcLibrary.load()           Promise<APPS>. Paints from the host's disk
+     MarwanLibrary.load()           Promise<APPS>. Paints from the host's disk
                                  cache immediately if there is one, then
                                  refreshes in the background and fires
                                  onUpdate when the fresh scan lands.
-     ArcLibrary.refresh()        Promise<APPS>. Forces a scan now.
-     ArcLibrary.onUpdate         function(APPS) — assign it. Called every
+     MarwanLibrary.refresh()        Promise<APPS>. Forces a scan now.
+     MarwanLibrary.onUpdate         function(APPS) — assign it. Called every
                                  time a newer set of tiles is available.
-     ArcLibrary.state()          {scanning, error, scannedUtc, ageSeconds,
+     MarwanLibrary.state()          {scanning, error, scannedUtc, ageSeconds,
                                   counts, sources} — for a diagnostics panel.
-     ArcLibrary.launch(app)      launch a tile. Tiles carry this as `run`,
+     MarwanLibrary.launch(app)      launch a tile. Tiles carry this as `run`,
                                  so index.html needs to know nothing.
-     ArcLibrary.cover(app)       Promise<dataUri|null>. The large portrait
+     MarwanLibrary.cover(app)       Promise<dataUri|null>. The large portrait
                                  art, fetched lazily.
-     ArcLibrary.art(app)         Promise<art> from ui/homeart.js — the
+     MarwanLibrary.art(app)         Promise<art> from ui/homeart.js — the
                                  cover, the backdrop wash and the colours
                                  the whole home screen takes its mood
                                  from. Every tile has one, including the
                                  ones with no artwork at all.
 
-   `hooks` is {files: fn, browser: fn} — the two in-shell openers, passed
-   in rather than reached for, so this file never has to know that ACT
-   exists.
+   `hooks` is {files: fn, browser: fn, toast: fn} — the two in-shell
+   openers and the shell's own way of saying one sentence, passed in
+   rather than reached for, so this file never has to know that ACT
+   exists. `toast` is optional; without it the tiles that would speak
+   stay silent rather than reaching for a global.
 
    ── The shape returned ──────────────────────────────────────────────
    Exactly what index.html's rail already consumes:
@@ -46,15 +48,22 @@
    `icon` is a key into index.html's ICON map, `art` a key into G. Both are
    chosen from the existing sets — this module adds no new artwork.
 
+   Beyond the rail this module also exposes `hero(id)` — Steam's real
+   1920x620 landscape art for a backdrop, local and keyless, instead of a
+   600x900 portrait stretched across a 4K screen — and it keeps the rail
+   LIVE: the host watches for installs and this polls a cursor, so a game
+   installed while the console is running appears without a restart.
+
    A third key, `apps`, carries the installed non-game software the scan
-   found (Git, VS Code, Stremio…). Nothing renders it yet: the shell has
-   two tabs and neither is an app list. It is there so that adding one is
-   a change to index.html and not another scan.
+   found (Git, VS Code, Stremio…). The shell's third rail tab draws it.
+   Like the other two it is never empty: index.html indexes [0] and takes
+   a modulo of the length on every tab, so "nothing here" is a tile that
+   says which sources were read, not a zero-length array.
 
    ── Transport ───────────────────────────────────────────────────────
    Same three-way detection as ui/files.js, one message type along:
-     1. window.arcLibraryApi(json)
-     2. chrome.webview.hostObjects.arcLibrary.Handle
+     1. window.mosLibraryApi(json)
+     2. chrome.webview.hostObjects.mosLibrary.Handle
      3. chrome.webview postMessage {type:"lib"} -> reply {type:"lib.reply"}
    With no bridge at all this module still works: it returns the honest
    empty state and reports why, which is what you get opening index.html
@@ -71,13 +80,13 @@
   function detectTransport() {
     if (tx.fn) return tx.fn;
 
-    if (typeof root.arcLibraryApi === "function") {
-      tx.name = "arcLibraryApi";
-      tx.why = "window.arcLibraryApi(json) is present";
+    if (typeof root.mosLibraryApi === "function") {
+      tx.name = "mosLibraryApi";
+      tx.why = "window.mosLibraryApi(json) is present";
       tx.fn = function (cmd) {
         return new Promise(function (resolve, reject) {
           var r;
-          try { r = root.arcLibraryApi(JSON.stringify(cmd)); }
+          try { r = root.mosLibraryApi(JSON.stringify(cmd)); }
           catch (e) { reject(e); return; }
           if (r && typeof r.then === "function") r.then(function (v) { resolve(parseEnv(v)); }, reject);
           else resolve(parseEnv(r));
@@ -86,19 +95,27 @@
       return tx.fn;
     }
 
-    try {
-      if (root.chrome && root.chrome.webview && root.chrome.webview.hostObjects &&
-          root.chrome.webview.hostObjects.arcLibrary) {
-        tx.name = "hostObject";
-        tx.why = "chrome.webview.hostObjects.arcLibrary is present";
-        tx.fn = function (cmd) {
-          return Promise.resolve(root.chrome.webview.hostObjects.arcLibrary.Handle(JSON.stringify(cmd)))
-            .then(function (v) { return parseEnv(v); });
-        };
-        return tx.fn;
-      }
-    } catch (e) {}
+    /* postMessage is tried BEFORE hostObjects, and the order is the fix for a
+       real failure rather than a preference.
 
+       chrome.webview.hostObjects is a JS Proxy: reading .mosLibrary off it
+       returns a truthy stand-in whether or not the host ever registered that
+       name. The old order therefore selected a transport that cannot work on
+       every host build — no host in this tree registers mosLibrary — and the
+       first call came back empty, which parseEnv reports as "the library
+       bridge returned nothing". The rail then showed the honest-empty state
+       on a host that had a perfectly good library, and nothing on screen said
+       why. Bench-observed 2026-08-16 on a page that does not inject its own
+       transport: "transport: hostObject", zero requests reaching the host's
+       LibraryApi worker.
+
+       index.html was never affected because it injects window.mosLibraryApi
+       above, which wins before either of these is reached. That is exactly
+       what hid the bug.
+
+       postMessage is the transport the host actually implements for lib.*,
+       so it goes first; the host-object branch stays underneath it for a host
+       that really does register one, where its truthiness is not a lie. */
     try {
       if (root.chrome && root.chrome.webview && typeof root.chrome.webview.postMessage === "function") {
         tx.name = "postMessage";
@@ -126,6 +143,19 @@
             try { root.chrome.webview.postMessage(JSON.stringify({ type: "lib", reqId: id, command: cmd })); }
             catch (e) { clearTimeout(timer); delete tx.pending[id]; reject(e); }
           });
+        };
+        return tx.fn;
+      }
+    } catch (e) {}
+
+    try {
+      if (root.chrome && root.chrome.webview && root.chrome.webview.hostObjects &&
+          root.chrome.webview.hostObjects.mosLibrary) {
+        tx.name = "hostObject";
+        tx.why = "chrome.webview.hostObjects.mosLibrary is present";
+        tx.fn = function (cmd) {
+          return Promise.resolve(root.chrome.webview.hostObjects.mosLibrary.Handle(JSON.stringify(cmd)))
+            .then(function (v) { return parseEnv(v); });
         };
         return tx.fn;
       }
@@ -240,6 +270,7 @@
         if (Date.now() > deadline) throw new Error("the scan did not finish in time");
         state.phase = j.phase || "";
         state.percent = typeof j.percent === "number" ? j.percent : -1;
+        tickScan();
         return new Promise(function (r) { setTimeout(r, 350); }).then(function () { return poll(jobId); });
       });
     }
@@ -259,10 +290,40 @@
     transport: function () { return tx.name + " — " + tx.why; }
   };
 
+  /* Whether the rail on screen IS the scanning card, and what its Status
+     line last read. Both exist for one reason: the Status fact is marked
+     `live`, which index.html paints in the semantic green — a promise that
+     the value moves. It never did, because the tile was built once and the
+     job's phase was only ever written into `state`. */
+  var showingScan = false;
+  var lastScanLine = "";
+
+  function isScanRail(apps) {
+    var first = apps && apps.play && apps.play.length === 1 ? apps.play[0] : null;
+    return !!(first && first.id && first.id.indexOf("lib:scanning") === 0);
+  }
+
+  /* Rebuild the scanning card, and only when the line it shows would read
+     differently — a scan that sits on one phase for ten seconds must not
+     rebuild the rail thirty times.
+
+     Guarded on the rail actually being that card: refresh() also runs
+     behind a rail already painted from the disk cache, and replacing a
+     screen full of real games with a progress card would be a regression
+     dressed up as a feature. */
+  function tickScan() {
+    if (!showingScan) return;
+    var line = scanLine();
+    if (line === lastScanLine) return;
+    lastScanLine = line;
+    announce(placeholder(scanningTile));
+  }
+
   var entriesById = {};      /* id -> raw entry from the host */
   var tilesById = {};        /* id -> the tile object last handed to the shell */
-  var hooks = { files: null, browser: null };
+  var hooks = { files: null, browser: null, toast: null };
   var covers = {};           /* id -> dataUri | null (null = asked, none there) */
+  var heroes = {};           /* id -> promise of the landscape hero dataUri | null */
 
   /* ═══ Formatting ═══════════════════════════════════════════════════ */
 
@@ -354,6 +415,12 @@
       case "folder":
         return "Found on disk with nothing registering it: no launcher, no shortcut, no uninstall "
              + "entry. The shell runs its executable itself and tracks the process.";
+      case "riot":
+        if (e.kind === "launcher")
+          return "Riot's own client, read from its machine-wide install record — so it is here even "
+               + "when nothing made a shortcut. Sign in there to install or update a game.";
+        return "Starts through the Riot Client's product launch, the same route its own shortcut "
+             + "takes; Vanguard is checked by the client, not the shell.";
       default:
         if (e.kind === "launcher")
           return "Hands the display over to the client's own interface. Anything it installs shows "
@@ -411,7 +478,7 @@
       tags: tagsFor(e),
       facts: factsFor(e),
       action: e.kind === "game" ? "Play" : "Open",
-      run: function () { return ArcLibrary.launch(e.id); }
+      run: function () { return MarwanLibrary.launch(e.id); }
     };
   }
 
@@ -430,6 +497,38 @@
     };
   }
 
+  /* Which search engine the browser will actually use, by its own name.
+     It used to be the string "DuckDuckGo", which stopped being true the
+     moment somebody changed it in the browser's menu — a fact on a hero
+     that quietly contradicts the screen it describes. ui/browser.js
+     persists the choice under its own key and exposes its ENGINES table;
+     both fallbacks here are that file's own default. */
+  function searchEngineName() {
+    var key = "duckduckgo";
+    try {
+      var raw = root.localStorage ? root.localStorage.getItem("arc.browser.engine") : null;
+      if (raw) { var v = JSON.parse(raw); if (typeof v === "string" && v) key = v; }
+    } catch (e) {}
+    var table = (root.MarwanBrowser && root.MarwanBrowser.engines) || null;
+    if (table) {
+      if (table[key] && table[key].name) return table[key].name;
+      if (table.duckduckgo && table.duckduckgo.name) return table.duckduckgo.name;
+    }
+    return key === "duckduckgo" ? "DuckDuckGo" : key;
+  }
+
+  /* The tab ceiling is the browser's, and the host can lower it — so it is
+     read rather than repeated. Four is what browser.js starts at. */
+  function tabLimit() {
+    try {
+      if (root.MarwanBrowser && typeof root.MarwanBrowser.debugState === "function") {
+        var d = root.MarwanBrowser.debugState();
+        if (d && typeof d.max === "number" && d.max > 0) return d.max;
+      }
+    } catch (e) {}
+    return 4;
+  }
+
   function browserTile() {
     return {
       id: "web", name: "Browser", icon: "web", art: "web", hue: 188,
@@ -438,7 +537,7 @@
             "one address away. Links are reached with the D-pad, and the left stick becomes a " +
             "pointer on sites that will not co-operate.",
       tags: ["Spatial navigation", "Stick pointer", "Full screen"],
-      facts: [["Source", "This shell"], ["Tabs", "4 max"], ["Search", "DuckDuckGo"],
+      facts: [["Source", "This shell"], ["Tabs", tabLimit() + " max"], ["Search", searchEngineName()],
               ["Isolation", "Separate process"]],
       action: "Open",
       run: function () { if (hooks.browser) hooks.browser(); }
@@ -452,8 +551,16 @@
      empty screen tells you nothing, and this one tells you where it looked
      and what to do about it. */
 
+  /* How many sources the last scan actually read. Seven is what the host
+     ships with, and it is the fallback rather than the claim: the prose and
+     the number beside it now come from the same place, so a host that reads
+     eight cannot leave the sentence saying seven. */
+  function sourceCount() {
+    return state.sources ? state.sources.length : 7;
+  }
+
   function emptyTile() {
-    var checked = state.sources ? state.sources.length : 7;
+    var checked = sourceCount();
     var facts = [
       ["Sources checked", String(checked)],
       ["Games found", "0"],
@@ -466,34 +573,91 @@
       /* Short enough to be read whole. The hero clamps at four lines, and
          a sentence that ends in an ellipsis on the one screen whose only
          job is to explain itself is worse than a shorter sentence. */
-      desc: "Nothing playable is installed. All seven sources were checked and came back empty. " +
-            "Install a client or add a Start Menu shortcut, and it will be here after the next scan.",
+      desc: "Nothing playable is installed. All " + checked + " sources were checked and came back " +
+            "empty. Install a client or add a Start Menu shortcut, and it will be here after the " +
+            "next scan.",
       tags: ["Scanned locally", "Nothing invented"],
       facts: facts,
       action: "Scan again",
-      run: function () { ArcLibrary.refresh(); }
+      run: function () { MarwanLibrary.refresh(); }
     };
   }
 
-  function scanningTile() {
+  /* The Apps tab's own honest empty state. Same argument as emptyTile and
+     the same reason it exists at all: index.html reads APPS[tab][0] and
+     takes a modulo of the length, so the tab cannot be handed [].  */
+  function noAppsTile() {
+    var checked = sourceCount();
     return {
-      id: "lib:scanning", name: "Scanning", icon: "update", art: "disc", mono: true,
-      eyebrow: "Play", title: "Looking for games",
+      id: "lib:noapps", name: "No apps", icon: "library", art: "disc", mono: true,
+      eyebrow: "Apps", title: "No applications found",
+      desc: "The scan found nothing installed that is not a game or a launcher. Anything with a " +
+            "Start Menu shortcut or an uninstall entry belongs here, so this usually means the " +
+            "scan has not run since the last install.",
+      tags: ["Scanned locally", "Nothing invented"],
+      facts: [
+        ["Sources checked", String(checked)],
+        ["Apps found", "0"],
+        ["Last scan", state.scannedUtc ? clock(state.scannedUtc) : "not yet"],
+        ["Runs in", "This shell"]
+      ],
+      action: "Scan again",
+      run: function () { MarwanLibrary.refresh(); }
+    };
+  }
+
+  /* The scan's progress in one line, which is what the Status fact shows
+     and what pressing the tile says out loud. */
+  function scanLine() {
+    var pct = (typeof state.percent === "number" && state.percent >= 0)
+      ? Math.round(state.percent) + "%" : "";
+    var phase = state.phase || "";
+    if (phase && pct) return phase + " · " + pct;
+    return phase || pct || "starting";
+  }
+
+  function say(msg) {
+    if (!hooks.toast) return false;
+    try { hooks.toast(msg); return true; } catch (e) { return false; }
+  }
+
+  /* `which` is the tab this copy of the tile is for. Both tabs are looking
+     at the same job, but a card on the Apps tab that says "Looking for
+     games" is a card describing the wrong screen — and the two need
+     different ids, or the artwork cache hands one tile the other's face. */
+  function scanningTile(which) {
+    var isApps = which === "apps";
+    return {
+      id: isApps ? "lib:scanning:apps" : "lib:scanning",
+      name: "Scanning", icon: "update", art: "disc", mono: true,
+      eyebrow: isApps ? "Apps" : "Play",
+      title: isApps ? "Looking for applications" : "Looking for games",
       desc: "Reading Steam's manifests, the Epic and GOG installs, the packaged titles and the " +
             "Start Menu. Whatever is genuinely installed will land on this rail; nothing that is " +
             "not will.",
       tags: ["Local scan", "No network"],
-      facts: [["Status", state.phase || "starting"], ["Sources", "7"], ["Runs in", "This shell"]],
+      facts: [["Status", scanLine()], ["Sources", String(sourceCount())], ["Runs in", "This shell"]],
       live: "Status",
-      action: "Wait",
-      run: function () { }
+      /* It used to be an empty function under the word "Wait": a tile the
+         cursor could land on that answered nothing at all. The scan already
+         reports its phase and its percentage — this says them. */
+      action: "Progress",
+      run: function () {
+        var line = scanLine();
+        if (!say(state.scanning || line !== "starting"
+              ? "Scanning: " + line + "."
+              : "The scan has not started yet."))
+          log("scan progress: " + line);
+      }
     };
   }
 
-  function noBridgeTile(why) {
+  function noBridgeTile(why, which) {
+    var isApps = which === "apps";
     return {
-      id: "lib:nobridge", name: "No host", icon: "info", art: "disc", mono: true,
-      eyebrow: "Play", title: "The library cannot be read",
+      id: isApps ? "lib:nobridge:apps" : "lib:nobridge",
+      name: "No host", icon: "info", art: "disc", mono: true,
+      eyebrow: isApps ? "Apps" : "Play", title: "The library cannot be read",
       desc: "The shell host has not exposed LibraryApi to this page, so there is no way to find out " +
             "what is installed. Rather than show a rail of things that may not exist, the shell is " +
             "showing you this. " + (why || ""),
@@ -501,7 +665,7 @@
       facts: [["Transport", tx.name], ["Status", "Not connected"], ["Runs in", "This shell"]],
       live: "Status",
       action: "Retry",
-      run: function () { tx.fn = null; ArcLibrary.refresh(); }
+      run: function () { tx.fn = null; MarwanLibrary.refresh(); }
     };
   }
 
@@ -523,6 +687,7 @@
        thing you came to the Play tab for is a game. */
     var play = games.concat(launchers);
     if (!play.length) play = [emptyTile()];
+    if (!apps.length) apps = [noAppsTile()];
 
     return {
       play: play,
@@ -531,8 +696,12 @@
     };
   }
 
-  function placeholder(tile) {
-    return { play: [tile], media: [filesTile(), browserTile()], apps: [] };
+  /* `make` is a factory rather than a tile, because the same state has to
+     be said twice: once on the Play tab and once on the Apps tab, in that
+     tab's words. Media is real either way — Files and the Browser are ours
+     and do not depend on a scan. */
+  function placeholder(make) {
+    return { play: [make("play")], media: [filesTile(), browserTile()], apps: [make("apps")] };
   }
 
   /* The rail is rebuilt from scratch on every update, so a tile element
@@ -555,10 +724,12 @@
   }
 
   function announce(apps) {
+    showingScan = isScanRail(apps);
     covers = {};
+    heroes = {};
     remember(apps);
-    if (typeof ArcLibrary.onUpdate === "function") {
-      try { ArcLibrary.onUpdate(apps); }
+    if (typeof MarwanLibrary.onUpdate === "function") {
+      try { MarwanLibrary.onUpdate(apps); }
       catch (e) { log("onUpdate threw: " + e); }
     }
     decorate();
@@ -566,7 +737,7 @@
   }
 
   function log(msg) {
-    try { if (typeof root.arcPost === "function") root.arcPost({ type: "log", target: "library: " + msg }); } catch (e) {}
+    try { if (typeof root.mosPost === "function") root.mosPost({ type: "log", target: "library: " + msg }); } catch (e) {}
     try { if (root.console && root.console.log) root.console.log("[library] " + msg); } catch (e) {}
   }
 
@@ -596,6 +767,121 @@
     return covers[id];
   }
 
+  /* ── Hero art ──────────────────────────────────────────────────────
+     The portrait a tile wears is the wrong picture for a backdrop. Steam
+     caches a real landscape hero next to the cover — 1920x620 — and the
+     old scanner never looked for it, so the shell filled a 3840-wide
+     screen by stretching a 600x900 portrait. Worse, Steam frequently
+     stores the AUTO-DOWNSCALED capsule: library_600x900.jpg is often
+     300x450 on disk despite its name, which is a 12.8x upscale in the
+     wrong aspect. A 1920x620 hero is a 2x upscale in the right one.
+
+     Local first and never blocking: meta.art answers from Steam's own
+     cache with no network at all. `upgradable` on the reply means a
+     native 3840x1240 exists on Valve's keyless CDN; fetching it is
+     prefetchArt()'s job, in the background, not this call's.
+
+     meta.art returns a PATH, and a page served from marwanos.local
+     cannot open C:\...\library_hero.jpg. lib.icon turns the path into a
+     data URI — passing it through untouched when the file is small
+     enough, which every 1920x620 hero is.
+
+     Resolves to null for anything that is not a Steam title, which is
+     the honest answer rather than a generated stand-in. */
+  function heroFor(id) {
+    if (Object.prototype.hasOwnProperty.call(heroes, id)) return heroes[id];
+    if (!id || id.indexOf("steam:") !== 0) { heroes[id] = Promise.resolve(null); return heroes[id]; }
+    heroes[id] = call({ cmd: "meta.art", id: id, kind: "hero" }).then(function (d) {
+      if (!d || !d.path) return null;
+      return call({ cmd: "lib.icon", path: d.path, art: true, size: 512 }).then(function (i) {
+        return i && i.dataUri ? i.dataUri : null;
+      }, function () { return null; });
+    }, function () { return null; });
+    return heroes[id];
+  }
+
+  /* Fire-and-forget upgrade to the native 3840x1240 heroes. It is a job on
+     the host and this deliberately does not poll it: the next time a tile
+     asks for its hero the cached upgrade is simply there. Silent on
+     failure, because a console with no network must not report an error
+     for artwork nobody asked for. */
+  function prefetchArt(appIds, kind) {
+    if (!appIds || !appIds.length) return Promise.resolve(null);
+    return call({ cmd: "meta.prefetch", appIds: appIds, kind: kind || "hero" })
+      .then(function (d) { log("meta.prefetch started for " + appIds.length + " titles"); return d; },
+            function (err) { log("meta.prefetch not started: " + err.message); return null; });
+  }
+
+  /* ── Live install detection ────────────────────────────────────────
+     The shell used to scan once at boot and paint from cache, so a game
+     installed while it was running stayed invisible until somebody
+     restarted the console. The host now watches the folders that
+     actually change during an install and debounces the storm — Steam
+     rewrites an appmanifest dozens of times over one download — into a
+     single sequence number.
+
+     This is a CURSOR, not a subscription: lib.changed asks "what has
+     happened since N?" and gets back everything at once, so a poll that
+     is late loses nothing and a poll that overlaps a rescan cannot
+     double-count. Same shape as ui/files.js's fs.events, on purpose.
+
+     Started once, after the first successful scan, and never stopped:
+     the rail is live for as long as the shell is. A host that does not
+     understand lib.watch (an older binary) fails the first call and the
+     loop simply never starts, which is the pre-watch behaviour exactly. */
+  var watch = { on: false, since: 0, timer: null, ms: 1500 };
+
+  function startWatch() {
+    if (watch.on) return Promise.resolve(null);
+    watch.on = true;
+    return call({ cmd: "lib.watch" }).then(function () {
+      log("watching for installs and removals (poll every " + watch.ms + " ms)");
+      watch.timer = setInterval(pollChanged, watch.ms);
+      return true;
+    }, function (err) {
+      watch.on = false;
+      log("live install detection unavailable: " + err.message);
+      return false;
+    });
+  }
+
+  function pollChanged() {
+    if (state.scanning) return;                 /* a rescan is already in flight */
+    call({ cmd: "lib.changed", since: watch.since }).then(function (d) {
+      if (!d) return;
+      if (typeof d.seq === "number") watch.since = d.seq;
+      var evs = d.events || [], i, e, changed = false;
+      for (i = 0; i < evs.length; i++) {
+        e = evs[i];
+        if (!e || e.kind !== "lib.changed" || !e.data) continue;
+        if (e.data.addedCount || e.data.removedCount) {
+          changed = true;
+          log("library changed: +" + (e.data.addedCount || 0) + " -" + (e.data.removedCount || 0));
+        }
+      }
+      if (!changed) return;
+      /* The host has ALREADY rescanned — that is what produced the event —
+         and written the result to its cache. lib.list reads that back in a
+         few ms; calling refresh() here would make it scan the whole disk a
+         second time to learn what it just learned. refresh() stays as the
+         fallback for a cache that came back empty. */
+      call({ cmd: "lib.list" }).then(function (doc) {
+        if (doc && !doc.never && doc.entries && doc.entries.length) announce(absorb(doc));
+        else MarwanLibrary.refresh();
+      }, function () { MarwanLibrary.refresh(); });
+    }, function () { /* a missed poll is not an error; the cursor catches up */ });
+  }
+
+  /* Every Steam appid in the current scan, for prefetchArt. */
+  function steamAppIds() {
+    var out = [], id;
+    for (id in entriesById) {
+      if (!Object.prototype.hasOwnProperty.call(entriesById, id)) continue;
+      if (id.indexOf("steam:") === 0) out.push(id.slice(6));
+    }
+    return out;
+  }
+
   /* ── The art record ────────────────────────────────────────────────
      One promise per tile, resolved once and shared by the rail and the
      backdrop, so pointing at a title twice costs nothing the second time.
@@ -610,23 +896,23 @@
        seed   the shell's own tiles and the honest-empty ones, which have
               no artwork by nature and should not pretend otherwise.
 
-     ArcArt is loaded before this file, but it is not required: with the
+     MarwanArt is loaded before this file, but it is not required: with the
      module absent every tile silently keeps the gradient face index.html
      gave it, which is the pre-artwork shell exactly as it was. */
 
   function artFor(app) {
     var id = app && app.id ? app.id : String(app);
     var t = tilesById[id] || (typeof app === "object" ? app : null);
-    if (!root.ArcArt) return Promise.resolve(null);
+    if (!root.MarwanArt) return Promise.resolve(null);
 
     var e = entriesById[id];
     if (!e) {
-      return root.ArcArt.build(id, {
+      return root.MarwanArt.build(id, {
         seed: (t && t.mono) ? { mono: true } : { h: (t && t.hue) || 214 }
       });
     }
     return coverFor(id).then(function (uri) {
-      return root.ArcArt.build(id, {
+      return root.MarwanArt.build(id, {
         cover: uri || null,
         icon:  uri ? null : (e.icon || null),
         seed:  { h: 214 }
@@ -693,12 +979,17 @@
 
   /* ═══ Public ═══════════════════════════════════════════════════════ */
 
-  var ArcLibrary = {
+  var MarwanLibrary = {
     onUpdate: null,
 
     initial: function (h) {
-      if (h) { hooks.files = h.files || null; hooks.browser = h.browser || null; }
-      var apps = placeholder(scanningTile());
+      if (h) {
+        hooks.files = h.files || null;
+        hooks.browser = h.browser || null;
+        hooks.toast = h.toast || null;
+      }
+      var apps = placeholder(scanningTile);
+      showingScan = true;
       remember(apps);
       return apps;
     },
@@ -710,7 +1001,8 @@
       if (!detectTransport()) {
         log("no bridge: " + tx.why);
         state.error = "no_bridge";
-        return Promise.resolve(placeholder(noBridgeTile(tx.why)));
+        showingScan = false;
+        return Promise.resolve(placeholder(function (which) { return noBridgeTile(tx.why, which); }));
       }
       return call({ cmd: "lib.list" }).then(function (doc) {
         var apps;
@@ -719,21 +1011,22 @@
           announce(apps);
           log("painted " + doc.entries.length + " cached entries (" + state.ageSeconds + "s old)");
         } else {
-          apps = placeholder(scanningTile());
+          apps = placeholder(scanningTile);
+          showingScan = true;              /* the rail IS the scanning card; keep it live */
         }
         /* Refresh regardless: the cache is a head start, never the answer. */
-        ArcLibrary.refresh();
+        MarwanLibrary.refresh();
         return apps;
       }, function (err) {
         log("lib.list failed: " + err.message);
-        return ArcLibrary.refresh();
+        return MarwanLibrary.refresh();
       });
     },
 
     refresh: function () {
       if (!detectTransport()) {
         state.error = "no_bridge";
-        return Promise.resolve(announce(placeholder(noBridgeTile(tx.why))));
+        return Promise.resolve(announce(placeholder(function (which) { return noBridgeTile(tx.why, which); })));
       }
       if (state.scanning) return Promise.resolve(null);
       state.scanning = true;
@@ -743,16 +1036,27 @@
         var apps = absorb(doc);
         log("scan complete: " + (doc.counts ? doc.counts.games : "?") + " games, " +
             (doc.counts ? doc.counts.apps : "?") + " apps in " + doc.elapsedMs + " ms");
-        return announce(apps);
+        if (doc.notInstalled && doc.notInstalled.length)
+          log(doc.notInstalled.length + " entr" + (doc.notInstalled.length === 1 ? "y was" : "ies were") +
+              " dropped as not actually installed");
+        var out = announce(apps);
+        /* Both of these are deliberately AFTER announce: the rail is painted
+           from what the scan already found, and neither of them may delay it. */
+        startWatch();
+        prefetchArt(steamAppIds(), "hero");
+        return out;
       }, function (err) {
         state.scanning = false;
         state.error = err.message;
         log("scan failed: " + err.message);
-        var t = noBridgeTile("The scan failed: " + err.message);
-        t.title = "The library scan failed";
-        t.desc = "The host could not finish reading what is installed, so the rail is showing you " +
-                 "this instead of a guess. " + err.message;
-        return announce(placeholder(t));
+        var why = err.message;
+        return announce(placeholder(function (which) {
+          var t = noBridgeTile("The scan failed: " + why, which);
+          t.title = "The library scan failed";
+          t.desc = "The host could not finish reading what is installed, so the rail is showing you " +
+                   "this instead of a guess. " + why;
+          return t;
+        }));
       });
     },
 
@@ -780,6 +1084,11 @@
              foreground back when it is empty. */
           hostPost({
             type: "launched", id: id, title: e.title,
+            /* What this tile IS, as opposed to how it was started. The host's
+               pointer mode is the consumer: a launcher is a mouse UI and gets a
+               cursor when it takes the screen, a game reads the pad itself and
+               must never have one pushed at it. */
+            entryKind: e.kind || "",
             pid: d.pid || 0, launchKind: d.launchKind,
             launchTarget: d.launchTarget || e.launchTarget,
             trackable: !!d.trackable, pidIsTarget: !!d.pidIsTarget
@@ -793,6 +1102,18 @@
     },
 
     cover: function (app) { return coverFor(app && app.id ? app.id : app); },
+
+    /* The landscape hero for a backdrop, as a data URI, or null. Local and
+       instant; see heroFor. index.html's paintHero is the intended caller:
+         MarwanLibrary.hero(app.id).then(uri => { if (uri) setHero(uri); });
+       Null is a real answer — non-Steam titles have no hero and the shell
+       should keep the generated backdrop rather than invent one. */
+    hero: function (app) { return heroFor(app && app.id ? app.id : app); },
+
+    /* Fire-and-forget upgrade of a list of Steam appids to native 3840x1240
+       heroes. Called automatically after every scan; exposed so a settings
+       screen can offer it on demand. */
+    prefetchArt: prefetchArt,
 
     art: artFor,
 
@@ -810,5 +1131,5 @@
     decorate: decorate
   };
 
-  root.ArcLibrary = ArcLibrary;
+  root.MarwanLibrary = MarwanLibrary;
 })(typeof window !== "undefined" ? window : this);

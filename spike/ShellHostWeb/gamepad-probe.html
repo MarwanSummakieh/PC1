@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>ARC OS - Gamepad probe</title>
+<title>MarwanOS - Gamepad probe</title>
 <style>
   html,body{margin:0;height:100%;background:#04060b;color:#c7d6ee;
     font:400 22px/1.5 "Segoe UI",system-ui,sans-serif;
@@ -47,7 +47,7 @@ function render(){
 }
 render();
 addEventListener("gamepadconnected", function(e){
-  if (window.arcPost) window.arcPost({type:"log", target:"gamepadconnected event: index=" + e.gamepad.index + " id=" + e.gamepad.id + " mapping=" + e.gamepad.mapping});
+  if (window.mosPost) window.mosPost({type:"log", target:"gamepadconnected event: index=" + e.gamepad.index + " id=" + e.gamepad.id + " mapping=" + e.gamepad.mapping});
 });
 /* Escape still exits via the host's native accelerator hook. */
 </script>

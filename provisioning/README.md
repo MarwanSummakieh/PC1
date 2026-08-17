@@ -32,7 +32,7 @@ This is enforced, not just intended:
 * `92-remove-test-account.ps1` refuses to delete the account you are currently signed in
   as, and refuses to touch a profile flagged `Special`.
 
-Everything runs against the account `arcshell`: a standard, non-administrative, local,
+Everything runs against the account `marwanshell`: a standard, non-administrative, local,
 disposable test account.
 
 ---
@@ -52,11 +52,11 @@ cd C:\Users\brain\Documents\repos\PC1\provisioning
 | 0 | — | Read **`RECOVERY.md`** end to end. Record your BitLocker recovery key. | — |
 | 1 | `01-enable-shell-launcher.ps1` | Installs the `Client-DeviceLockdown` + `Client-EmbeddedShellLauncher` optional features. **May require a reboot.** No account is affected. | **Yes** |
 | — | *(reboot if step 1 reported `RestartNeeded`)* | | |
-| 2 | `02-create-test-account.ps1` | Creates the local user `arcshell`. Prints its password **once**. | **Yes** |
+| 2 | `02-create-test-account.ps1` | Creates the local user `marwanshell`. Prints its password **once**. | **Yes** |
 | 3 | *(build `spike\ShellHost.exe`)* | Step 3 refuses to configure a shell path that does not exist, unless you pass `-AllowMissingShell`. | — |
-| 4 | `03-apply-shell-launcher.ps1` | **The consequential one.** Sets the default shell to `explorer.exe`, sets `ShellHost.exe` as `arcshell`'s shell, enables enforcement. Takes effect at the next sign-in. | **Yes — and read `RECOVERY.md` first** |
-| 5 | `Ctrl`+`Alt`+`Del` → **Switch user** → sign into `arcshell` | Keep the `brain` session alive. Do **not** sign out. | — |
-| 6 | `04-install-broker.ps1` | Registers the SYSTEM scheduled task `\ARC\arc-install-broker` and creates `C:\ProgramData\ARC`. **Independent of steps 1–5** — apply or remove it on its own, in either order. | **Yes** |
+| 4 | `03-apply-shell-launcher.ps1` | **The consequential one.** Sets the default shell to `explorer.exe`, sets `ShellHost.exe` as `marwanshell`'s shell, enables enforcement. Takes effect at the next sign-in. | **Yes — and read `RECOVERY.md` first** |
+| 5 | `Ctrl`+`Alt`+`Del` → **Switch user** → sign into `marwanshell` | Keep the `brain` session alive. Do **not** sign out. | — |
+| 6 | `04-install-broker.ps1` | Registers the SYSTEM scheduled task `\MarwanOS\marwan-install-broker` and creates `C:\ProgramData\MarwanOS`. **Independent of steps 1–5** — apply or remove it on its own, in either order. | **Yes** |
 
 Every script accepts `-WhatIfOnly`. Use it on the first pass — it runs all the
 pre-checks and guards and prints the exact calls it would make, without writing anything:
@@ -74,7 +74,7 @@ pre-checks and guards and prints the exact calls it would make, without writing 
 .\91-disable-shell-launcher.ps1         # last — removes the feature
 ```
 
-Run `94` **before** `92` if you are tearing the whole thing down: `92` deletes `arcshell`,
+Run `94` **before** `92` if you are tearing the whole thing down: `92` deletes `marwanshell`,
 and the broker's ACLs and task DACL reference that SID.
 
 `91` refuses to run while enforcement is still on, unless you pass `-Force`. That
@@ -88,12 +88,38 @@ you need in order to clear the configuration.
 | Apply | Undo | Reverses |
 | --- | --- | --- |
 | `01-enable-shell-launcher.ps1` | `91-disable-shell-launcher.ps1` | `Enable-WindowsOptionalFeature` → `Disable-WindowsOptionalFeature -FeatureName Client-EmbeddedShellLauncher -NoRestart`. Leaves `Client-DeviceLockdown` alone unless `-AlsoDisableDeviceLockdown`. |
-| `02-create-test-account.ps1` | `92-remove-test-account.ps1` | `New-LocalUser` + `Add-LocalGroupMember` → `Remove-CimInstance` on `Win32_UserProfile` (deletes `C:\Users\arcshell`) then `Remove-LocalUser`. **Destructive.** Prompts for typed confirmation. |
+| `02-create-test-account.ps1` | `92-remove-test-account.ps1` | `New-LocalUser` + `Add-LocalGroupMember` → `Remove-CimInstance` on `Win32_UserProfile` (deletes `C:\Users\marwanshell`) then `Remove-LocalUser`. **Destructive.** Prompts for typed confirmation. |
 | `03-apply-shell-launcher.ps1` | `93-remove-shell-launcher-config.ps1` | `SetDefaultShell` + `SetCustomShell` + `SetEnabled($true)` → `SetDefaultShell("explorer.exe",0)` + `RemoveCustomShell(<sid>)` + `SetEnabled($false)`. Use `-All` to clear every per-SID entry when the state is unknown. |
-| `04-install-broker.ps1` | `94-remove-install-broker.ps1` | `RegisterTaskDefinition` + directory ACLs → `DeleteTask` + delete the `\ARC` task folder. `C:\ProgramData\ARC` is kept (it holds the install log) unless `-RemoveData`. |
+| `04-install-broker.ps1` | `94-remove-install-broker.ps1` | `RegisterTaskDefinition` + directory ACLs → `DeleteTask` + delete the `\MarwanOS` task folder. `C:\ProgramData\MarwanOS` is kept (it holds the install log) unless `-RemoveData`. |
 
 All eight scripts are **idempotent**: re-running one converges on the same state rather
 than erroring or double-applying.
+
+### The de-Microsofting scripts (20–22)
+
+Numbered apart from the shell-launcher sequence because they are independent of it and of
+each other, and undone by a script numbered **down** from 90 rather than up from it —
+`20↔90`, `21↔89`, `22↔88` — since `91`–`94` were already spoken for. All of them are dry
+runs unless given `-Apply`.
+
+| Apply | Undo | Reverses |
+| --- | --- | --- |
+| `20-disable-defender.ps1` | `90-restore-defender.ps1` | Defender + SmartScreen off → back on. Needs Tamper Protection cleared by hand first. |
+| `21-set-default-browser.ps1` | `89-restore-default-browser.ps1` | Registers MarwanOS as a browser and enforces it as the default for http/https via the `DefaultAssociationsConfiguration` policy → removes the registration and restores the previous policy value. |
+| `22-remove-edge-browser.ps1` | `88-restore-edge-browser.ps1` | De-registers, hides and blocks Edge (optionally uninstalls it) → restores the registration, shortcuts and launchability from `C:\MarwanOS\backup`. An `-Uninstall` run is not reversible from the backup. |
+
+**Order matters between 21 and 22.** Run 21 first. A machine where Edge has been
+de-registered and nothing else claims `http` is a machine where a clicked link goes
+nowhere at all.
+
+**What makes a link open in the console's browser.** The registered handler is
+`MarwanOpenUrl.exe` (built by `spike\ShellHostWeb\build-openurl.cmd`), not the shell
+binary — registering the shell would make every clicked link start a *second* full shell
+against the same WebView2 user-data folder and the same pad. The opener finds the shell
+already running in the caller's session, hands it the URL over `WM_COPYDATA`, and exits;
+the shell opens it as a browser tab through the same page path the pad uses. Both halves
+have to be deployed together: a shell binary without the receiver will never answer, and
+every link will silently land in the queue file instead.
 
 ---
 
@@ -203,32 +229,77 @@ machine still prompts exactly as before.
 ### The shape of it
 
 ```
-arcshell (no elevation)          SYSTEM (elevated, pre-authorised)
-─────────────────────────        ─────────────────────────────────
-arc-install.ps1
-  writes queue\<id>.req    ──►
-  schtasks /run \ARC\...   ──►   arc-install-worker.ps1
-                                   reads the id
-                                   looks it up in packages.json
-                                   downloads the pinned https url
-                                   checks the Authenticode signer
-                                   runs it with the pinned args
-                                   confirms verifyPath exists
-  polls processed\…result  ◄──    writes the result
+marwanshell (no elevation)              SYSTEM (elevated, pre-authorised)
+──────────────────────────────       ─────────────────────────────────────
+shell / marwan-install.ps1
+  writes queue\<ticket>.req    ──►
+    verb=install
+    package=steam
+  schtasks /run \MarwanOS\...  ──►     marwan-install-worker.ps1
+                                         reads the verb + its one argument
+                                         validates it against the grammar
+                                         ┌ install         → packages.json entry:
+                                         │                   pinned https url, Authenticode
+                                         │                   signer, pinned args, verifyPath
+                                         ├ updates.install → WUA COM search/download/install
+                                         ├ wifi.forget     → netsh wlan delete profile
+                                         └ bt.forget       → BluetoothRemoveDevice
+  tails processed\…progress   ◄──      appends one line per event
+  reads processed\…result     ◄──      writes the result (verb, status, exitcode, detail)
 ```
+
+### Verbs
+
+The broker performs **exactly four verbs**, and nothing else. Anything else is `REJECTED`
+without being executed.
+
+| Verb | Argument | Grammar | What runs |
+|---|---|---|---|
+| `install` | `package` | `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$` **and** present in `packages.json` | the manifest entry — pinned url, publisher check, pinned args, `verifyPath` |
+| `updates.install` | *(none)* | — | Windows Update Agent COM: search `IsInstalled=0 and Type='Software' and IsHidden=0`, download, install. Result adds `installed=<n>` and `rebootRequired=` |
+| `wifi.forget` | `ssid` | 1–32 chars, no control characters, no `"` | `netsh wlan delete profile name=<ssid>`, passed as an argument **array** |
+| `bt.forget` | `address` | exactly 12 hex digits, no separators | `BluetoothRemoveDevice` (`bthprops.cpl`) |
+
+The request file is key=value, `verb=` first. A request whose first line is not `verb=` is
+read as a v1 request: the line is a package id and the verb is `install`. Unknown keys are
+ignored.
 
 ### The boundary, and how to not destroy it
 
-The request file carries **an id and nothing else** — no URL, no path, no arguments, no
-hash. All of those come from `packages.json`, which lives in a directory standard users
-cannot write to, and the worker **refuses to run** if it detects that has stopped being
-true.
+**No verb takes a path, a URL, a command line, an argument list or a hash.** `install`
+names a manifest slug; everything downloaded or executed comes from `packages.json`, which
+lives in a directory standard users cannot write to, and the worker **refuses to run** if
+it detects that has stopped being true. `wifi.forget` and `bt.forget` take one identifier,
+validated against a strict pattern and handed to a *fixed* program as an argument array —
+never concatenated into a command string, so there is no shell to escape.
+`updates.install` takes nothing at all.
 
 That constraint is the entire security model. A broker that accepted a caller-supplied URL
 or path — or a "skip verification" flag, or a "just this once" escape hatch — would be a
-permanent SYSTEM backdoor for every process running as `arcshell`. Adding an entry to
+permanent SYSTEM backdoor for every process running as `marwanshell`. Adding an entry to
 `packages.json` is a deliberate decision to let the shell install that software with nobody
-at the machine. Adding a general-purpose escape is a decision to hand `arcshell` the box.
+at the machine. Adding a general-purpose verb is a decision to hand `marwanshell` the box.
+
+### The progress file
+
+The worker mirrors every log line for the ticket it is working on into
+`processed\<ticket>.progress`, append-only, one line per event:
+
+```
+2026-08-16 17:41:25 Ticket 71a38499-…: picked up.
+2026-08-16 17:41:25 Ticket 71a38499-…: v2 request, verb='updates.install'.
+2026-08-16 17:41:28 Ticket 71a38499-…: 1 update(s) pending.
+2026-08-16 17:41:38 Ticket 71a38499-…: install resultCode=2, installed=1, rebootRequired=False
+```
+
+It exists from the moment the ticket is picked up, so a caller can show something long
+before the result file appears — a manifest download or a Windows Update run is minutes of
+otherwise-silent waiting. The shell tails it for the on-screen progress.
+
+**Readers must open it with `FileShare.ReadWrite`.** A reader that does not share write
+access makes the worker's own append fail; during bring-up that silently swallowed a
+progress line. The worker now retries a failed append, and `marwan-install.ps1` shows the
+right way to read a file that is still being written.
 
 ### Provenance is pinned by publisher, not by hash
 
@@ -250,16 +321,56 @@ is not installed at all. Direct download is therefore the primary path. An entry
 carry `wingetId`, which is preferred *only* when winget actually resolves, so one manifest
 serves both the bench and the laptop.
 
+One consequence reaches the screen. `admin.catalog` returns a `source` per package, and the
+consent sheet prints it: the **host of the entry's `url`** (`cdn.akamai.steamstatic.com`,
+`aka.ms`), falling back to `winget · <id>` only where an entry has no url. It printed the
+`wingetId` until 2026-08-16, which named a package manager this machine does not have on
+the one screen whose whole job is to say truthfully where the bytes are about to come from.
+
+### Installers that need a person as well as a token (`interactive`), and installers already on disk (`path`)
+
+Two manifest fields were forced by League of Legends (2026-08-16, BENCH-CHANGES Round 7):
+
+* **`interactive: true`** — the worker still downloads and verifies the file, but then starts
+  it **as SYSTEM inside the console session**, on the interactive desktop
+  (`SetTokenInformation(TokenSessionId)` + `CreateProcessAsUser`, i.e. what `psexec -s -i`
+  does), and waits until every SYSTEM-owned `postKill` process has been closed. The person
+  sees the vendor's own setup window on the console and finishes there. Why: Riot's client
+  installs Vanguard through an *elevated agent* that only exists while its installer runs
+  elevated; a fresh unelevated Riot Client has none and falls back to a UAC prompt nobody
+  can answer. Running the vendor's UI elevated is exactly what a UAC "Yes" would have
+  produced — minus the dialog. It does mean a SYSTEM-owned window on the player's screen for
+  the duration, which is why the consent sheet spells it out ("its own setup window opens on
+  this screen") and why the entry has to be marked deliberately in the manifest.
+* **`postKill`** — process *names* (never paths); the worker stops SYSTEM-owned processes with
+  those names after the installer exits. Riot's installer ignores `--disable-auto-launch` and
+  leaves its client running under the broker's token; before this the ticket never finished
+  (`Start-Process -Wait` waits for the whole tree — the worker now waits for the installer
+  process only). Only SYSTEM-owned processes are ever touched: the player's own copy of the
+  same program is never killed.
+* **`path`** instead of `url` — an installer some other program has already put on disk
+  (absolute; may end in a `*.exe` glob, newest match wins). Publisher pin still mandatory,
+  and the file is **copied into the broker cache before it is verified and run**, so a swap
+  in the (typically user-writable) source folder between check and run is impossible.
+  `admin.catalog` reports such entries with `ready:false` + `readyNote` until the file
+  exists, and the shell shows the row disabled rather than letting a hold end in FAILED.
+
 ### Known limits
 
 * The worker runs as SYSTEM, which has no interactive user profile. **Machine-scope
   installs work; per-user installs do not** reliably, and when they do they land outside
-  `arcshell`'s profile. Install user-scope-only software from an interactive session.
+  `marwanshell`'s profile. Install user-scope-only software from an interactive session.
 * Unsigned installers cannot be brokered. That is deliberate: there is no provenance to
   pin, so there is nothing separating "the vendor's installer" from "whatever answered
   that hostname today".
 * The installer's exit code is treated as a claim, not evidence. Where an entry names a
   `verifyPath`, that file existing is what decides OK versus FAILED.
+* `wifi.forget` and `bt.forget` depend on hardware and services that may not be there.
+  On a box with no WLAN service `netsh` fails and the result is `FAILED` carrying netsh's
+  own text; `bt.forget` for an unknown device returns `FAILED` with the Win32 code (1168,
+  "Element not found"). Neither is treated as success.
+* `updates.install` runs the Windows Update Agent as SYSTEM. It can take a long time and
+  may report `rebootRequired=true`; restarting is left to the shell and the user.
 
 ---
 
@@ -290,19 +401,25 @@ them empirically before trusting the setup:
 ```
 provisioning/
 ├── README.md                            this file
-├── RECOVERY.md                          READ BEFORE SIGNING INTO arcshell
+├── RECOVERY.md                          READ BEFORE SIGNING INTO marwanshell
 ├── MACHINE-CHANGES.md                   change log — fill in as you go
 ├── 01-enable-shell-launcher.ps1         apply:  optional feature
-├── 02-create-test-account.ps1           apply:  arcshell local account
-├── 03-apply-shell-launcher.ps1          apply:  custom shell for arcshell only
-├── 04-install-broker.ps1                apply:  SYSTEM install broker (no-UAC installs)
+├── 02-create-test-account.ps1           apply:  marwanshell local account
+├── 03-apply-shell-launcher.ps1          apply:  custom shell for marwanshell only
+├── 04-install-broker.ps1                apply:  SYSTEM broker (no-UAC privileged verbs)
+├── 20-disable-defender.ps1              apply:  Defender + SmartScreen off
+├── 21-set-default-browser.ps1           apply:  MarwanOS registered + default for http/https
+├── 22-remove-edge-browser.ps1           apply:  Edge de-registered, hidden, blocked
+├── 88-restore-edge-browser.ps1          undo 22
+├── 89-restore-default-browser.ps1       undo 21
+├── 90-restore-defender.ps1              undo 20
 ├── 91-disable-shell-launcher.ps1        undo 01
 ├── 92-remove-test-account.ps1           undo 02
 ├── 93-remove-shell-launcher-config.ps1  undo 03  ← the recovery script
 ├── 94-remove-install-broker.ps1         undo 04
 └── install-broker/
-    ├── arc-install-worker.ps1           privileged half — runs as SYSTEM
-    ├── arc-install.ps1                  unprivileged half — what ShellHost calls
+    ├── marwan-install-worker.ps1           privileged half — runs as SYSTEM
+    ├── marwan-install.ps1                  unprivileged half — what ShellHost calls
     └── packages.json                    the only thing the broker will install
 ```
 

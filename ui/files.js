@@ -1,30 +1,34 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   PC1 — file explorer  (ui/files.js)
+   MarwanOS — file explorer  (ui/files.js)
 
    A controller-driven file manager. No dependencies, no build step, no module
-   system: this file defines one global, `ArcFiles`, in the same plain-JS style
+   system: this file defines one global, `MarwanFiles`, in the same plain-JS style
    as index.html and ui/osk.js.
 
    Public API
    ──────────
-     ArcFiles.open({ path, transport, onExit, title })
-     ArcFiles.close()
-     ArcFiles.isOpen()
-     ArcFiles.handleAction(action)   // the pad channel — returns true if consumed
-     ArcFiles.beginRepeat(action)    // hold-to-repeat: press
-     ArcFiles.endRepeat()            // hold-to-repeat: release
-     ArcFiles.setTransport(fn)       // fn(commandObject) -> Promise(envelope)
-     ArcFiles.probe()                // which transport was chosen, and why
-     ArcFiles.debugState()
-     ArcFiles._model                 // pure helpers, for the headless test
+     MarwanFiles.open({ path, transport, onExit, title, pick })
+                                        // pick: {onPick(entry), accept(entry),
+                                        //        rejectText} turns Cross on a
+                                        //        file into "choose it" instead
+                                        //        of "open it", and closes.
+     MarwanFiles.close()
+     MarwanFiles.isOpen()
+     MarwanFiles.handleAction(action)   // the pad channel — returns true if consumed
+     MarwanFiles.beginRepeat(action)    // hold-to-repeat: press
+     MarwanFiles.endRepeat()            // hold-to-repeat: release
+     MarwanFiles.setTransport(fn)       // fn(commandObject) -> Promise(envelope)
+     MarwanFiles.probe()                // which transport was chosen, and why
+     MarwanFiles.debugState()
+     MarwanFiles._model                 // pure helpers, for the headless test
 
    Integration with the shell
    ──────────────────────────
    The explorer is modal in exactly the way the on-screen keyboard is: while it
    is up it takes every action, and nothing behind it moves. In index.html's
-   Nav.action(), after the ArcOSK line:
+   Nav.action(), after the MarwanOSK line:
 
-       if (window.ArcFiles && ArcFiles.isOpen() && ArcFiles.handleAction(button || action)) return "files";
+       if (window.MarwanFiles && MarwanFiles.isOpen() && MarwanFiles.handleAction(button || action)) return "files";
 
    It renders its own hint bar from its own scope stack, using the same PS5
    glyph vocabulary as the shell, so it needs nothing from the shell's Hints
@@ -36,8 +40,8 @@
    and resolves to FileApi's envelope, {ok:true,data} or {ok:false,error,detail}.
    Four are auto-detected, in order:
 
-     1. window.arcFileApi(json)                    — a host-injected function
-     2. chrome.webview.hostObjects.arcFiles.Handle — a host object
+     1. window.mosFileApi(json)                    — a host-injected function
+     2. chrome.webview.hostObjects.mosFiles.Handle — a host object
      3. chrome.webview postMessage {type:"fs"}     — reply {type:"fs.reply"}
      4. nothing                                    — the explorer says so on
                                                      screen instead of pretending
@@ -47,7 +51,7 @@
    This runs inside the Windows shell process. An escaped exception blanks a
    television, so every entry point — public method, event listener, timer,
    promise handler — is wrapped by guard(). Failures are logged and, when the
-   ShellHostWeb shim is present, forwarded to the host log via window.arcPost.
+   ShellHostWeb shim is present, forwarded to the host log via window.mosPost.
 
    Styling lives in ui/files.css. It is a separate file rather than an injected
    <style> block because a strict CSP (`style-src 'self'`) blocks inline style
@@ -64,9 +68,9 @@ var VERSION = "1.0.0";
 /* ═══ Crash isolation ══════════════════════════════════════════════════ */
 
 function emit(level, where, what) {
-  var msg = "ArcFiles[" + where + "] " + (what && what.stack ? what.stack : what);
+  var msg = "MarwanFiles[" + where + "] " + (what && what.stack ? what.stack : what);
   try { if (root.console && console[level]) console[level](msg); } catch (e) {}
-  try { if (typeof root.arcPost === "function") root.arcPost({ type: "log", target: msg }); } catch (e) {}
+  try { if (typeof root.mosPost === "function") root.mosPost({ type: "log", target: msg }); } catch (e) {}
 }
 function report(where, err) { emit("error", where, err); }
 function note(where, what) { emit("info", where, what); }
@@ -203,34 +207,22 @@ function svg(name, cls) {
   return '<svg viewBox="0 0 24 24"' + (cls ? ' class="' + cls + '"' : "") + ' aria-hidden="true">' + d + "</svg>";
 }
 
-/* ── DualSense glyphs ─────────────────────────────────────────────────
-   Lifted verbatim from index.html's vocabulary so the two hint bars are the
-   same object — read the long note beside PAD_GLYPH there for where each of
-   these shapes comes from and why the PS button is not among them. Keep the
-   two tables in step: a file explorer whose Cross is a different Cross from
-   the home screen's is worse than either drawing on its own. */
+/* ── DualSense prompts ────────────────────────────────────────────────
+   PromptFont (SIL OFL 1.1), lifted verbatim from index.html's table so the
+   two hint bars are the same object — read the long note beside PAD_GLYPH
+   there. Keep the two in step: a file explorer whose Cross is a different
+   Cross from the home screen's is worse than either drawing on its own. */
 var PAD_GLYPH = {
-  cross:    '<path class="face" d="M5.7 5.7 18.3 18.3M18.3 5.7 5.7 18.3"/>',
-  circle:   '<circle class="face" cx="12" cy="12" r="6.15"/>',
-  square:   '<rect class="face" x="6.45" y="6.45" width="11.1" height="11.1"/>',
-  triangle: '<path class="face tri" d="M12 3.7 20 17.9H4z"/>',
-  dpad:     '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z"/>'
-          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z"/>'
-          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z"/>'
-          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z"/>',
-  dpadLR:   '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z" opacity=".3"/>'
-          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z" opacity=".3"/>'
-          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z"/>'
-          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z"/>',
-  dpadUD:   '<path class="solid" d="M7.2.6H16.8V6L12 10.5 7.2 6Z"/>'
-          + '<path class="solid" d="M7.2 23.4H16.8V18L12 13.5 7.2 18Z"/>'
-          + '<path class="solid" d="M.6 7.2V16.8H6L10.5 12 6 7.2Z" opacity=".3"/>'
-          + '<path class="solid" d="M23.4 7.2V16.8H18L13.5 12 18 7.2Z" opacity=".3"/>',
-  l1:       '<rect x="1.2" y="6.8" width="21.6" height="10.4" rx="2.6"/>'
-          + '<text class="lbl" x="12" y="15.1" text-anchor="middle">L1</text>',
-  r1:       '<rect x="1.2" y="6.8" width="21.6" height="10.4" rx="2.6"/>'
-          + '<text class="lbl" x="12" y="15.1" text-anchor="middle">R1</text>',
-  options:  '<path class="solid" d="M3 4.76h18v2H3zM3 11h18v2H3zM3 17.24h18v2H3z"/>'
+  cross:    '<path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M12 11.04L7.61 6.65L6.65 7.61L11.04 12L6.65 16.39L7.61 17.35L12 12.96L16.39 17.35L17.35 16.39L12.96 12L17.35 7.61L16.39 6.65L12 11.04"/>',
+  circle:   '<path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M15.91 8.09Q14.28 6.46 12 6.46Q9.72 6.46 8.09 8.09Q6.46 9.72 6.46 12Q6.46 14.28 8.09 15.91Q9.72 17.54 12 17.54Q14.28 17.54 15.91 15.91Q17.54 14.28 17.54 12Q17.54 9.72 15.91 8.09M9.05 9.05Q10.27 7.82 12 7.82Q13.73 7.82 14.95 9.05Q16.18 10.27 16.18 12Q16.18 13.73 14.95 14.95Q13.73 16.18 12 16.18Q10.27 16.18 9.05 14.95Q7.82 13.73 7.82 12Q7.82 10.27 9.05 9.05"/>',
+  square:   '<path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M16.9 7.1L7.1 7.1L7.1 7.82L7.1 16.9L16.9 16.9L16.9 7.1M8.57 15.43L8.57 8.57L15.43 8.57L15.43 15.43L8.57 15.43"/>',
+  triangle: '<path class="solid" d="M7.46 4.16Q9.55 2.95 12 2.95Q14.45 2.95 16.54 4.16Q18.62 5.38 19.84 7.46Q21.05 9.55 21.05 12Q21.05 14.45 19.84 16.54Q18.62 18.62 16.54 19.84Q14.45 21.05 12 21.05Q9.55 21.05 7.46 19.84Q5.38 18.62 4.16 16.54Q2.95 14.45 2.95 12Q2.95 9.55 4.16 7.46Q5.38 5.38 7.46 4.16M18.05 16.01L12 5.14L5.95 16.01L7.1 16.01L18.05 16.01M8.28 14.66L12 7.94L15.72 14.66L8.28 14.66"/>',
+  dpad:     '<path class="solid" d="M13.58 12.14L18.38 7.2L24 7.2L24 16.8L18.38 16.8L13.58 12.14M22.9 8.21L19.06 8.21L15.26 12.12L19.06 15.79L22.9 15.79L22.9 8.21M0 7.2L5.62 7.2L10.42 12.14L5.62 16.8L0 16.8L0 7.2M8.74 12.12L4.94 8.21L1.1 8.21L1.1 15.79L4.94 15.79L8.74 12.12M12.14 10.42L7.2 5.62L7.2 0L16.8 0L16.8 5.62L12.14 10.42M8.21 1.1L8.21 4.94L12.12 8.74L15.79 4.94L15.79 1.1L8.21 1.1M7.2 24L7.2 18.38L12.14 13.58L16.8 18.38L16.8 24L7.2 24M12.12 15.26L8.21 19.06L8.21 22.9L15.79 22.9L15.79 19.06L12.12 15.26"/>',
+  dpadLR:   '<path class="solid" d="M5.62 16.8L0 16.8L0 7.2L5.62 7.2L10.42 12.14L5.62 16.8M18.38 16.8L24 16.8L24 7.2L18.38 7.2L13.58 12.14L18.38 16.8M12.14 10.42L7.2 5.62L7.2 0L16.8 0L16.8 5.62L12.14 10.42M8.21 1.1L8.21 4.94L12.12 8.74L15.79 4.94L15.79 1.1L8.21 1.1M7.2 24L7.2 18.38L12.14 13.58L16.8 18.38L16.8 24L7.2 24M12.12 15.26L8.21 19.06L8.21 22.9L15.79 22.9L15.79 19.06L12.12 15.26"/>',
+  dpadUD:   '<path class="solid" d="M16.8 18.38L16.8 24L7.2 24L7.2 18.38L12.14 13.58L16.8 18.38M16.8 5.62L16.8 0L7.2 0L7.2 5.62L12.14 10.42L16.8 5.62M10.42 11.86L5.62 16.8L0 16.8L0 7.2L5.62 7.2L10.42 11.86M1.1 15.79L4.94 15.79L8.74 11.88L4.94 8.21L1.1 8.21L1.1 15.79M24 16.8L18.38 16.8L13.58 11.86L18.38 7.2L24 7.2L24 16.8M15.26 11.88L19.06 15.79L22.9 15.79L22.9 8.21L19.06 8.21L15.26 11.88"/>',
+  l1:       '<path class="solid" d="M2.66 7.66L2.66 7.66L21.34 7.66Q22.25 7.66 22.88 8.29Q23.52 8.93 23.52 9.84L23.52 9.84L23.52 14.16Q23.52 15.07 22.88 15.71Q22.25 16.34 21.34 16.34L21.34 16.34L2.66 16.34Q1.75 16.34 1.12 15.71Q.48 15.07 .48 14.16L.48 14.16L.48 9.84Q.48 8.93 1.12 8.29Q1.75 7.66 2.66 7.66M8.64 9.07L6.86 9.07L6.86 14.93L12.29 14.93L12.29 13.87L8.64 13.87L8.64 9.07M17.14 9.07L13.75 9.07L13.75 10.13L15.36 10.13L15.36 14.93L17.14 14.93L17.14 9.07"/>',
+  r1:       '<path class="solid" d="M2.66 7.66L2.66 7.66L21.34 7.66Q22.25 7.66 22.88 8.29Q23.52 8.93 23.52 9.84L23.52 9.84L23.52 14.16Q23.52 15.07 22.88 15.71Q22.25 16.34 21.34 16.34L21.34 16.34L2.66 16.34Q1.75 16.34 1.12 15.71Q.48 15.07 .48 14.16L.48 14.16L.48 9.84Q.48 8.93 1.12 8.29Q1.75 7.66 2.66 7.66M10.82 9.07L6.48 9.07L6.48 14.93L8.26 14.93L8.26 12.72L9.22 12.72L10.68 14.93L12.6 14.93L11.14 12.72Q12.34 12.58 12.34 11.5L12.34 11.5L12.34 10.27Q12.34 9.07 10.82 9.07L10.82 9.07M17.52 9.07L14.16 9.07L14.16 10.13L15.74 10.13L15.74 14.93L17.52 14.93L17.52 9.07M8.26 11.64L8.26 10.13L10.25 10.13Q10.56 10.13 10.56 10.39L10.56 10.39L10.56 11.4Q10.56 11.64 10.25 11.64L10.25 11.64L8.26 11.64"/>',
+  options:  '<path class="solid" d="M3 6.8L3 4.73L21 4.73L21 6.8L3 6.8M3 12.99L3 11.01L21 11.01L21 12.99L3 12.99M3 19.27L3 17.28L21 17.28L21 19.27L3 19.27"/>'
 };
 
 function glyphSVG(name) {
@@ -270,13 +262,13 @@ function detectTransport() {
 
   /* 1. a plain injected function. The host may return a string, an object, or
         a promise of either; all three are normalised here. */
-  if (typeof root.arcFileApi === "function") {
-    tx.name = "arcFileApi";
-    tx.why = "window.arcFileApi(json) is present";
+  if (typeof root.mosFileApi === "function") {
+    tx.name = "mosFileApi";
+    tx.why = "window.mosFileApi(json) is present";
     tx.fn = function (cmd) {
       return new Promise(function (resolve, reject) {
         var r;
-        try { r = root.arcFileApi(JSON.stringify(cmd)); }
+        try { r = root.mosFileApi(JSON.stringify(cmd)); }
         catch (e) { reject(e); return; }
         if (r && typeof r.then === "function") r.then(function (v) { resolve(parseEnv(v)); }, reject);
         else resolve(parseEnv(r));
@@ -288,11 +280,11 @@ function detectTransport() {
   /* 2. a WebView2 host object. AddHostObjectToScript proxies are async. */
   try {
     if (root.chrome && root.chrome.webview && root.chrome.webview.hostObjects &&
-        root.chrome.webview.hostObjects.arcFiles) {
+        root.chrome.webview.hostObjects.mosFiles) {
       tx.name = "hostObject";
-      tx.why = "chrome.webview.hostObjects.arcFiles is present";
+      tx.why = "chrome.webview.hostObjects.mosFiles is present";
       tx.fn = function (cmd) {
-        return Promise.resolve(root.chrome.webview.hostObjects.arcFiles.Handle(JSON.stringify(cmd)))
+        return Promise.resolve(root.chrome.webview.hostObjects.mosFiles.Handle(JSON.stringify(cmd)))
           .then(function (v) { return parseEnv(v); });
       };
       return tx.fn;
@@ -410,6 +402,8 @@ var st = {
   listing: null,
   drives: null,
   places: null,
+  driveInfo: {},           // LETTER -> the drive record fs.drives reported
+  driveFetch: false,       // a fs.drives fetch for the cache is in the air
 
   sel: {},                 // path -> true
   sort: "name",
@@ -429,6 +423,7 @@ var st = {
   inFlight: 0,             // navigations the human asked for, still landing
   err: null,
   onExit: null,
+  pick: null,              // {onPick, accept, rejectText} — see activate()
   repeatTimer: 0,
   repeatAction: null,
   rowH: 54,
@@ -462,7 +457,7 @@ function ensureCSS(doc) {
   if (st.cssChecked) return;
   st.cssChecked = true;
   var probe = doc.createElement("div");
-  probe.className = "arc-files-probe";
+  probe.className = "mos-files-probe";
   doc.body.appendChild(probe);
   var loaded = false;
   try { loaded = getComputedStyle(probe).getPropertyValue("--fx-loaded").indexOf("1") >= 0; }
@@ -485,7 +480,7 @@ function ensureCSS(doc) {
   var link = doc.createElement("link");
   link.rel = "stylesheet";
   link.href = href;
-  link.setAttribute("data-arc-files", "auto");
+  link.setAttribute("data-mos-files", "auto");
   doc.head.appendChild(link);
   note("css", "files.css was not linked; injected <link href=\"" + href + "\">");
 }
@@ -503,7 +498,7 @@ function buildDOM() {
   var doc = document;
   ensureCSS(doc);
 
-  var wrap = el("div", "arc-files");
+  var wrap = el("div", "mos-files");
   wrap.setAttribute("role", "dialog");
   wrap.setAttribute("aria-modal", "true");
   wrap.setAttribute("aria-label", "Files");
@@ -1311,6 +1306,9 @@ function btn(label, o, r, c) {
   b.setAttribute("data-nav", r + "," + c);
   b.dataset.act = o.act || "noop";
   if (o.arg) b.dataset.arg = o.arg;
+  /* Same convention as menuItem: aria-disabled is what the focus walker and
+     activate() both read, so a disabled button cannot be reached or pressed. */
+  if (o.disabled) b.setAttribute("aria-disabled", "true");
   b.addEventListener("click", guard("btn click", function (ev) {
     if (ev.detail === 0) return;
     setDevice("key");
@@ -1365,6 +1363,53 @@ function targetSummary(list) {
   };
 }
 
+/* ═══ What we know about the drive under our feet ══════════════════════
+   fs.drives says, per volume, whether it has a Recycle Bin — and that is the
+   one fact the delete menu needs before it offers to use one. The picker gets
+   the list for free, but an explorer opened straight at a path (the shell does
+   that) never visits the picker, so the answer is cached by drive letter and
+   fetched once, lazily, on arriving somewhere new. */
+
+function driveLetterOf(path) {
+  var m = /^([A-Za-z]):/.exec(String(path || ""));
+  return m ? m[1].toUpperCase() : null;
+}
+
+function noteDrives(list) {
+  if (!list) return;
+  for (var i = 0; i < list.length; i++) {
+    var d = list[i];
+    if (d && d.letter) st.driveInfo[String(d.letter).toUpperCase()] = d;
+  }
+}
+
+function driveOf(path) {
+  var L = driveLetterOf(path);
+  return L ? (st.driveInfo[L] || null) : null;
+}
+
+/* Fire and forget: nothing waits on this. The menu that wants the answer is
+   opened by a human seconds later, and until it lands the answer is "unknown",
+   which is deliberately NOT the same as "no" — see hereHasRecycleBin(). */
+function ensureDriveInfo(path) {
+  var L = driveLetterOf(path);
+  if (!L || st.driveInfo[L] || st.driveFetch) return;
+  st.driveFetch = true;
+  call({ cmd: "fs.drives" })
+    .then(guard("drive cache", function (d) { noteDrives(d && d.drives); }))
+    .catch(function () { /* the menu simply stays on the cautious default */ })
+    .then(function () { st.driveFetch = false; });
+}
+
+/* true / false / null. A null means nobody has told us yet, and an unknown
+   must not be reported to the human as a fact: the host still refuses the
+   recycle itself, which is the honest fallback. */
+function hereHasRecycleBin() {
+  var d = driveOf(st.path);
+  if (!d || d.recycleBin === undefined || d.recycleBin === null) return null;
+  return !!d.recycleBin;
+}
+
 function goTo(path, remember) {
   if (remember && st.view === "dir" && st.path) st.memo[st.path] = st.cursor;
   st.err = null;
@@ -1388,6 +1433,7 @@ function goTo(path, remember) {
       ensureVisible();
       dropAll();
       paintAll();
+      ensureDriveInfo(st.path);
       watchHere();
     }))
     .catch(guard("goTo fail", function (err) {
@@ -1425,6 +1471,7 @@ function goDrives() {
     st.listing = null;
     st.drives = r[0].drives || [];
     st.places = r[1].places || [];
+    noteDrives(st.drives);
     if (r[0]._err) st.err = r[0]._err.message;
     buildRows();
     st.cursor = firstFocusable(0, 1);
@@ -1486,11 +1533,34 @@ function activate() {
     goTo(row.drive.path, true);
     return;
   }
-  if (row.kind === "entry") {
-    var e = row.entry;
-    if (e.isDirectory) { goTo(e.path, true); return; }
-    openFile(e);
+  if (row.kind === "entry") { openEntry(row.entry); return; }
+}
+
+/* Opening one entry, wherever the request came from: Cross on the row under
+   the cursor, or Open in the context menu — which acts on the MARKED item, so
+   it cannot go through activate(). One function, so the two routes cannot
+   drift apart on folders, on pick mode, or on anything added later. */
+function openEntry(e) {
+  if (!e) return;
+  if (e.isDirectory) { goTo(e.path, true); return; }
+
+  /* Pick mode. The explorer is being used to CHOOSE a file rather than
+     to open one — the shell's profile picture is the first caller. The
+     distinction matters: fs.open on a .png launches the Windows photo
+     viewer over the top of the shell, which is the exact opposite of
+     what "choose a picture" means. Absent cfg.pick nothing below runs
+     and the explorer behaves exactly as it always has. */
+  if (st.pick) {
+    if (st.pick.accept && !st.pick.accept(e)) {
+      toast(st.pick.rejectText || "That file cannot be used here.", true);
+      return;
+    }
+    var chosen = st.pick.onPick;
+    close();
+    try { if (chosen) chosen(e); } catch (err) { report("onPick", err); }
+    return;
   }
+  openFile(e);
 }
 
 function openFile(e) {
@@ -1586,14 +1656,27 @@ function openMenu() {
           });
         }
         items.push({ label: "Rename", icon: "rename", act: "menuRename", disabled: !one, sub: one ? one.name : "Select exactly one item" });
-        items.push({
-          label: "Delete", icon: "trash", tone: "danger", act: "menuDelete", arg: "recycle",
-          disabled: !sel.length, sub: "Move to the Recycle Bin"
-        });
-        items.push({
-          label: "Delete permanently", icon: "nuke", tone: "nuke", act: "menuDelete", arg: "permanent",
-          disabled: !sel.length, sub: "Cannot be undone"
-        });
+        /* A volume with no Recycle Bin — a USB stick, an SD card, most network
+           shares — cannot recycle anything, and the host refuses with
+           no_recycle_bin. Offering "Move to the Recycle Bin" there is offering
+           a button whose only possible outcome is a failure toast, so on such a
+           drive the two delete rows collapse into the one delete that exists,
+           and it says up front why that is. */
+        if (hereHasRecycleBin() === false) {
+          items.push({
+            label: "Delete", icon: "nuke", tone: "nuke", act: "menuDelete", arg: "permanent",
+            disabled: !sel.length, sub: "This drive has no Recycle Bin — deleting here is permanent"
+          });
+        } else {
+          items.push({
+            label: "Delete", icon: "trash", tone: "danger", act: "menuDelete", arg: "recycle",
+            disabled: !sel.length, sub: "Move to the Recycle Bin"
+          });
+          items.push({
+            label: "Delete permanently", icon: "nuke", tone: "nuke", act: "menuDelete", arg: "permanent",
+            disabled: !sel.length, sub: "Cannot be undone"
+          });
+        }
         items.push({ label: "New folder", icon: "newdir", act: "menuNewFolder" });
         items.push({ label: "Find in this folder", icon: "search", act: "menuFind", tail: st.find || "" });
         items.push({ label: "Sort by", icon: "sort", act: "menuSort", tail: sortLabel() });
@@ -1626,6 +1709,11 @@ function confirmDelete(mode) {
   var list = targets();
   if (!list.length) { toast("Nothing is selected."); return; }
   var sum = targetSummary(list);
+  /* There is no recycling to be had on a drive with no Recycle Bin, so neither
+     the question nor the third button pretends otherwise: the offer to "use
+     the Recycle Bin instead" is exactly the thing the host would refuse. */
+  var binless = hereHasRecycleBin() === false;
+  if (binless) mode = "permanent";
   var permanent = mode === "permanent";
   var names = [];
   for (var i = 0; i < Math.min(list.length, 6); i++) names.push(list[i].name);
@@ -1639,7 +1727,9 @@ function confirmDelete(mode) {
       : ("Move " + sum.count + (sum.count === 1 ? " item" : " items") + " to the Recycle Bin?"),
     sub: sum.text + " · " + sum.sizeText + ".  " +
          (permanent
-           ? "This does NOT go to the Recycle Bin. Once it is gone there is no way to get it back."
+           ? (binless
+               ? "This drive has no Recycle Bin, so a permanent delete is the only kind there is. Once it is gone there is no way to get it back."
+               : "This does NOT go to the Recycle Bin. Once it is gone there is no way to get it back.")
            : "You can put them back from the Recycle Bin afterwards."),
     danger: permanent,
     hints: ["navLR", "confirm", "cancel"],
@@ -1657,7 +1747,7 @@ function confirmDelete(mode) {
       var acts = el("div", "fx-actions");
       acts.appendChild(btn("Cancel", { act: "back" }, 0, 0));
       if (permanent) {
-        acts.appendChild(btn("Use the Recycle Bin instead", { act: "doDelete", arg: "recycle", tone: "danger" }, 0, 1));
+        if (!binless) acts.appendChild(btn("Use the Recycle Bin instead", { act: "doDelete", arg: "recycle", tone: "danger" }, 0, 1));
         acts.appendChild(btn("Delete permanently", { act: "doDelete", arg: "permanent", tone: "nuke" }, 0, 2));
       } else {
         acts.appendChild(btn("Move to Recycle Bin", { act: "doDelete", arg: "recycle", tone: "danger" }, 0, 1));
@@ -1670,8 +1760,17 @@ function confirmDelete(mode) {
 
 /* ═══ Progress ═════════════════════════════════════════════════════════ */
 
-function watchJob(jobId, title, onDone) {
-  st.job = { id: jobId, title: title, done: false };
+/* opts.recycle marks a job the host cannot stop. A Recycle Bin move is one
+   SHFileOperation call on an STA thread, and that API has no cancel hook: the
+   page's job.cancel only flips a flag the job body never reads, so the delete
+   runs to completion and FJobs then LABELS the finished job "cancelled". A
+   Cancel button there promises something Windows cannot do, and the toast that
+   followed said "cancelled after 0 bytes" about a delete that fully succeeded.
+   Both are handled below rather than papered over. */
+function watchJob(jobId, title, onDone, opts) {
+  opts = opts || {};
+  var noCancel = !!opts.recycle;
+  st.job = { id: jobId, title: title, done: false, recycle: noCancel };
 
   var fill, pctEl, doneEl, rateEl, etaEl, fileEl, probEl, cancelBtn;
 
@@ -1679,8 +1778,12 @@ function watchJob(jobId, title, onDone) {
     id: "progress",
     eyebrow: "Working",
     title: title,
-    sub: "Cancelling stops it where it is; nothing already finished is undone.",
-    hints: ["stop"],
+    sub: noCancel
+      ? "A Recycle Bin move cannot be interrupted once Windows has started it."
+      : "Cancelling stops it where it is; nothing already finished is undone.",
+    /* Nothing to promise on the hint bar when nothing can be pressed. An
+       honest blank beats a Stop glyph that does not stop anything. */
+    hints: noCancel ? [] : ["stop"],
     build: function (bodyEl) {
       var p = el("div", "fx-prog");
       p.innerHTML =
@@ -1697,7 +1800,9 @@ function watchJob(jobId, title, onDone) {
       bodyEl.appendChild(probEl);
 
       var acts = el("div", "fx-actions");
-      cancelBtn = btn("Cancel", { act: "cancelJob", tone: "danger" }, 0, 0);
+      cancelBtn = noCancel
+        ? btn("Cannot be cancelled", { act: "noop", disabled: true }, 0, 0)
+        : btn("Cancel", { act: "cancelJob", tone: "danger" }, 0, 0);
       acts.appendChild(cancelBtn);
       bodyEl.appendChild(acts);
     },
@@ -1752,6 +1857,16 @@ function watchJob(jobId, title, onDone) {
           var r = j.result || {};
           var extra = r.failed ? ("  " + r.failed + " item(s) could not be done — see the log.") : "";
           toast(title + " finished." + extra, !!r.failed);
+        } else if (j.state === "cancelled" && noCancel && j.result) {
+          /* The host stamps a job "cancelled" whenever a cancel was REQUESTED,
+             whatever the body actually did. An uncancellable job that carries a
+             result finished its work: the recycle body only returns an object
+             after SHFileOperation came back clean, and every failing path — a
+             shell error code, an aborted operation — throws instead, which
+             lands as state "error" with an error and no result. So this is a
+             delete that succeeded, and calling it "cancelled after 0 bytes"
+             would be the one lie this panel must not tell. */
+          toast(title + " finished.");
         } else if (j.state === "cancelled") {
           toast(title + " cancelled after " + bytes(j.bytesDone) + ".");
         } else {
@@ -1769,8 +1884,12 @@ function watchJob(jobId, title, onDone) {
 
 /* ═══ Properties ═══════════════════════════════════════════════════════ */
 
-function openProps() {
-  var e = currentEntry();
+/* The caller says WHICH item, because the two callers disagree about it: the
+   context menu is titled from the marked item, and a Properties card for the
+   row the cursor happens to be on instead would describe something the human
+   never named. Absent an argument the cursor row is still the answer. */
+function openProps(e) {
+  if (!e) e = currentEntry();
   if (!e) { toast("Nothing is selected."); return; }
   busy(true);
   call({ cmd: "fs.properties", path: e.path, folderSize: !!e.isDirectory })
@@ -1899,6 +2018,13 @@ function startEventPoll() {
            to the drive picker a moment later. */
         if (st.inFlight > 0) return;
         if (driveChange) {
+          /* Drive facts do not survive a drive going away: the next stick to
+             claim that letter is a different volume with its own answer about
+             a Recycle Bin. Throw the cache away and ask again for wherever we
+             are standing, rather than let a stale "no Recycle Bin" outlive the
+             drive it was true of. */
+          st.driveInfo = {};
+          if (st.view === "dir") ensureDriveInfo(st.path);
           if (st.view === "drives") { softRefresh(); toast("Drive list changed."); }
           else toast("A drive was plugged in or removed.");
         }
@@ -1952,11 +2078,11 @@ function softRefresh() {
 /* ═══ OSK ══════════════════════════════════════════════════════════════ */
 
 function osk(cfg) {
-  if (!root.ArcOSK) {
+  if (!root.MarwanOSK) {
     toast("The on-screen keyboard is not loaded — osk.js must sit next to files.js.", true);
     return false;
   }
-  return root.ArcOSK.open(cfg);
+  return root.MarwanOSK.open(cfg);
 }
 
 /* ═══ Action table ═════════════════════════════════════════════════════ */
@@ -1965,7 +2091,17 @@ var ACT = {
   noop: function () {},
   back: function () { popScope(); },
 
-  menuOpen: function () { popTo("list"); activate(); },
+  /* Open acts on the item the menu is TITLED after — the marked one — not on
+     whatever the cursor is sitting on. Marking a file, moving the cursor
+     elsewhere and choosing "Open" used to open the wrong thing. At the drive
+     picker there is nothing marked and the cursor row is the subject, so
+     activate() remains the right answer there. */
+  menuOpen: function () {
+    var t = st.view === "dir" ? targets()[0] : null;
+    popTo("list");
+    if (t) openEntry(t);
+    else activate();
+  },
 
   menuRefresh: function () { popTo("list"); if (st.view === "drives") goDrives(); else goTo(st.path, false); },
 
@@ -2105,12 +2241,16 @@ var ACT = {
 
   menuFind: function () {
     popTo("list");
+    /* Triangle is not the only way in: Square/F reaches this at the drive
+       picker too, where "in this folder" names a folder that is not on
+       screen. */
+    var drives = st.view === "drives";
     osk({
-      title: "Find in this folder",
+      title: drives ? "Find a drive" : "Find in this folder",
       value: st.find || "",
       mode: "search",
       maxLength: 60,
-      placeholder: "Part of a name",
+      placeholder: drives ? "Part of a name, or a drive letter" : "Part of a name",
       commitLabel: "Find",
       onCommit: guard("find commit", function (v) {
         st.find = (v || "").trim();
@@ -2139,7 +2279,8 @@ var ACT = {
         watchJob(d.jobId,
           permanent ? ("Permanently deleting " + paths.length + " item" + (paths.length === 1 ? "" : "s"))
                     : ("Moving " + paths.length + " item" + (paths.length === 1 ? "" : "s") + " to the Recycle Bin"),
-          function () { softRefresh(); });
+          function () { softRefresh(); },
+          { recycle: !permanent });
       }))
       .catch(guard("delete fail", function (err) {
         busy(false);
@@ -2147,7 +2288,8 @@ var ACT = {
       }));
   },
 
-  menuProps: function () { popTo("list"); openProps(); },
+  // Same rule as menuOpen: the card describes the item the menu named.
+  menuProps: function () { var t = targets()[0]; popTo("list"); openProps(t); },
 
   menuEject: function (elm) {
     var letter = elm.dataset.arg;
@@ -2164,18 +2306,39 @@ var ACT = {
 
   cancelJob: function () {
     if (!st.job) return;
+    /* Circle reaches this even though the button is disabled, so the refusal
+       lives here too — asking the host to cancel a recycle is what produced
+       the "cancelled" label on a delete that had already finished. */
+    if (st.job.recycle) {
+      toast("A Recycle Bin move cannot be interrupted once Windows has started it.");
+      return;
+    }
     call({ cmd: "job.cancel", jobId: st.job.id })
       .then(guard("cancel ok", function () { toast("Stopping…"); }))
       .catch(guard("cancel fail", function (err) { toast("Could not cancel: " + err.message, true); }));
   }
 };
 
+/* What a search is allowed to match on a row. Drive rows carry neither an
+   entry nor a label — the picker prints them out of the drive record — so a
+   search that only looked at those two could never match a drive, and the
+   picker's find silently found nothing at all. Match what the tile shows,
+   plus the letter, because "e" or "e:" is how anyone refers to a stick. */
+function rowSearchText(r) {
+  if (r.entry) return r.entry.name || "";
+  if (r.kind === "drive" && r.drive) {
+    var d = r.drive;
+    return [d.display || "", d.label || "", d.letter || "", d.letter ? d.letter + ":" : "", d.path || ""].join(" ");
+  }
+  return r.label || "";
+}
+
 function jumpToMatch(term, from) {
   var t = term.toLowerCase();
   for (var i = from; i < st.rows.length; i++) {
     var r = st.rows[i];
     if (!r.focusable) continue;
-    var name = r.entry ? r.entry.name : (r.label || "");
+    var name = rowSearchText(r);
     if (name.toLowerCase().indexOf(t) >= 0) {
       st.cursor = i;
       ensureVisible();
@@ -2189,7 +2352,7 @@ function jumpToMatch(term, from) {
 
 /* ═══ The pad channel ══════════════════════════════════════════════════
    One table, whatever the source. Both the semantic names the shell sends
-   and the literal button names ArcOSK uses are accepted, because the two
+   and the literal button names MarwanOSK uses are accepted, because the two
    disagree on purpose — L1/R1 switch views in the shell and page a list
    here, and a host that only knows one spelling still works. */
 
@@ -2210,10 +2373,10 @@ function doAction(a) {
   if (!a) return false;
 
   /* The keyboard is modal and comes first, in case a host wired this up
-     without the ArcOSK line of its own. */
+     without the MarwanOSK line of its own. */
   try {
-    if (root.ArcOSK && root.ArcOSK.isOpen()) {
-      root.ArcOSK.handleAction(a);
+    if (root.MarwanOSK && root.MarwanOSK.isOpen()) {
+      root.MarwanOSK.handleAction(a);
       return true;
     }
   } catch (e) { report("osk route", e); }
@@ -2302,7 +2465,7 @@ function endRepeat() {
 
 /* ═══ Keyboard ═════════════════════════════════════════════════════════
    A debugging convenience that happens to still work, exactly as in the
-   shell. ArcOSK installs its own capture-phase handler; the keys it does not
+   shell. MarwanOSK installs its own capture-phase handler; the keys it does not
    use must still not reach the explorer. */
 
 var KEYMAP = {
@@ -2315,7 +2478,7 @@ var KEYMAP = {
 function keyHandler(ev) {
   if (!st.open) return;
   if (ev.isTrusted !== false) setDevice("key"); else setDevice("pad");
-  try { if (root.ArcOSK && root.ArcOSK.isOpen()) return; } catch (e) {}
+  try { if (root.MarwanOSK && root.MarwanOSK.isOpen()) return; } catch (e) {}
   var a = KEYMAP[ev.key];
   if (!a) return;
   ev.preventDefault();
@@ -2335,6 +2498,7 @@ function open(cfg) {
 
   st.title = cfg.title || "Files";
   st.onExit = cfg.onExit || null;
+  st.pick = cfg.pick || null;
   st.scopes = [baseScope()];
   st.sel = {};
   st.clip = null;
@@ -2348,6 +2512,7 @@ function open(cfg) {
   st.rows = []; st.tops = []; st.totalH = 0;
   st.cursor = 0; st.scroll = 0;
   st.entries = []; st.listing = null; st.drives = null; st.places = null;
+  st.driveInfo = {}; st.driveFetch = false;
   dropAll();
 
   st.open = true;
@@ -2451,7 +2616,7 @@ var API = {
   }
 };
 
-root.ArcFiles = API;
+root.MarwanFiles = API;
 if (typeof module !== "undefined" && module.exports) module.exports = API;
 
 })(typeof window !== "undefined" ? window

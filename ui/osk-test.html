@@ -1,5 +1,5 @@
 <meta charset="utf-8">
-<title>ARC OSK — harness</title>
+<title>MarwanOSK — harness</title>
 <link rel="stylesheet" href="osk.css">
 
 <style>
@@ -123,10 +123,10 @@ kbd{
 }
 </style>
 
-<div class="eyebrow">ARC OS · component harness</div>
+<div class="eyebrow">MarwanOS · component harness</div>
 <h1>On-screen keyboard</h1>
 <p class="sub">
-  Everything below drives <code>ArcOSK</code> exactly the way the shell host will: through
+  Everything below drives <code>MarwanOSK</code> exactly the way the shell host will: through
   <code>handleAction()</code> with semantic pad actions. Nothing here reaches inside the keyboard.
   A physical keyboard also works, for debugging — see the key map at the bottom.
 </p>
@@ -161,7 +161,7 @@ kbd{
       <div class="state" id="outEvent">—</div>
     </div>
     <div class="out">
-      <div class="k">Live state · ArcOSK.debugState()</div>
+      <div class="k">Live state · MarwanOSK.debugState()</div>
       <div class="state" id="outState">closed</div>
     </div>
   </section>
@@ -265,7 +265,7 @@ var $ = function(s){ return document.querySelector(s); };
 
 /* host log bridge — present only under ShellHostWeb; no-op in a browser */
 function host(msg){
-  try { if (typeof window.arcPost === "function") window.arcPost({type:"log", target:"[osk-test] " + msg}); }
+  try { if (typeof window.mosPost === "function") window.mosPost({type:"log", target:"[osk-test] " + msg}); }
   catch(e){}
 }
 var LOG = [];
@@ -282,7 +282,7 @@ var lastMode = "text";
 function openMode(mode){
   lastMode = mode;
   var max = parseInt($("#cfgMax").value, 10);
-  ArcOSK.open({
+  MarwanOSK.open({
     title: $("#cfgTitle").value || ({
       text:"Rename file", password:"Wi-Fi password", url:"Address",
       search:"Search library", number:"Port number"
@@ -308,7 +308,7 @@ var opens = document.querySelectorAll("[data-open]");
 for (var n = 0; n < opens.length; n++){
   (function(b){ b.addEventListener("click", G("open", function(){ openMode(b.getAttribute("data-open")); })); })(opens[n]);
 }
-$("#btnClose").addEventListener("click", G("close", function(){ ArcOSK.close(); say("close()"); }));
+$("#btnClose").addEventListener("click", G("close", function(){ MarwanOSK.close(); say("close()"); }));
 
 var acts = document.querySelectorAll("[data-act]");
 for (var m = 0; m < acts.length; m++){
@@ -316,11 +316,11 @@ for (var m = 0; m < acts.length; m++){
     var act = b.getAttribute("data-act");
     var rep = b.getAttribute("data-repeat");
     if (rep){
-      b.addEventListener("mousedown", G("act.down", function(ev){ ev.preventDefault(); ArcOSK.beginRepeat(act); }));
-      b.addEventListener("mouseup",    G("act.up",   function(){ ArcOSK.endRepeat(); }));
-      b.addEventListener("mouseleave", G("act.out",  function(){ ArcOSK.endRepeat(); }));
+      b.addEventListener("mousedown", G("act.down", function(ev){ ev.preventDefault(); MarwanOSK.beginRepeat(act); }));
+      b.addEventListener("mouseup",    G("act.up",   function(){ MarwanOSK.endRepeat(); }));
+      b.addEventListener("mouseleave", G("act.out",  function(){ MarwanOSK.endRepeat(); }));
     } else {
-      b.addEventListener("click", G("act.click", function(){ ArcOSK.handleAction(act); }));
+      b.addEventListener("click", G("act.click", function(){ MarwanOSK.handleAction(act); }));
     }
   })(acts[m]);
 }
@@ -340,11 +340,11 @@ for (var m = 0; m < acts.length; m++){
       if (typeof d !== "string") { try { d = JSON.stringify(d); } catch(e){ return; } }
       try { m = JSON.parse(d); } catch(e){ return; }
       if (!m || m.type !== "pad") return;
-      if (!ArcOSK.isOpen() && (m.action === "launch" || m.action === "cross")) { openMode(lastMode); return; }
-      var handled = ArcOSK.handleAction(m.action);
-      host("pad " + m.action + " -> " + (handled ? JSON.stringify(ArcOSK.debugState()) : "not handled"));
+      if (!MarwanOSK.isOpen() && (m.action === "launch" || m.action === "cross")) { openMode(lastMode); return; }
+      var handled = MarwanOSK.handleAction(m.action);
+      host("pad " + m.action + " -> " + (handled ? JSON.stringify(MarwanOSK.debugState()) : "not handled"));
     }));
-    host("pad channel wired straight into ArcOSK.handleAction");
+    host("pad channel wired straight into MarwanOSK.handleAction");
   } catch(e){ line("could not wire the pad channel: " + e); }
 })();
 
@@ -365,14 +365,14 @@ for (var m = 0; m < acts.length; m++){
 /* number keys open a mode when the keyboard is closed. While it is open the
    keyboard swallows keydown in the capture phase, so this never fires. */
 window.addEventListener("keydown", G("hotkey", function(ev){
-  if (ArcOSK.isOpen()) return;
+  if (MarwanOSK.isOpen()) return;
   var map = { "1":"text", "2":"password", "3":"url", "4":"search", "5":"number" };
   if (map[ev.key]) { ev.preventDefault(); openMode(map[ev.key]); }
 }));
 
 /* live state readout */
 setInterval(G("poll", function(){
-  var s = ArcOSK.debugState();
+  var s = MarwanOSK.debugState();
   $("#outState").textContent = s && s.open
     ? "mode=" + s.mode + "  layer=" + s.layer + "  shift=" + s.shift + "  masked=" + s.masked +
       "\nfocus=(" + s.r + "," + s.i + ") key=" + JSON.stringify(s.key) +
@@ -384,7 +384,7 @@ setInterval(G("poll", function(){
 var navResult = null;
 function runNav(){
   var t0 = (window.performance && performance.now) ? performance.now() : 0;
-  navResult = ArcOSKNavTest.run();
+  navResult = MarwanOSKNavTest.run();
   var ms = ((window.performance && performance.now) ? performance.now() : 0) - t0;
   var tag = $("#navTag");
   tag.className = "tag " + (navResult.fail ? "fail" : "pass");
@@ -406,88 +406,88 @@ function chk(cond, what){
   else { drive.fail++; line("  FAIL  " + what); }
 }
 function act(list){
-  for (var i = 0; i < list.length; i++) ArcOSK.handleAction(list[i]);
+  for (var i = 0; i < list.length; i++) MarwanOSK.handleAction(list[i]);
 }
 
 function runDrive(){
   drive = { pass: 0, fail: 0 };
   line("");
-  line("ArcOSK scripted drive");
+  line("MarwanOSK scripted drive");
 
   /* 1 — type by walking the grid, commit with Options */
   var got = null, expect = "";
-  ArcOSK.open({ title:"Drive", mode:"text", onCommit:function(t){ got = t; } });
-  chk(ArcOSK.isOpen(), "open() -> isOpen()");
+  MarwanOSK.open({ title:"Drive", mode:"text", onCommit:function(t){ got = t; } });
+  chk(MarwanOSK.isOpen(), "open() -> isOpen()");
   var script = ["cross","right","cross","down","cross","left","cross","up","up","cross",
                 "square","space","cross","triangle","cross"];
   var hitAnAction = false;
   for (var i = 0; i < script.length; i++){
     var a = script[i];
     if (a === "cross"){
-      var s = ArcOSK.debugState();                    /* what is focused, right now */
+      var s = MarwanOSK.debugState();                    /* what is focused, right now */
       if (typeof s.key !== "string" || s.key.charAt(0) === "[") hitAnAction = true;
       else expect += (s.shift > 0) ? s.key.toUpperCase() : s.key;
     }
     if (a === "square") expect = expect.slice(0, -1);
     if (a === "space")  expect += " ";
-    ArcOSK.handleAction(a);
+    MarwanOSK.handleAction(a);
   }
   chk(!hitAnAction, "every scripted Cross landed on a character key");
-  ArcOSK.handleAction("options");
-  chk(!ArcOSK.isOpen(), "commit closed the keyboard");
+  MarwanOSK.handleAction("options");
+  chk(!MarwanOSK.isOpen(), "commit closed the keyboard");
   chk(got === expect, "typed value " + JSON.stringify(got) + " matches expected " + JSON.stringify(expect));
 
   /* 2 — number mode only offers digits, and the caret keys move within them */
   got = null;
-  ArcOSK.open({ title:"Drive", mode:"number", value:"12", onCommit:function(t){ got = t; } });
-  chk(ArcOSK.debugState().caret === 2, "caret starts at the end of the initial value");
+  MarwanOSK.open({ title:"Drive", mode:"number", value:"12", onCommit:function(t){ got = t; } });
+  chk(MarwanOSK.debugState().caret === 2, "caret starts at the end of the initial value");
   act(["l1","l1"]);
-  chk(ArcOSK.debugState().caret === 0, "L1 x2 walked the caret to the start");
+  chk(MarwanOSK.debugState().caret === 0, "L1 x2 walked the caret to the start");
   act(["r1"]);
-  chk(ArcOSK.debugState().caret === 1, "R1 walked it back one");
-  var k = ArcOSK.debugState().key;
+  chk(MarwanOSK.debugState().caret === 1, "R1 walked it back one");
+  var k = MarwanOSK.debugState().key;
   act(["cross","options"]);
   chk(got === "1" + k + "2", "insert at caret gave " + JSON.stringify(got));
 
   /* 3 — maxLength clamps and the counter never lies */
   got = null;
-  ArcOSK.open({ title:"Drive", mode:"text", maxLength:4, value:"abc", onCommit:function(t){ got = t; } });
+  MarwanOSK.open({ title:"Drive", mode:"text", maxLength:4, value:"abc", onCommit:function(t){ got = t; } });
   act(["cross","cross","cross","cross","options"]);
   chk(got !== null && got.length === 4, "maxLength 4 clamped a 7-char attempt to " + JSON.stringify(got));
 
   /* 4 — password masks the display but not the value, and Show unmasks */
-  ArcOSK.open({ title:"Drive", mode:"password", value:"hunter2", onCommit:function(){} });
-  var dots = document.querySelector(".arc-osk .osk-pre").textContent;
+  MarwanOSK.open({ title:"Drive", mode:"password", value:"hunter2", onCommit:function(){} });
+  var dots = document.querySelector(".mos-osk .osk-pre").textContent;
   chk(dots === "•••••••", "password display is masked (" + JSON.stringify(dots) + ")");
-  chk(ArcOSK.getValue() === "hunter2", "the value behind the mask is intact");
-  ArcOSK.handleAction("togglemask");
-  chk(document.querySelector(".arc-osk .osk-pre").textContent === "hunter2", "Show revealed the value");
-  chk(!!document.querySelector(".arc-osk .osk-reveal"), "the Show toggle exists and is a focusable key");
+  chk(MarwanOSK.getValue() === "hunter2", "the value behind the mask is intact");
+  MarwanOSK.handleAction("togglemask");
+  chk(document.querySelector(".mos-osk .osk-pre").textContent === "hunter2", "Show revealed the value");
+  chk(!!document.querySelector(".mos-osk .osk-reveal"), "the Show toggle exists and is a focusable key");
 
   /* 5 — up from the top key row reaches the Show toggle, and stops there */
   act(["up","up","up","up","up","up","up"]);
-  var s5 = ArcOSK.debugState();
+  var s5 = MarwanOSK.debugState();
   chk(s5.key === "[reveal]", "up from the keys reaches the Show toggle (got " + s5.key + ")");
   act(["up"]);
-  chk(ArcOSK.debugState().r === s5.r, "up again stays put — no vertical wrap");
+  chk(MarwanOSK.debugState().r === s5.r, "up again stays put — no vertical wrap");
 
   /* 6 — cancel fires onCancel and nothing else */
   var cancelled = false, committed = false;
-  ArcOSK.open({ title:"Drive", mode:"text", value:"x",
+  MarwanOSK.open({ title:"Drive", mode:"text", value:"x",
                 onCommit:function(){ committed = true; }, onCancel:function(){ cancelled = true; } });
-  ArcOSK.handleAction("circle");
+  MarwanOSK.handleAction("circle");
   chk(cancelled && !committed, "Circle fired onCancel only");
-  chk(!ArcOSK.isOpen(), "cancel closed the keyboard");
+  chk(!MarwanOSK.isOpen(), "cancel closed the keyboard");
 
   /* 7 — junk cannot take the shell down */
-  ArcOSK.open({ title:"Drive", mode:"text", onCommit:function(){} });
-  ArcOSK.handleAction("wobble");
-  ArcOSK.handleAction(null);
-  ArcOSK.handleAction(42);
-  chk(ArcOSK.isOpen(), "unknown/invalid actions were ignored, keyboard still alive");
-  ArcOSK.close();
-  chk(!ArcOSK.isOpen(), "close() closed it");
-  chk(ArcOSK.handleAction("cross") === false, "actions after close are no-ops");
+  MarwanOSK.open({ title:"Drive", mode:"text", onCommit:function(){} });
+  MarwanOSK.handleAction("wobble");
+  MarwanOSK.handleAction(null);
+  MarwanOSK.handleAction(42);
+  chk(MarwanOSK.isOpen(), "unknown/invalid actions were ignored, keyboard still alive");
+  MarwanOSK.close();
+  chk(!MarwanOSK.isOpen(), "close() closed it");
+  chk(MarwanOSK.handleAction("cross") === false, "actions after close are no-ops");
 
   /* 8 — the model and the pixels must agree ─────────────────────────────
      The headless test proves the model is coherent. It cannot prove the CSS
@@ -500,16 +500,16 @@ function runDrive(){
   var modes = ["text","password","url","search","number"];
   for (var mi = 0; mi < modes.length; mi++){
     var mode = modes[mi];
-    ArcOSK.open({ title:"pixels", mode:mode, onCommit:function(){}, onCancel:function(){} });
-    var g = ArcOSK._model.build(layerFor[mode], { reveal: mode === "password" });
+    MarwanOSK.open({ title:"pixels", mode:mode, onCommit:function(){}, onCancel:function(){} });
+    var g = MarwanOSK._model.build(layerFor[mode], { reveal: mode === "password" });
     var gap = parseFloat(getComputedStyle(document.querySelector(".osk-keys")).rowGap) || 0;
     for (var r = 0; r < g.rows.length; r++){
       for (var q = 0; q < g.live[r].length; q++){
         var i = g.live[r][q];
-        var to = ArcOSK._model.step(g, ArcOSK._model.posFor(g, r, i), "down");
+        var to = MarwanOSK._model.step(g, MarwanOSK._model.posFor(g, r, i), "down");
         if (to.r === r && to.i === i) continue;                 /* bottom row */
-        var a = document.querySelector('.arc-osk .osk-key[data-r="' + r + '"][data-i="' + i + '"]');
-        var b = document.querySelector('.arc-osk .osk-key[data-r="' + to.r + '"][data-i="' + to.i + '"]');
+        var a = document.querySelector('.mos-osk .osk-key[data-r="' + r + '"][data-i="' + i + '"]');
+        var b = document.querySelector('.mos-osk .osk-key[data-r="' + to.r + '"][data-i="' + to.i + '"]');
         if (!a || !b){ off++; if(!firstBad) firstBad = mode + " missing DOM node for a modelled key"; continue; }
         var ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
         var cx = ra.left + ra.width / 2, tol = gap / 2 + 1;
@@ -523,7 +523,7 @@ function runDrive(){
         }
       }
     }
-    ArcOSK.close();
+    MarwanOSK.close();
   }
   chk(off === 0, "model matches pixels: " + checked + " down-moves land under the source key" +
       " (worst overhang " + worst.toFixed(1) + "px)" + (firstBad ? " — " + firstBad : ""));
@@ -534,8 +534,8 @@ function runDrive(){
      which on a television is the difference between legible and not. Each key
      size is compared against a probe carrying the same custom property, so
      this asserts the variable actually reached the element. */
-  ArcOSK.open({ title:"type", mode:"password", value:"abc", onCommit:function(){} });
-  var scrim = document.querySelector(".arc-osk");
+  MarwanOSK.open({ title:"type", mode:"password", value:"abc", onCommit:function(){} });
+  var scrim = document.querySelector(".mos-osk");
   function probe(expr){
     var d = document.createElement("div");
     d.style.cssText = "position:absolute;visibility:hidden;font-size:" + expr;
@@ -572,7 +572,7 @@ function runDrive(){
     return v;
   }
   var plain = settled(letter, "color");
-  ArcOSK.handleAction("up"); ArcOSK.handleAction("up"); ArcOSK.handleAction("up");
+  MarwanOSK.handleAction("up"); MarwanOSK.handleAction("up"); MarwanOSK.handleAction("up");
   var focused = document.querySelector(".osk-key.is-focus");
   chk(!!focused, "something is always focused");
   chk(focused && settled(focused, "color") !== plain,
@@ -580,7 +580,7 @@ function runDrive(){
       " vs " + plain + ")");
   chk(focused && /gradient/.test(settled(focused, "backgroundImage")),
       "the focused key is filled with the beam, not merely outlined");
-  ArcOSK.close();
+  MarwanOSK.close();
 
   line((drive.fail ? "FAIL" : "PASS") + "  drive: " + drive.pass + " passed, " + drive.fail + " failed");
   return drive;
@@ -598,7 +598,7 @@ function stamp(){
   host(t);
 }
 
-line("ArcOSK " + ArcOSK.version + " loaded · " +
+line("MarwanOSK " + MarwanOSK.version + " loaded · " +
      (window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced motion ON" : "motion on") +
      " · " + innerWidth + "x" + innerHeight);
 runNav();
@@ -610,8 +610,8 @@ stamp();
 if (/[?&]auto=1/.test(location.search)){
   setTimeout(G("auto", function(){
     openMode("password");
-    ArcOSK.handleAction("down"); ArcOSK.handleAction("cross");
-    host("auto: keyboard left open in password mode, state=" + JSON.stringify(ArcOSK.debugState()));
+    MarwanOSK.handleAction("down"); MarwanOSK.handleAction("cross");
+    host("auto: keyboard left open in password mode, state=" + JSON.stringify(MarwanOSK.debugState()));
   }), 400);
 }
 </script>

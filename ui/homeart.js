@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════
-   ARC OS — homeart.js
+   MarwanOS — homeart.js
    The home screen's artwork: what the background IS.
 
    The shell's ground used to be a fixed dark blue with a gradient wash
@@ -33,8 +33,8 @@
              development laptop, and every game on a machine whose
              library came from Start Menu shortcuts — a generated
              portrait built from the executable's own icon: the icon's
-             accent as a two-stop ground, the icon itself at readable
-             size, and the arc mark. Missing art has to look like a
+             accent as a two-stop ground and the icon itself at
+             readable size. Missing art has to look like a
              decision, and on this machine it is the majority case rather
              than an edge case.
 
@@ -43,9 +43,9 @@
    own and so ui/library.js stays the only file that knows what a game is.
 
    ── Public surface ──────────────────────────────────────────────────
-     ArcArt.build(key, {cover, icon, seed})  Promise<art>, cached by key.
-     ArcArt.get(key)                          the cached art, or null.
-     ArcArt.neutral()                         the art for "nothing here" —
+     MarwanArt.build(key, {cover, icon, seed})  Promise<art>, cached by key.
+     MarwanArt.get(key)                          the cached art, or null.
+     MarwanArt.neutral()                         the art for "nothing here" —
                                               the empty machine's ground.
    `art` is {cover, wash, accent, deep, ink, hasCover}.
    ══════════════════════════════════════════════════════════════════════ */
@@ -108,7 +108,12 @@
        invented out of rounding error. */
     if (best < 0 || bestV < grey * 0.045) {
       var L2 = grey > 0 ? clamp(greyL / grey, 0.35, 0.72) : 0.5;
-      return { h: 220, s: 0.06, l: L2, mono: true };
+      /* Hue 44, not 220. At 6% saturation this is barely a colour at all,
+         but it is the difference between a monochrome cover reading as
+         cold-grey and reading as the same warm chalk-on-concrete as the
+         rest of the shell — and the shell's OWN two tiles (Files, Browser)
+         come down this path, so it is the tint an empty machine wears. */
+      return { h: 44, s: 0.06, l: L2, mono: true };
     }
     var H2 = hs[best] / bins[best], L3 = ls[best] / bins[best];
     return { h: H2, s: 0.62, l: clamp(L3, 0.42, 0.66), mono: false };
@@ -183,8 +188,8 @@
 
      Not a placeholder and not a "missing art" plate: a real 3:4 face
      built to the same rules as the rest of the shell — the ground is the
-     icon's own colour, the arc is the shell's mark, and the icon is
-     drawn large and sharp rather than stretched to fill. Held next to a
+     icon's own colour, and the icon is drawn large and sharp rather
+     than stretched to fill. Held next to a
      Steam cover on the same rail it reads as a different KIND of cover,
      which is honest, rather than as a broken one. */
   function faceFrom(icon, colours) {
@@ -204,17 +209,6 @@
     s.addColorStop(1, "rgba(0,0,0,.62)");
     x.fillStyle = s; x.fillRect(0, 0, W, H);
 
-    /* The arc, at cover scale. Same mark as the one behind the whole
-       screen, so the two read as one idea at two sizes. */
-    x.save();
-    x.globalAlpha = 0.30;
-    x.strokeStyle = "#ffffff";
-    x.lineWidth = 1.6;
-    x.beginPath(); x.arc(W * 0.5, H * 1.30, H * 0.86, Math.PI * 1.16, Math.PI * 1.84); x.stroke();
-    x.globalAlpha = 0.16;
-    x.beginPath(); x.arc(W * 0.5, H * 1.30, H * 1.02, Math.PI * 1.16, Math.PI * 1.84); x.stroke();
-    x.restore();
-
     if (icon) {
       var side = Math.min(icon.width, icon.height) || 1;
       var draw = W * 0.42;
@@ -232,7 +226,10 @@
   function record(o) { return o; }
 
   function fromSeed(seed) {
-    var d = { h: (seed && seed.h) || 218, s: 0.5, l: 0.5, mono: !!(seed && seed.mono) };
+    /* 146 — the shell's own spray green — where this was 218. A title with
+       no cover at all gets a portrait in the product's colour rather than
+       in a blue nobody chose. */
+    var d = { h: (seed && seed.h) || 146, s: 0.5, l: 0.5, mono: !!(seed && seed.mono) };
     var p = pair(d);
     return record({
       cover: null, face: null, hasCover: false,
@@ -289,24 +286,32 @@
   var neutralArt = null;
 
   /* The ground for a machine with nothing on it, and for the shell's own
-     two tiles. Deliberately not "grey because we gave up": a cool
-     graphite field that the arc reads on, so an empty library is a screen
-     somebody designed rather than a screen that failed. */
+     two tiles. Deliberately not "grey because we gave up": a field with a
+     colour somebody chose, so an empty library is a screen somebody
+     designed rather than a screen that failed.
+
+     Hue 214 — a cool blue graphite — until the shell took the site's warm
+     wall-and-chalk palette. An empty machine was then the ONE screen still
+     lit blue, which is exactly the screen where the identity has to do all
+     the work because there is no cover art to carry it. Hue 146 at low
+     saturation is the spray green thinned down to a concrete: the same
+     pigment as the accent, nowhere near saturated enough to compete with a
+     real cover when one arrives. */
   function neutral() {
     if (!neutralArt) {
-      var d = { h: 214, s: 0.2, l: 0.42, mono: false };
+      var d = { h: 146, s: 0.16, l: 0.40, mono: false };
       var col = pair(d);
-      col.accent = "hsl(214 24% 62%)";
+      col.accent = "hsl(146 26% 58%)";
       neutralArt = record({
         cover: null, face: null, hasCover: false,
-        wash: washFromColour("hsl(214 24% 40%)", "hsl(214 26% 16%)", "hsl(214 22% 7%)"),
-        accent: col.accent, deep: "hsl(214 26% 16%)", ink: "hsl(214 22% 7%)"
+        wash: washFromColour("hsl(146 22% 34%)", "hsl(150 12% 14%)", "hsl(150 8% 6%)"),
+        accent: col.accent, deep: "hsl(150 12% 14%)", ink: "hsl(150 8% 6%)"
       });
     }
     return neutralArt;
   }
 
-  root.ArcArt = {
+  root.MarwanArt = {
     build: build,
     get: function (key) { return settled[key] || null; },
     neutral: neutral,

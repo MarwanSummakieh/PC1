@@ -1,5 +1,5 @@
-// ARC OS - LibraryApi
-// Real installed-software discovery for the ARC OS home rail (ui/library.js).
+// MarwanOS - LibraryApi
+// Real installed-software discovery for the MarwanOS home rail (ui/library.js).
 //
 // The WebView2 page posts a JSON command object; LibraryApi.Handle() returns a JSON response
 // string. Same envelope as SystemApi.cs and FileApi.cs, deliberately, so one page-side transport
@@ -21,8 +21,8 @@
 // -------------------------------------------------------------------------------------------
 // NAMESPACE AND TYPE NAMES
 // -------------------------------------------------------------------------------------------
-// Namespace is ArcOs.Library. Helper types are prefixed (LJ, LApi, LJobs, LNative, LWinRt,
-// LibFault, LKv) so that a file doing `using ArcOs.Sys; using ArcOs.Files; using ArcOs.Library;`
+// Namespace is MarwanOs.Library. Helper types are prefixed (LJ, LApi, LJobs, LNative, LWinRt,
+// LibFault, LKv) so that a file doing `using MarwanOs.Sys; using MarwanOs.Files; using MarwanOs.Library;`
 // still compiles. A bare `J` in three namespaces would be ambiguous and finding that out at
 // integration time is exactly the collision this avoids.
 //
@@ -83,7 +83,7 @@
 // Nothing in this file requires administrator rights, and one thing actively requires the ABSENCE
 // of them: IApplicationActivationManager::ActivateApplication returns E_ACCESSDENIED (0x80070005)
 // when the caller is elevated, because a packaged app may not be activated from a high-integrity
-// process. The shell runs as standard user arcshell, so that is the correct side of the fence.
+// process. The shell runs as standard user marwanshell, so that is the correct side of the fence.
 // PackageManager.FindPackagesForUser("") enumerates only the CURRENT user's packages and needs no
 // capability; FindPackages() (all users) would need admin and is deliberately not used.
 
@@ -102,7 +102,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.Win32;
 
-namespace ArcOs.Library
+namespace MarwanOs.Library
 {
     #region JSON  (hand-rolled writer + reader; same shape as SystemApi's J, renamed to LJ)
 
@@ -1072,7 +1072,7 @@ namespace ArcOs.Library
     {
         public string Id;
         public string Title;
-        public string Source;        // steam | epic | gog | battlenet | xbox | shortcut | folder
+        public string Source;        // steam | epic | gog | battlenet | riot | xbox | shortcut | folder
         public string SourceLabel;   // "Steam", "Epic Games", ...
         public string Kind;          // game | app | launcher
         public string LaunchKind;    // uri | exe | aumid
@@ -1688,6 +1688,222 @@ namespace ArcOs.Library
                 finally { un.Close(); }
             }
             src.Present = any || LApi.FileExists(agent);
+        }
+
+        // ----------------------------------------------------------------------------------
+        // Riot Games
+        // ----------------------------------------------------------------------------------
+        // DECISION: C:\ProgramData\Riot Games, NOT the Start Menu and NOT an uninstall key.
+        //
+        // The Riot Client writes its Start Menu shortcuts and its uninstall entry into the
+        // profile of whoever ran the installer. MarwanOS installs through a broker running as
+        // SYSTEM in session 0, so on this machine that profile is not a human's: there is no
+        // shortcut and no registry key to find, and the two sources that would normally have
+        // caught Riot both come back empty while the games sit on the disk.
+        //
+        // What the client writes MACHINE-WIDE, every time, whoever installed it:
+        //   RiotClientInstalls.json                     where RiotClientServices.exe is
+        //   Metadata\<product>.<patchline>\             one folder per product it knows about
+        //     <product>.<patchline>.product_settings.yaml
+        //     <product>.<patchline>.ico
+        //
+        // "Knows about" is not "installed": teamfighttactics.live has a settings file on a
+        // machine that has never downloaded it. The distinguishing key is
+        // product_install_full_path - written only once the payload is on disk - and even that
+        // is then checked against the filesystem, so an uninstall that left the metadata behind
+        // (and every .pbe patchline nobody has installed) drops out here rather than becoming a
+        // tile that fails to launch.
+        //
+        // The yaml is read by plain line matching. It is Riot's file, its schema is not
+        // published, and the two keys wanted are top-level scalars - a real parser would be a
+        // dependency and a new way to throw, for no more information.
+        static readonly string[] RiotTitles = new string[] {
+            "league_of_legends", "League of Legends",
+            "teamfighttactics",  "Teamfight Tactics",
+            "valorant",          "VALORANT",
+            "bacon",             "Legends of Runeterra",
+            "lion",              "2XKO"
+        };
+
+        const int RiotMaxProducts = 64;
+
+        public static void Riot(List<LibEntry> outList, LibSource src)
+        {
+            string root = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Riot Games");
+            string installs = Path.Combine(root, "RiotClientInstalls.json");
+            string meta = Path.Combine(root, "Metadata");
+
+            src.Where = installs + " ; " + meta;
+            src.Present = LApi.FileExists(installs) || LApi.DirExists(meta);
+            if (!src.Present) { src.Note = "Riot's machine-wide data folder does not exist."; return; }
+
+            string rc = RiotClientExe(installs);
+            if (rc == null)
+            {
+                src.Note = "RiotClientInstalls.json does not name a RiotClientServices.exe that is "
+                         + "on disk, so nothing here can be started.";
+                return;
+            }
+
+            string rcDir = null;
+            try { rcDir = Path.GetDirectoryName(rc); }
+            catch { }
+
+            LibEntry client = new LibEntry();
+            client.Id = "riot:client";
+            client.Title = "Riot Client";
+            client.Source = "riot";
+            client.SourceLabel = "Riot Games";
+            client.Kind = "launcher";
+            client.LaunchKind = "exe";
+            client.LaunchTarget = rc;
+            client.WorkDir = rcDir;
+            client.InstallDir = rcDir;
+            client.IconPath = rc;
+            outList.Add(client);
+            src.Found++;
+
+            string[] dirs;
+            try { dirs = Directory.GetDirectories(meta); }
+            catch { src.Note = "Metadata folder unreadable."; return; }
+
+            int known = 0, installed = 0;
+            for (int i = 0; i < dirs.Length && i < RiotMaxProducts; i++)
+            {
+                try
+                {
+                    string leaf = Path.GetFileName(dirs[i]);
+                    int dot = leaf.IndexOf('.');
+                    if (dot <= 0 || dot >= leaf.Length - 1) continue;      // "Riot Client", no patchline
+                    string yaml = Path.Combine(dirs[i], leaf + ".product_settings.yaml");
+                    if (!LApi.FileExists(yaml)) continue;                  // known of, never configured
+                    known++;
+
+                    string full = RiotYamlValue(yaml, "product_install_full_path");
+                    if (string.IsNullOrEmpty(full)) continue;              // known, not installed
+                    full = LApi.Full(full);
+                    if (!LApi.DirExists(full)) continue;                   // metadata outlived the install
+                    installed++;
+
+                    string product = leaf.Substring(0, dot);
+                    string patchline = leaf.Substring(dot + 1);
+
+                    LibEntry e = new LibEntry();
+                    e.Id = "riot:" + leaf.ToLowerInvariant();
+                    e.Title = RiotTitle(product, patchline);
+                    e.Source = "riot";
+                    e.SourceLabel = "Riot Games";
+                    e.Kind = "game";
+                    e.LaunchKind = "exe";
+                    e.LaunchTarget = rc;
+                    // Byte-identical to the command line Riot's own shortcut carries, on purpose:
+                    // that is what lets the de-duplicator collapse the two into one tile on a
+                    // machine where both exist.
+                    e.LaunchArgs = "--launch-product=" + product + " --launch-patchline=" + patchline;
+                    e.WorkDir = rcDir;
+                    e.InstallDir = full;
+                    string ico = Path.Combine(dirs[i], leaf + ".ico");
+                    e.IconPath = LApi.FileExists(ico) ? ico : rc;
+                    outList.Add(e);
+                    src.Found++;
+                }
+                catch { }
+            }
+
+            src.Note = "Riot Client plus " + installed.ToString(CultureInfo.InvariantCulture) +
+                       " installed of " + known.ToString(CultureInfo.InvariantCulture) +
+                       " known product" + (known == 1 ? "" : "s") +
+                       ". A product the client merely knows about has no product_install_full_path.";
+        }
+
+        // rc_default is what the shortcuts use; rc_live is the same path on every install seen so
+        // far and is taken as a fallback, then any patchline entry. Forward slashes throughout the
+        // file, so everything goes through Full() before it is compared with anything.
+        static string RiotClientExe(string installsJson)
+        {
+            if (!LApi.FileExists(installsJson)) return null;
+            LJ j;
+            try { j = LJ.Parse(File.ReadAllText(installsJson)); }
+            catch { return null; }
+            if (j == null || j.Kind != LJ.TObj) return null;
+
+            string p = RiotExeOrNull(j.S("rc_default", null));
+            if (p == null) p = RiotExeOrNull(j.S("rc_live", null));
+            if (p == null)
+            {
+                LJ pl = j.Get("patchlines");
+                if (pl != null && pl.Kind == LJ.TObj)
+                    for (int i = 0; i < pl.Count && p == null; i++)
+                        p = RiotExeOrNull(pl.At(i).AsStr(null));
+            }
+            return p;
+        }
+
+        static string RiotExeOrNull(string raw)
+        {
+            if (string.IsNullOrEmpty(raw)) return null;
+            string p;
+            try { p = LApi.Full(raw.Replace('/', '\\')); }
+            catch { return null; }
+            return LApi.FileExists(p) ? p : null;
+        }
+
+        // One pass, top-level keys only, quotes stripped. A key that is indented belongs to some
+        // nested block and is not the one being asked for.
+        static string RiotYamlValue(string path, string key)
+        {
+            try
+            {
+                FileInfo fi = new FileInfo(path);
+                if (!fi.Exists || fi.Length > 1024 * 1024) return null;
+                string[] lines = File.ReadAllLines(path);
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    string ln = lines[i];
+                    if (ln.Length == 0 || ln[0] == ' ' || ln[0] == '\t' || ln[0] == '#') continue;
+                    if (!ln.StartsWith(key, StringComparison.OrdinalIgnoreCase)) continue;
+                    int c = ln.IndexOf(':');
+                    if (c != key.Length) continue;
+                    string v = ln.Substring(c + 1).Trim();
+                    if (v.Length >= 2 && (v[0] == '"' || v[0] == '\'') && v[v.Length - 1] == v[0])
+                        v = v.Substring(1, v.Length - 2);
+                    v = v.Trim();
+                    return v.Length == 0 ? null : v;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        static string RiotTitle(string product, string patchline)
+        {
+            string name = null;
+            for (int i = 0; i + 1 < RiotTitles.Length; i += 2)
+                if (string.Equals(RiotTitles[i], product, StringComparison.OrdinalIgnoreCase))
+                { name = RiotTitles[i + 1]; break; }
+
+            if (name == null)
+            {
+                // An unknown product id is still better said out loud than hidden:
+                // "some_new_game" reads as "Some New Game" rather than as nothing at all.
+                string[] parts = product.Replace('-', '_').Split('_');
+                StringBuilder sb = new StringBuilder();
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    if (parts[i].Length == 0) continue;
+                    if (sb.Length > 0) sb.Append(' ');
+                    sb.Append(char.ToUpperInvariant(parts[i][0]));
+                    if (parts[i].Length > 1) sb.Append(parts[i].Substring(1));
+                }
+                name = sb.Length == 0 ? product : sb.ToString();
+            }
+
+            // live is the ordinary case and goes unsaid. Anything else - pbe above all - is a
+            // different build of the same game and has to be distinguishable on the rail.
+            if (!string.Equals(patchline, "live", StringComparison.OrdinalIgnoreCase))
+                name = name + " (" + patchline.ToUpperInvariant() + ")";
+            return name;
         }
 
         // ----------------------------------------------------------------------------------
@@ -2485,6 +2701,10 @@ namespace ArcOs.Library
         public static string Dir()
         {
             string b = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            // "ArcOS" on purpose. The product is MarwanOS; the folder this cache has always
+            // lived in is not, and renaming it here would throw away every scan on the machine
+            // and re-scan the whole disk on the next boot. Keep it in step with
+            // ShellHostWeb.cs's OnDisk.Brand.
             return Path.Combine(b, "ArcOS");
         }
 
@@ -2695,11 +2915,17 @@ namespace ArcOs.Library
             if (job.CancelRequested) return Finish(job, entries, srcs, t0, wantIcons, iconSize);
             RunOne(job, srcs, entries, "battlenet", "Battle.net", 36, delegate (List<LibEntry> o, LibSource s) { Sources.BattleNet(o, s); });
             if (job.CancelRequested) return Finish(job, entries, srcs, t0, wantIcons, iconSize);
+            RunOne(job, srcs, entries, "riot", "Riot Games", 44, delegate (List<LibEntry> o, LibSource s) { Sources.Riot(o, s); });
+            if (job.CancelRequested) return Finish(job, entries, srcs, t0, wantIcons, iconSize);
             RunOne(job, srcs, entries, "xbox", "Xbox", 55, delegate (List<LibEntry> o, LibSource s) { Sources.Xbox(o, s); });
             if (job.CancelRequested) return Finish(job, entries, srcs, t0, wantIcons, iconSize);
             RunOne(job, srcs, entries, "shortcut", "Start Menu", 75, delegate (List<LibEntry> o, LibSource s) { Sources.Shortcuts(o, s); });
             if (job.CancelRequested) return Finish(job, entries, srcs, t0, wantIcons, iconSize);
-            List<string> r = roots;
+            // An explicit roots argument still wins - that is how a caller pins a scan to one
+            // folder. With none, the folders the human configured are used instead of a
+            // hard-coded default list.
+            List<string> r = (roots != null && roots.Count > 0)
+                ? roots : MarwanOs.LibWatch.WCfg.ScanRoots(true);
             RunOne(job, srcs, entries, "folder", "Installed folders", 85, delegate (List<LibEntry> o, LibSource s) { Sources.GameFolders(o, s, r); });
 
             return Finish(job, entries, srcs, t0, wantIcons, iconSize);
@@ -2713,6 +2939,17 @@ namespace ArcOs.Library
             LibSource s = new LibSource();
             s.Name = name;
             s.Label = label;
+
+            // A source the human turned off is still reported, with a reason. Omitting it
+            // entirely would read as "this launcher is not installed", which is a different
+            // and wrong answer.
+            if (MarwanOs.LibWatch.WCfg.SourceDisabled(name))
+            {
+                s.Note = "Turned off in library-config.json.";
+                srcs.Add(s);
+                return;
+            }
+
             job.Report(pct, "scanning " + label);
             Stopwatch sw = Stopwatch.StartNew();
             try { fn(entries, s); }
@@ -2727,6 +2964,13 @@ namespace ArcOs.Library
         {
             job.Report(90, "de-duplicating");
             List<LibEntry> keep = Dedupe(entries);
+
+            // One "is it actually installed" rule for every source, applied in one place.
+            // Sources.Steam() already checks StateFlags for its own entries; this catches the
+            // shortcut and folder sources walking into a steamapps\common directory whose
+            // download never finished, which is how a title that does not exist yet reaches
+            // the rail and fails to launch.
+            List<MarwanOs.LibWatch.WGuard.Drop> notInstalled = MarwanOs.LibWatch.WGuard.Apply(keep);
 
             if (wantIcons)
             {
@@ -2798,6 +3042,10 @@ namespace ArcOs.Library
             cacheDoc.Set("entries", cacheArr);
             CacheMod.Save(cacheDoc);
 
+            // Deliberately AFTER the save: what was dropped is true of this scan only. Persisting
+            // it would let a stale "not installed" outlive the install that fixed it.
+            doc.Set("notInstalled", MarwanOs.LibWatch.WGuard.DropsToJson(notInstalled));
+
             lock (Gate)
             {
                 Dictionary<string, LibEntry> map = new Dictionary<string, LibEntry>(StringComparer.OrdinalIgnoreCase);
@@ -2812,7 +3060,10 @@ namespace ArcOs.Library
         // Start Menu shortcut, and C:\Games\X may be both a folder find and a shortcut target.
         // Source order below is the trust order - the store entry knows the appid, the play time
         // and the artwork, so it wins and the shortcut is dropped.
-        static readonly string[] SourceRank = new string[] { "steam", "epic", "xbox", "gog", "battlenet", "folder", "shortcut" };
+        // riot outranks shortcut deliberately: the metadata folder knows the product id, the
+        // patchline and the product's own icon, and it is right about them on a machine whose
+        // Start Menu has nothing at all.
+        static readonly string[] SourceRank = new string[] { "steam", "epic", "xbox", "gog", "battlenet", "riot", "folder", "shortcut" };
 
         static int Rank(string s)
         {
@@ -2856,15 +3107,25 @@ namespace ArcOs.Library
         // only by --launch-product, and a containment rule applied inside the shortcut source
         // silently collapses League of Legends, TFT and 2XKO into whichever sorted first. Same for
         // Git Bash / Git CMD / Git GUI out of one Program Files\Git.
+        //
+        // The same collapse can happen ACROSS sources once a launcher is a source of its own, and
+        // rule 1 is not enough to stop it: the Riot source lists the client itself, install
+        // directory C:\...\Riot Client, and every Riot Start Menu shortcut targets an exe inside
+        // that directory. Containment would then eat Teamfight Tactics - a product the metadata
+        // has no install path for and only the Start Menu knows about. So an identical target exe
+        // with different arguments is declared "not the same thing" before containment is
+        // consulted at all; rule 1 has already handled the case where the arguments match too.
         static bool IsSameThing(LibEntry kept, LibEntry cand)
         {
             bool keptExe = string.Equals(kept.LaunchKind, "exe", StringComparison.OrdinalIgnoreCase);
             bool candExe = string.Equals(cand.LaunchKind, "exe", StringComparison.OrdinalIgnoreCase);
 
-            if (keptExe && candExe &&
-                string.Equals(kept.LaunchTarget, cand.LaunchTarget, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(Arg(kept), Arg(cand), StringComparison.OrdinalIgnoreCase))
+            bool sameExe = keptExe && candExe &&
+                string.Equals(kept.LaunchTarget, cand.LaunchTarget, StringComparison.OrdinalIgnoreCase);
+
+            if (sameExe && string.Equals(Arg(kept), Arg(cand), StringComparison.OrdinalIgnoreCase))
                 return true;
+            if (sameExe) return false;
 
             if (string.Equals(kept.Source, cand.Source, StringComparison.OrdinalIgnoreCase)) return false;
             if (string.IsNullOrEmpty(kept.InstallDir)) return false;
@@ -2901,6 +3162,8 @@ namespace ArcOs.Library
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                 @"Battle.net\Agent");
             arr.Add(Probe1("battlenet", "Battle.net", bnet));
+            arr.Add(Probe1("riot", "Riot Games", Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Riot Games")));
             arr.Add(Probe1("shortcut", "Start Menu", Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "Programs")));
 
@@ -3027,6 +3290,13 @@ namespace ArcOs.Library
         // ------------------------------------------------------------------------------------
         static LJ Dispatch(string cmd, LJ q)
         {
+            // Two command families live in their own files and answer for themselves. They are
+            // asked first and by name, so this switch never has to know what they own:
+            //   LibWatch  lib.config.* / lib.watch / lib.changed / lib.unwatch  (LibraryWatch.cs)
+            //   Meta      meta.lookup / meta.art / meta.prefetch / meta.cache   (MetaApi.cs)
+            if (MarwanOs.LibWatch.LibWatchApi.Owns(cmd)) return MarwanOs.LibWatch.LibWatchApi.Dispatch(cmd, q);
+            if (MarwanOs.Meta.MetaApi.Owns(cmd)) return MarwanOs.Meta.MetaApi.Dispatch(cmd, q);
+
             switch (cmd.ToLowerInvariant())
             {
                 // ---------------- meta ----------------
@@ -3219,7 +3489,7 @@ namespace ArcOs.Library
             o.Set("api", "LibraryApi");
             o.Set("commands", arr);
             o.Set("jobPrefix", "ljob-");
-            o.Set("sources", "steam, epic, gog, battlenet, xbox, shortcut, folder");
+            o.Set("sources", "steam, epic, gog, battlenet, riot, xbox, shortcut, folder");
             o.Set("note", "Every entry is admitted on filesystem evidence, never on a registry key alone.");
             return o;
         }

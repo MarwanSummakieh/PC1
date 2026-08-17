@@ -2,7 +2,7 @@
     Crash isolation for the browser's content WebView.
 
     The claim under test: a web page's process can die, be killed, or hang, and the
-    ARC shell - which IS the Windows shell on this machine - keeps running and keeps
+    MarwanOS shell - which IS the Windows shell on this machine - keeps running and keeps
     drawing. The browser puts web content in a second CoreWebView2Environment with its
     own user-data folder, which means its own browser process and its own renderers,
     so the two are different process trees rather than two views onto one.
@@ -14,7 +14,7 @@
     Run it while a ShellHostWeb run with --browse is up.
 #>
 param(
-  [string]$ShellProcess   = 'ArcShellHostWeb-v5',
+  [string]$ShellProcess   = 'MarwanShellHostWeb-v5',
   [string]$ContentMarker  = 'WebView2-v5-content',
   [int]$WaitSeconds       = 60
 )

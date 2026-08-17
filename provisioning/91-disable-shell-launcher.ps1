@@ -8,7 +8,7 @@
     ORDER MATTERS. Run 93-remove-shell-launcher-config.ps1 FIRST. That script
     clears the per-SID custom shell and calls WESL_UserSetting.SetEnabled($false).
     Disabling the optional feature while enforcement is still on is not a tested
-    path and could leave the arcshell account without a working shell with no WMI
+    path and could leave the marwanshell account without a working shell with no WMI
     provider left to fix it with. This script refuses to run if it can still see
     an enabled Shell Launcher configuration, unless -Force is given.
 
