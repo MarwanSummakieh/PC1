@@ -7,7 +7,7 @@ the web permission bridge) and its end-to-end bench pass.
 
 | | |
 |---|---|
-| **Test bench** | `DESKTOP-6BCSJ3P`, <bench-ip> — Windows 11 IoT Enterprise LTSC 2024 **Evaluation** (90-day), build 26100.9168, i7-6700K, 8 GB, Odyssey G85SD 3440×1440 @120 Hz, wired Ethernet, DualSense on USB. **No Wi-Fi, no Bluetooth hardware.** This is where everything is verified. |
+| **Test bench** | `DESKTOP-6BCSJ3P` (LAN IP kept out of the repo) — Windows 11 IoT Enterprise LTSC 2024 **Evaluation** (90-day), build 26100.9168, i7-6700K, 8 GB, Odyssey G85SD 3440×1440 @120 Hz, wired Ethernet, DualSense on USB. **No Wi-Fi, no Bluetooth hardware.** This is where everything is verified. |
 | **Laptop** | `DESKTOP-AGB796T` — the dev machine. Has Wi-Fi and Bluetooth, so radio-dependent code is verified here. Its shell is untouched: `brain` still gets a normal Windows desktop. |
 
 Live shell on the bench, as actually observed on 2026-08-16: `C:\ArcOS\web\v10\ArcShellHostWeb-v11.exe`,
